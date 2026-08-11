@@ -56,6 +56,7 @@ import {
 } from '../tool-display';
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
 import {LiveToolRows} from './live-tool-rows';
+import {SettledToolRow} from './settled-tool-row';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -77,6 +78,22 @@ import {buildBannerBox, hasConversation} from '../banner';
 import {historyFillWidth} from '../history-width';
 
 const PREVIEW_LINES = 3;
+/**
+ * Fence languages rendered as PLAIN COMPONENTS (`SettledToolRow`) instead
+ * of markdown. These are the hover/click targets; markdown's text buffer is
+ * hostile to mouse events (hit-target changes on hover + row-wide bg bleed),
+ * so anything interactive must be a component. File previews, user messages,
+ * warnings and replies keep the markdown pipeline.
+ */
+const COMPONENT_ROW_LANGS = new Set([
+	'toolrow',
+	'bashrow',
+	'diffrow',
+	'agentrow',
+	'grouprow',
+	'thought',
+	'taskrow',
+]);
 /**
  * Expanded per-call entries of every multi-call compact block, keyed by block
  * key. Clicking an expandable tally opens the DETAILS MODAL with these
@@ -500,18 +517,55 @@ export function History(props: {height?: number}) {
 				}
 			}
 		}
-		// Group consecutive non-reply parts into ONE markdown block; replies
-		// stay separate so each gets its own padded container.
-		const blocks: Array<{
-			kind: 'md' | 'reply';
-			parts: Array<{text: string; key?: string}>;
-		}> = [];
+		// TOOL/THOUGHT fences render as PLAIN COMPONENTS (SettledToolRow),
+		// never markdown — markdown's text-buffer is hostile to mouse events
+		// (hit-test changes on hover → the "hover doesn't stick" bug, and
+		// buffer backgrounds bleed into every row). Everything else groups
+		// into markdown nodes as before.
+		const blocks: Array<
+			| {kind: 'md'; parts: Array<{text: string; key?: string}>}
+			| {kind: 'reply'; parts: Array<{text: string; key?: string}>}
+			| {
+					kind: 'tool';
+					part: {text: string; key?: string};
+					segments: LiveRowSegments;
+					status: RowStatus;
+					glyph: '✦' | '⚙';
+			  }
+		> = [];
 		for (const part of parts) {
+			if (part.kind === 'reply') {
+				blocks.push({kind: 'reply', parts: [part]});
+				continue;
+			}
+			const fenceMatch = /^```+([^:\n]+):([^:\n]+)\n+([\s\S]*?)\n+```+$/.exec(
+				part.text,
+			);
+			if (fenceMatch && COMPONENT_ROW_LANGS.has(fenceMatch[1] ?? '')) {
+				const lang = fenceMatch[1] ?? '';
+				const status = (fenceMatch[2] ?? 'done') as RowStatus;
+				blocks.push({
+					kind: 'tool',
+					part,
+					status,
+					glyph: lang === 'thought' ? '⚙' : '✦',
+					// Same tokenizer path the LIVE rows use: identical colors,
+					// spacing and syntax highlighting while running and done.
+					segments: liveRowSegments(
+						(fenceMatch[3] ?? '').replace(/^\n/, ''),
+						lang,
+						status,
+						colors(),
+						fillWidth,
+					),
+				});
+				continue;
+			}
 			const last = blocks[blocks.length - 1];
-			if (part.kind === 'reply' || last?.kind !== 'md') {
-				blocks.push({kind: part.kind, parts: [part]});
-			} else {
+			if (last?.kind === 'md') {
 				last.parts.push(part);
+			} else {
+				blocks.push({kind: 'md', parts: [part]});
 			}
 		}
 
@@ -525,7 +579,16 @@ export function History(props: {height?: number}) {
 		blockRefs.length = 0;
 		blocks.forEach((group, groupIndex) => {
 			const start = renderIndex.length;
-			group.parts.forEach((part, index) => {
+			// Tool blocks render a leading BREAKLINE (parity: the blank rows
+			// between settled blocks), counted here so the mouse mapping
+			// stays aligned with the rendered rows.
+			if (group.kind === 'tool') {
+				docLines.push({text: '', key: group.part.key});
+				renderIndex.push(docLines.length - 1);
+			}
+			const partList =
+				group.kind === 'tool' ? [group.part] : group.parts;
+			partList.forEach((part, index) => {
 				// A block is EXPANDABLE only when it actually hides content (a
 				// `+N more lines` footer) or is currently expanded.
 				const hasFooter = /\+(\d+) (more )?lines?/.test(part.text);
@@ -567,11 +630,12 @@ export function History(props: {height?: number}) {
 				ref: null,
 				start,
 				// Replies render a leading blank row (breakline before the
-				// response), so their block is one row taller.
+				// response) and tool blocks too (breakline before the block),
+				// so those blocks are one row taller.
 				rows:
 					renderIndex.length -
 					start +
-					(group.kind === 'reply' ? 1 : 0),
+					(group.kind === 'reply' || group.kind === 'tool' ? 1 : 0),
 			});
 		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
@@ -579,13 +643,7 @@ export function History(props: {height?: number}) {
 		blockRanges = ranges;
 		currentBlock = block;
 		baseRowCount = renderIndex.length;
-		return blocks.map(group => ({
-			kind: group.kind,
-			// Keep the PARTS (not a joined string): the For item render
-			// applies the hover marker per part reactively, so a hover change
-			// re-parses only that block instead of rebuilding this array.
-			parts: group.parts,
-		}));
+		return blocks;
 	});
 	/**
 	 * LIVE region, computed on the ticker signals ONLY so the settled blocks
@@ -778,48 +836,25 @@ export function History(props: {height?: number}) {
 			setHoveredBlock(key);
 		}
 	};
-	const handleMouseOut = () => {
+	const handleMouseOut = (event?: MouseEvent) => {
+		// An `out` event bubbles to the scrollbox whenever the HIT TARGET
+		// changes — including when the hover OVERLAY appears under the cursor
+		// (the pointer was over the markdown node, now it's over the overlay).
+		// Clearing unconditionally would blink the hover off immediately.
+		// Only clear when the pointer actually left the transcript: if the
+		// event still maps to a transcript row, keep the hover.
+		if (
+			event &&
+			typeof event.x === 'number' &&
+			typeof event.y === 'number' &&
+			rowForEvent(event) >= 0
+		) {
+			return;
+		}
 		setHoverRow(-1);
 		hoveredBlockRef = null;
 		setHoveredBlock(null);
 	};
-	/**
-	 * HOVER OVERLAY geometry: the hovered expandable block's BODY rows get a
-	 * full-width semi-transparent tint box. The header line is excluded by
-	 * construction (the box starts BELOW it), and because the highlight is a
-	 * plain Box — never a text-buffer background — OpenTUI cannot bleed it
-	 * into other rows and the settled text never re-parses on hover.
-	 */
-	const hoverOverlay = createMemo(() => {
-		const key = hoveredBlock();
-		if (!key || !scrollRef) return null;
-		const range = blockRanges.find(candidate => candidate.key === key);
-		if (!range) return null;
-		const group = blockRefs.find(
-			candidate =>
-				candidate.ref &&
-				range.start >= candidate.start &&
-				range.end <= candidate.start + candidate.rows - 1,
-		);
-		if (!group?.ref) return null;
-		const scrollY = (scrollRef as unknown as {screenY: number}).screenY;
-		const groupY = (group.ref as unknown as {screenY: number}).screenY;
-		const tint = RGBA.fromHex(colors().secondary);
-		return {
-			// The body starts ONE row below the block's header; the absolute
-			// coordinate origin inside the scrollbox sits ONE row above the
-			// content grid, so the body offset needs +2 in total. The range
-			// end includes the block's trailing row, so height is −1.
-			top: Math.max(
-				0,
-				groupY - scrollY + (range.start - group.start) + 2,
-			),
-			height: Math.max(1, range.end - range.start - 1),
-			width: historyFillWidth(terminalDimensions().width ?? 80),
-			bg: RGBA.fromValues(tint.r, tint.g, tint.b, 0.24),
-		};
-	});
-
 	return (
 		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
 		<scrollbox
@@ -852,12 +887,27 @@ export function History(props: {height?: number}) {
 					const setRef = (element: unknown): void => {
 						blockRefs[index()]!.ref = element as never;
 					};
-					// Hover is a pure OVERLAY (see hoverOverlay below), never
-					// a content change: the settled text stays byte-identical
-					// on hover, so no markdown re-parses and nothing else can
-					// ever repaint. (The old `:hover` fence marker re-parsed
-					// the block and OpenTUI's buffer filled EVERY line —
-					// header included — with the tint.)
+					// TOOL/THOUGHT blocks render as PLAIN COMPONENTS: the
+					// hover highlight is a per-row background INSIDE the row
+					// (parity: the settings rows), so there is no overlay
+					// geometry to compute and the hit target never changes
+					// under the cursor — hover sticks.
+					if (block.kind === 'tool') {
+						return (
+							<SettledToolRow
+								onRef={setRef}
+								segments={block.segments}
+								status={block.status}
+								glyph={block.glyph}
+								hovered={
+									block.part.key === hoveredBlock()
+								}
+								width={historyFillWidth(
+									terminalDimensions().width ?? 80,
+								)}
+							/>
+						);
+					}
 					const contentFor = () =>
 						block.parts
 							.map(part => part.text)
@@ -974,21 +1024,6 @@ export function History(props: {height?: number}) {
 						/>
 					</box>
 				</box>
-			</Show>
-			{/* HOVER OVERLAY: full-width tint over the hovered block's BODY
-			    rows only — the header line stays untouched. A plain Box, so
-			    it never bleeds into other rows and never re-parses content.
-			    Mouse events bubble to the scrollbox, so hover/click keep
-			    working over the tint. */}
-			<Show when={hoverOverlay()}>
-				<box
-					position="absolute"
-					left={0}
-					top={hoverOverlay()!.top}
-					width={hoverOverlay()!.width}
-					height={hoverOverlay()!.height}
-					backgroundColor={hoverOverlay()!.bg}
-				/>
 			</Show>
 		</scrollbox>
 	);

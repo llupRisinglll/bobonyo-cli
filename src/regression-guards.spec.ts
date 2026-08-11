@@ -18,11 +18,11 @@ import {join} from 'node:path';
  *  3. Each live row must keep its leading BREAKLINE (the settled transcript
  *     has a blank row between blocks; without it live rows glue themselves
  *     to the user message and to each other).
- *  4. Hover highlight must be the OVERLAY. OpenTUI's text buffer fills EVERY
- *     line (header included) whenever any chunk carries a background, so
- *     chunk-level hover tinting can never exclude the header — the overlay
- *     is the only acceptable implementation, and `applyHoverBackground`
- *     must not reappear.
+ *  4. SETTLED tool/thought rows must render as PLAIN COMPONENTS
+ *     (`SettledToolRow`), never markdown: the hover highlight is a per-row
+ *     background inside the row (parity: settings rows), which is what makes
+ *     hover stick and hit the right rows. The old overlay geometry and the
+ *     old buffer-bg tint (`applyHoverBackground`) must not reappear.
  */
 
 /** Read a source file with comments stripped (the guards check CODE only). */
@@ -50,10 +50,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(src).toMatch(/<box height=\{1\} \/>/);
 	});
 
-	test('hover is the overlay; the buffer-bg tint never comes back', () => {
+	test('settled tool rows render as components; overlay/buffer-tint gone', () => {
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/<SettledToolRow/);
+		expect(history).toMatch(/COMPONENT_ROW_LANGS/);
+		// The old overlay geometry and the buffer-bg tint are gone.
+		expect(history).not.toMatch(/hoverOverlay/);
 		const highlight = read('./row-highlight.ts');
 		expect(highlight).not.toMatch(/applyHoverBackground/);
-		const history = read('./components/history.tsx');
-		expect(history).toMatch(/hoverOverlay/);
+		// The component itself is plain boxes/text — no markdown anywhere.
+		const component = read('./components/settled-tool-row.tsx');
+		expect(component).not.toMatch(/<markdown|MarkdownRenderable/i);
+		// Hover must be a per-row BACKGROUND (settings-row parity), with the
+		// header excluded by construction (the bg is only on body rows).
+		expect(component).toMatch(/backgroundColor/);
 	});
 });
