@@ -19,6 +19,17 @@ type Row =
 	| {kind: 'spacer'}
 	| {kind: 'empty'};
 
+/**
+ * Resume-row title: `session_id: conversation_name`, or just the session id
+ * when the name is missing or still the default "New conversation" (pure,
+ * unit-tested).
+ */
+export function sessionLabel(session: ResumeSession): string {
+	const name = (session.name ?? '').trim();
+	if (!name || name === 'New conversation') return session.id;
+	return `${session.id}: ${name}`;
+}
+
 function dateGroup(createdAt: number): string {
 	const now = new Date();
 	const date = new Date(createdAt);
@@ -315,30 +326,10 @@ export function ResumeModal(props: {
 										),
 								} as any)}
 							>
-								{/* The resume REASON (first message) sits on its
-								    own line BEFORE the title, indented ≥2,
-								    parity: the reference picker summarizes above
-								    the session name. */}
-								{reason ? (
-									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={
-											item.active ? bold() : dim()
-										}
-									>
-										{'    '}
-										{reason.slice(0, 44)}
-									</text>
-								) : (
-									<></>
-								)}
-								{/* TITLE line: name + flexGrow + "how long ago"
-								    on ONE row, flexGrow inside the OUTER
-								    column would split them vertically. */}
+								{/* TITLE line: `session_id: conversation_name`
+								    (name omitted when still the default "New
+								    conversation") + flexGrow + "how long
+								    ago" on ONE row. */}
 								<box flexDirection="row">
 									<text
 										fg={
@@ -351,7 +342,7 @@ export function ResumeModal(props: {
 										}
 									>
 										{item.active ? '❯ ' : '  '}
-										{row.session.name ?? row.session.id}
+										{sessionLabel(row.session).slice(0, 48)}
 									</text>
 									<box flexGrow={1} />
 									<text
@@ -370,6 +361,26 @@ export function ResumeModal(props: {
 										)}
 									</text>
 								</box>
+								{/* The LAST PROMPT sits BELOW the title with a
+								    ` └ ` branch, secondary (dimmed) — same
+								    color rule as the other optional lines. */}
+								{reason ? (
+									<text
+										fg={
+											item.active
+												? activeRow().fg
+												: colors().secondary
+										}
+										attributes={
+											item.active ? bold() : dim()
+										}
+									>
+										{' └ '}
+										{reason.slice(0, 44)}
+									</text>
+								) : (
+									<></>
+								)}
 							</box>
 						);
 					}}
