@@ -36,6 +36,7 @@ is DONE only when verified live (or unit-tested) and committed.
 | 29 | Detect LSP + MCP configured in nanocoder | ✅ DONE | MCP now reads the ORIGINAL's `.mcp.json` (`{mcpServers: {...}}`, `{id, command, args, env}`) from the nanocoder config dir (the old code read a non-existent `mcp.json` from the wrong path); `/status` shows configured + connected servers. LSP auto-discovery added (`src/lsp.ts`, parity with nanocoder's server-discovery) detecting installed language servers (typescript-language-server, rust-analyzer, clangd, …). Verified live |
 | 30 | Breakline before every response | ✅ DONE | reply blocks render a leading blank row (opencode-style reply margin). Verified: `❯ md test` then blank then `✦ Heading` |
 | 31 | `--continue` / resume argument on startup | ✅ DONE | `--continue` is an alias for `--resume last` (or `--continue <id>`); verified `bun run dev --continue` resumed the last session |
+| 32 | Keep the welcome banner on an EMPTY chat; lazy-load indicator animated above the input; no MCP logging | ✅ DONE | MCP connect/fail messages were appended to the chat (making it non-empty and hiding the banner); removed. The animated `⠸ Loading skills · tools · MCP…` indicator sits ABOVE the input box and clears when init finishes. Verified live: banner shows on empty, indicator animates above the input, MCP/LSP only in `/status` |
 
 ## Implementation notes (committed)
 
