@@ -119,6 +119,13 @@ export const SPINNER_FRAMES = [
 /** Working/Thinking gear alternates ⚙ ↔ ✦ (parity: nanocoder's live region). */
 export const gearGlyph = (frame: number): string =>
 	frame % 8 < 4 ? '⚙' : '✦';
+/**
+ * 500ms glyph blink cadence (parity: nanocoder's ToolGlyph toggles ✦ vs a
+ * space). Running tool/reply glyphs render secondary and blink on this
+ * cadence; the hidden frame keeps a space so the row width never shifts.
+ */
+export const glyphBlinkOn = (frame: number): boolean =>
+	(frame >> 2) % 2 === 0;
 /** `Working` dots animate 1→2→3. */
 export const workingDots = (frame: number): string =>
 	'.'.repeat(((frame >> 2) % 3) + 1);

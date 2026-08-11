@@ -684,7 +684,13 @@ export function History(props: {height?: number}) {
 	 */
 	const liveToolRows = createMemo(() => {
 		if (!running()) return [];
-		const rows: Array<{header: string; lines: string[]}> = [];
+		const rows: Array<{
+			glyph: string;
+			glyphBlink: boolean;
+			name: string;
+			detail: string;
+			lines: string[];
+		}> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
 				const outputLines = (liveOutput(message) ?? '')
@@ -694,7 +700,14 @@ export function History(props: {height?: number}) {
 					.filter(line => line !== '')
 					.slice(-3);
 				rows.push({
-					header: `✦ ${displayToolName(message.tool.name)}(${message.tool.detail})`,
+					// LIVE header parity with the SETTLED row: the glyph is
+					// secondary + BLINKS while running (ToolGlyph), the tool
+					// name stays primary bold, the detail secondary — never
+					// the whole line in primary.
+					glyph: '✦',
+					glyphBlink: true,
+					name: displayToolName(message.tool.name),
+					detail: message.tool.detail,
 					lines: outputLines.map(line => `  └   ${line}`),
 				});
 			}
