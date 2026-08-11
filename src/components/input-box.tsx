@@ -12,7 +12,6 @@ import {loadCustomCommands, loadSkills} from '../custom';
 import {insertMention, listProjectFiles, mentionToken} from '../mentions';
 import {expandTextPlaceholders, processPaste} from '../attachments';
 import {estimateTokens} from '../tokenize';
-import {wrapDescription} from '../description-wrap';
 import {wrapText, wrapTextDetailed} from '../text-wrap';
 import {
 	activeEndpoint,
@@ -928,30 +927,23 @@ export function InputBox(props: {
 			{/* Command-completion popup (modal-style): a BORDERLESS list
 			    above the input while `/` is being typed. ↑/↓ scroll through
 			    ALL matches via the rendered window; each row is a command
-			    column + a wrapped description column (up to 2 lines) with
-			    the `[Command]`/`[Skill]` tag BEFORE the description. */}
+			    column + a ONE-LINE description column (the 2-line wrap is
+			    only for the settings modal lists) with the
+			    `[Command]`/`[Skill]` tag BEFORE the description. */}
 			<Show when={completions().length > 0}>
 				<box
 					flexDirection="column"
-					height={completionWindow().length * 2}
+					height={completionWindow().length}
 				>
 					<For each={completionWindow()}>
 						{(item) => {
 							const active = item.active;
-							const descWidth = Math.max(
-								24,
-								terminalDimensions().width - 42,
-							);
-							const descLines = wrapDescription(
-								item.description,
-								descWidth,
-							);
 							return (
 							// The WHOLE row is the hover/click target (parity:
 							// the settings rows, hover navigates, click picks).
 							<box
-								flexDirection="column"
-								height={descLines.length}
+								flexDirection="row"
+								height={1}
 								backgroundColor={active ? activeRow().bg : undefined}
 								{...({
 									onMouseUp: () => {
@@ -969,56 +961,45 @@ export function InputBox(props: {
 										setSelectedCompletion(item.index),
 								} as any)}
 							>
-								<box flexDirection="row" height={1}>
+								<text
+									width={2}
+									fg={active ? activeRow().fg : colors().secondary}
+									attributes={active ? bold() : undefined}
+								>
+									{active ? '❯ ' : '  '}
+								</text>
+								<text
+									width={30}
+									fg={active ? activeRow().fg : colors().text}
+									attributes={active ? bold() : undefined}
+								>
+									/{item.name}
+								</text>
+								{item.prefix ? (
 									<text
-										width={2}
-										fg={active ? activeRow().fg : colors().secondary}
-										attributes={active ? bold() : undefined}
-									>
-										{active ? '❯ ' : '  '}
-									</text>
-									<text
-										width={30}
-										fg={active ? activeRow().fg : colors().text}
-										attributes={active ? bold() : undefined}
-									>
-										/{item.name}
-									</text>
-									{item.prefix ? (
-										<text
-											width={item.prefix.length + 1}
-											fg={
-												active
-													? activeRow().fg
-													: colors().primary
-											}
-											attributes={active ? bold() : undefined}
-										>
-											{item.prefix}
-										</text>
-									) : (
-										<></>
-									)}
-									<text
+										width={item.prefix.length + 1}
 										fg={
 											active
 												? activeRow().fg
-												: colors().secondary
+												: colors().primary
 										}
-										attributes={active ? bold() : dim()}
+										attributes={active ? bold() : undefined}
 									>
-										{descLines[0] ?? ''}
+										{item.prefix}
 									</text>
-								</box>
-								<Show when={descLines.length > 1}>
-									<text
-										fg={active ? activeRow().fg : colors().secondary}
-										attributes={active ? bold() : dim()}
-									>
-										{'   '}
-										{descLines[1] ?? ''}
-									</text>
-								</Show>
+								) : (
+									<></>
+								)}
+								<text
+									fg={
+										active
+											? activeRow().fg
+											: colors().secondary
+									}
+									attributes={active ? bold() : dim()}
+								>
+									{item.description}
+								</text>
 							</box>
 							);
 						}}
@@ -1262,7 +1243,7 @@ export function computeInputBoxHeight(
  */
 export function completionPopupHeight(
 	inputText: string,
-	width = 100,
+	_width = 100,
 ): number {
 	if (!inputText.startsWith('/') || inputText.includes(' ')) return 0;
 	const name = inputText.slice(1);
@@ -1278,23 +1259,8 @@ export function completionPopupHeight(
 				.sort((a, b) => b.score - a.score)
 				.slice(0, 50)
 		: all.slice(0, 6).map(command => ({command, score: 1}));
-	if (matches.length === 0) return 0;
-	const windowed = matches.slice(0, 6);
-	// Borderless + windowed: each suggestion renders up to 2 lines (wrapped
-	// description), so the popup height is the SUM of the row line counts.
-	const descWidth = Math.max(24, width - 42);
-	const custom = new Map(
-		loadCustomCommands().map(command => [command.name, command.description]),
-	);
-	return windowed.reduce((sum, entry) => {
-		const description =
-			COMMAND_DESCRIPTIONS[entry.command] ??
-			custom.get(entry.command) ??
-			(entry.command.startsWith('mock:')
-				? 'Preview scenario'
-				: 'Run command');
-		return sum + wrapDescription(description, descWidth).length;
-	}, 0);
+	// Borderless + windowed: one line per suggestion.
+	return matches.length > 0 ? Math.min(6, matches.length) : 0;
 }
 
 /** `@` file-mention popup height (borders + match rows). */
