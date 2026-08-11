@@ -1,0 +1,894 @@
+/** @jsxImportSource @opentui/solid */
+import {
+	CodeRenderable,
+	RGBA,
+	getTreeSitterClient,
+	type RenderNodeContext,
+	type MarkdownRenderable,
+	type MouseEvent,
+	type RenderContext,
+	type ScrollBoxRenderable,
+	type TreeSitterClient,
+	createMarkdownCodeBlockRenderer,
+} from '@opentui/core';
+import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
+import {createMemo, createSignal} from 'solid-js';
+import {
+	activeAgents,
+	activeEndpoint,
+	expandedBlocks,
+	gearGlyph,
+	hoverRow,
+	liveOutputs,
+	messages,
+	mode,
+	reasoning,
+	running,
+	setHoverRow,
+	setThoughtExpanded,
+	setToolsExpanded,
+	streaming,
+	spinnerFrame,
+	turnElapsed,
+	settingsOpen,
+	statusOpen,
+	modelOpen,
+	agentsOpen,
+	resumeOpen,
+	titleShape,
+	workingDots,
+	formatElapsed,
+	thoughtExpanded,
+	toggleToolBlock,
+	toolsExpanded,
+	type ChatMessage,
+} from '../state';
+import {markdownSyntaxStyleFor} from '../syntax';
+import {displayToolName, isFileWriteTool, toolFamily} from '../tools';
+import {
+	fence,
+	formatOutputTail,
+	formatToolEntry,
+} from '../tool-display';
+import {
+	applyHoverBackground,
+	tokenizeAgentRow,
+	tokenizeBanner,
+	tokenizeBashRow,
+	tokenizeDiffRow,
+	tokenizeFileDiff,
+	tokenizeFileRow,
+	tokenizeErrorRow,
+	tokenizeStatusRow,
+	tokenizeThought,
+	tokenizeTaskRow,
+	tokenizeToolRow,
+	tokenizeUserMessage,
+	type RowStatus,
+} from '../row-highlight';
+import {colors} from '../theme';
+import {buildBannerBox} from '../banner';
+import {historyFillWidth} from '../history-width';
+
+const PREVIEW_LINES = 4;
+
+type RenderToken = {type: string; text?: string; lang?: string};
+
+/**
+ * Welcome banner, a simple Codex/Claude-style box with the small mascot art
+ * on the left (parity: the user's requested `★ ╭◕‿◕╮ ╰───╯`), showing the
+ * name/version, model, directory and permissions.
+ */
+function buildWelcomeBanner(titleShape: string): string {
+	const model = activeEndpoint().model;
+	const permissions = mode() === 'yolo' ? 'YOLO mode' : `${mode()} mode`;
+	return (
+		'```banner\n' +
+		buildBannerBox({
+			titleShape,
+			model,
+			permissions,
+			cwd: process.cwd(),
+		}) +
+		'```\n\n' +
+		'  Tip: Press **ctrl+p** for settings & commands · type **/** for commands · **@** to mention files'
+	);
+}
+
+/** Extract `<path>` from a row's first line (`✦ Write <path>`). */
+function rowPath(text: string): string {
+	const line = text.split('\n')[0] ?? '';
+	return line.replace(/^[✦⚙]\s*[A-Za-z ]+?\s+/, '').trim();
+}
+
+/** Tag a fenced row's language with `:hover` so its renderer tints it. */
+function markHover(text: string): string {
+	return text.replace(/^(```+[^:\n]+:[^:\n]+)/, '$1:hover');
+}
+
+/**
+ * C11: ` ```diff ` fences render through OpenTUI's native DiffRenderable,
+ * added/removed lines get green/red backgrounds with colored +/- signs,
+ * matching nanocoder's DiffView look while the code keeps its own syntax
+ * colors. Non-diff fences keep the default code rendering.
+ */
+/**
+ * Chat history as ONE reactive document rendered by the real OpenTUI
+ * `<markdown>` renderable. The OpenTUI 0.4.5 solid reconciler corrupts
+ * multi-element rows on rapid async updates (verified live), so the whole
+ * transcript is derived in a memo and streamed into a single markdown node,
+ * headings/lists/code/tables format live while the stream grows, and the
+ * settled transcript is byte-identical in shape.
+ */
+export function History(props: {height?: number}) {
+	const renderer = useRenderer();
+	// OpenTUI's built-in tree-sitter grammars (ts/js/md) highlight fenced
+	// code blocks, attach the client so ` ```typescript ` previews get real
+	// syntax colors instead of a hand-rolled tokenizer. In the COMPILED
+	// binary the grammar WASM files can't be resolved from node_modules,
+	// fall back to a no-op client so the app still runs (plain code blocks).
+	let treeSitter: TreeSitterClient | undefined;
+	try {
+		treeSitter = getTreeSitterClient();
+	} catch {
+		treeSitter = {
+			highlightOnce: async () => ({highlights: []}),
+		} as unknown as TreeSitterClient;
+	}
+	const terminalDimensions = useTerminalDimensions();
+	// The container (tool/thought block) under the cursor, its rows get a
+	// persistent background highlight and it toggles on click.
+	const [hoveredBlock, setHoveredBlock] = createSignal<string | null>(null);
+	let hoveredBlockRef: string | null = null;
+	let markdownRef: MarkdownRenderable | null = null;
+	let scrollRef: ScrollBoxRenderable | null = null;
+	let lineMap: Array<string | undefined> = [];
+	let renderText: string[] = [];
+	let blockRanges: Array<{key: string; start: number; end: number}> = [];
+	let currentBlock: {key: string; start: number} | null = null;
+	const syntaxStyle = createMemo(() => markdownSyntaxStyleFor(colors()));
+	// Code preview CodeRenderable: built-in tree-sitter + line-number recolors.
+	const codePreview = (token: RenderToken, filetype: string): CodeRenderable =>
+		new CodeRenderable(renderer as unknown as RenderContext, {
+			content: token.text ?? '',
+			filetype,
+			syntaxStyle: syntaxStyle(),
+			treeSitterClient: treeSitter,
+			onChunks: chunks =>
+				chunks.map(chunk => {
+					// A chunk that is ONLY a line number (`  1 `) becomes
+					// secondary, it's the preview gutter, not a code number.
+					if (/^\s*\d+\s*$/.test(chunk.text)) {
+						return {...chunk, fg: RGBA.fromHex(colors().secondary)};
+					}
+					return chunk;
+				}),
+		});
+	const diffCodeBlockRenderer = createMarkdownCodeBlockRenderer({
+		diff: token =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text,
+				filetype: 'diff',
+				syntaxStyle: syntaxStyle(),
+			}),
+		banner: token =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text,
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () => tokenizeBanner(token.text ?? '', colors()),
+			}),
+	});
+	/** Custom tool-row renderers, tokenize the row into themed chunks. */
+	const rowRenderers: Record<
+		string,
+		(token: RenderToken, status: RowStatus, hovered: boolean) => CodeRenderable
+	> = {
+		toolrow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeToolRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		bashrow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeBashRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		filerow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeFileRow(token.text ?? '', rowPath(token.text ?? ''), status, colors()),
+						// File previews keep their own look, no container tint.
+						false,
+						colors(),
+					),
+			}),
+		filediff: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeFileDiff(
+							token.text ?? '',
+							rowPath(token.text ?? ''),
+							status,
+							colors(),
+							historyFillWidth(terminalDimensions().width ?? 80),
+						),
+						false,
+						colors(),
+					),
+			}),
+		diffrow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeDiffRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		agentrow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeAgentRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		grouprow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeToolRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		thought: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeThought(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		usermsg: (token) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					tokenizeUserMessage(
+						token.text ?? '',
+						colors(),
+						historyFillWidth(terminalDimensions().width ?? 80),
+					),
+			}),
+		taskrow: (token, status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeTaskRow(token.text ?? '', status, colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		// Error rows (`⚠ …`) render in the error color.
+		errorrow: (token, _status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeErrorRow(token.text ?? '', colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		// `/status` block: custom fenced row so the `model[effort]` brackets
+		// survive, the markdown/tree-sitter pipeline parses a bare `[x]` as
+		// a link-ish token and drops the brackets.
+		statusrow: (token, _status, hovered) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					applyHoverBackground(
+						tokenizeStatusRow(token.text ?? '', colors()),
+						hovered,
+						colors(),
+					),
+			}),
+		// Real-language code previews: built-in tree-sitter highlights, with
+		// the leading LINE NUMBERS re-colored to secondary (they're parsed as
+		// `number` tokens otherwise and would render success-green).
+		typescript: token => codePreview(token, 'typescript'),
+		javascript: token => codePreview(token, 'javascript'),
+		markdown: token => codePreview(token, 'markdown'),
+	};
+	// NOTE: OpenTUI 0.4.5 only applies `markup.heading` to TABLE headers;
+	// regular heading blocks render unstyled. A manual TextRenderable for
+	// heading tokens caused layout instability in the single-markdown stream
+	// (the welcome line rendered as an interleaved "Welcomeetoonanocoder-…"
+	// artifact), so headings keep the default rendering for now.
+	const renderNode = (token: RenderToken, context: RenderNodeContext) => {
+		const lang = String(token.lang ?? '');
+		const parts = lang.split(':');
+		const kind = parts[0] ?? lang;
+		const status = (parts[1] ?? 'done') as RowStatus;
+		const hovered = parts[2] === 'hover';
+		const custom = rowRenderers[kind];
+		if (custom) {
+			try {
+				return custom(token, status, hovered);
+			} catch (error) {
+				return undefined;
+			}
+		}
+		return diffCodeBlockRenderer?.(
+			token as Parameters<NonNullable<typeof diffCodeBlockRenderer>>[0],
+			context,
+		);
+	};
+
+	// C1: PageUp/PageDn scroll the transcript by one viewport (wheel is
+	// handled natively by the scrollbox). Sticky-bottom re-engages on the
+	// next content append. While a modal (settings) is open the modal owns
+	// the keys, scrolling the history behind it would be a leak.
+	useKeyboard(event => {
+		if (
+			settingsOpen() ||
+			statusOpen() ||
+			modelOpen() ||
+			agentsOpen() ||
+			resumeOpen()
+		)
+			return false;
+		if (event.name === 'pageup') {
+			scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
+			return true;
+		}
+		if (event.name === 'pagedown') {
+			scrollRef?.scrollBy({x: 0, y: 1}, 'viewport');
+			return true;
+		}
+		return false;
+	});
+	const transcript = createMemo(() => {
+		// Reading the width here (a signal) makes the memo re-run on terminal
+		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
+		// the full-row-bg code blocks instead of keeping the old-width chunks.
+		const fillWidth = historyFillWidth(terminalDimensions().width ?? 80);
+		const parts: Array<{text: string; key?: string}> = [];
+		const pushBlock = (text: string, key?: string) => {
+			parts.push({
+				// Full-row-bg fences carry the current width in the opener,
+				// a resize changes the marker → the markdown block re-parses →
+				// the CodeRenderable re-highlights and onChunks pads to the
+				// NEW width (without this the old padding lingered until any
+				// other re-render).
+				text: text.replace(
+					/^(```+)(filediff|usermsg)(:[^:\n]+)/,
+					(_match, fenceChar, kind, status) =>
+						`${fenceChar}${kind}${status}:w${fillWidth}`,
+				),
+				key,
+			});
+		};
+		const all = messages();
+		// Welcome block (parity: nanocoder shows a welcome message on an
+		// empty conversation instead of a blank transcript).
+		if (all.length === 0 && !running()) {
+			pushBlock(
+				buildWelcomeBanner(
+					titleShape(),
+				),
+			);
+		}
+		for (let i = 0; i < all.length; i++) {
+			const message = all[i]!;
+			if (message.role === 'user') {
+				// User messages render as a surface-filled `❯ content` block
+				// (parity: nanocoder's arrow-style UserMessage background).
+				pushBlock(fence('usermsg', 'done', `❯ ${message.content}`));
+			} else if (message.role === 'tool') {
+				// Collect the maximal run of consecutive tool calls, then group
+				// same-family calls into compact blocks (expanding per-call).
+				const run: ChatMessage[] = [message];
+				while (i + 1 < all.length && all[i + 1]?.role === 'tool') {
+					run.push(all[i + 1]!);
+					i++;
+				}
+				for (const row of renderToolRun(run)) pushBlock(row.text, row.blockKey);
+			} else if (message.kind === 'info') {
+				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
+			} else if (message.error) {
+				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
+			} else {
+				if (message.reasoning) {
+					const thoughtKey = `thought-${i}`;
+					pushBlock(
+						settledThought(message.reasoning, message.durationSec, thoughtKey),
+						thoughtKey,
+					);
+				}
+				// Assistant replies carry the `✦` prefix as the left
+				// indication (parity: nanocoder's assistant icon). `~✦~`
+				// renders it DIM (the strikethrough style maps to dim).
+				if (message.content) pushBlock(`~✦~ ${message.content}`);
+			}
+		}
+
+		const docLines: Array<{text: string; key?: string}> = [];
+		// Rendered-row index: fence markers (` ```lang ` openers/closers) are
+		// consumed by the markdown parser and never render as rows, so the
+		// click/hover row → doc line mapping must skip them.
+		const renderIndex: number[] = [];
+		const ranges: Array<{key: string; start: number; end: number}> = [];
+		let block: {key: string; start: number} | null = null;
+		parts.forEach((part, index) => {
+			// A block is EXPANDABLE only when it actually hides content (a
+			// `+N more lines` footer) or is currently expanded. Blocks that
+			// fit fully have NO footer, NO hover tint and are NOT clickable.
+			const hasFooter = /\+(\d+) (more )?lines?/.test(part.text);
+			const expandable =
+				part.key !== undefined &&
+				(hasFooter || Boolean(expandedBlocks()[part.key]));
+			// Hover tint ONLY on COLLAPSED blocks that show the `+N` footer,
+			// an EXPANDED block (even one with a residual long-output footer)
+			// never highlights: the user clicked to reveal content, so a
+			// whole-block tint over it reads as an unnecessary highlight.
+			const highlighted =
+				part.key !== undefined &&
+				expandable &&
+				hasFooter &&
+				!expandedBlocks()[part.key] &&
+				part.key === hoveredBlock();
+			const partText = highlighted ? markHover(part.text) : part.text;
+			// Fenced parts carry their own leading blank (rendered spacing),
+			// so skip the between-part separator before them, otherwise the
+			// doc has TWO blanks where only one renders and the click/hover
+			// row mapping drifts by one.
+			const isFenced = partText.trimStart().startsWith('```');
+			if (index > 0 && !isFenced) {
+				docLines.push({text: ''});
+				renderIndex.push(docLines.length - 1);
+			}
+			if (part.key) block = {key: part.key, start: -1};
+			for (const line of partText.split('\n')) {
+				const isFenceMarker = /^\s*`{3,}/.test(line);
+				docLines.push({text: line, key: part.key});
+				if (!isFenceMarker) {
+					if (block && block.start === -1) block.start = renderIndex.length;
+					renderIndex.push(docLines.length - 1);
+				}
+			}
+			if (block && expandable) {
+				ranges.push({
+					...block,
+					start: Math.max(0, block.start),
+					end: Math.max(0, renderIndex.length - 1),
+				});
+				block = null;
+			} else {
+				block = null;
+			}
+		});
+		let doc = docLines.map(line => line.text).join('\n');
+		if (running()) {
+			const live: string[] = [];
+			// The Working indicator renders as a FIXED line above the input
+			// box (App), not inside the scrollable transcript.
+			const frame = spinnerFrame();
+			if (reasoning()) {
+				// Tail while streaming (last 4 lines), like a running bash.
+				live.push(
+					fence(
+						'thought',
+						'running',
+						// LIVE header: animated gear + REAL-TIME seconds timer
+						// + animated dots (parity: the Working indicator),
+						// the header is PRIMARY so the gear reads as an
+						// animation, not a dim tool-glyph blink.
+						`${gearGlyph(frame)} Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
+							`└ ${tailLines(reasoning())}`,
+					),
+				);
+			}
+			if (streaming()) {
+				// The reply glyph BLINKS while the response is streaming
+				// (`~✦~` = dim via the strikethrough style).
+				const blink = (spinnerFrame() >> 2) % 2 === 0;
+				live.push(`${blink ? '~✦~' : '✦'} ${streaming()}`);
+			}
+			const liveBlock = live.join('\n\n');
+			if (liveBlock) {
+				if (doc) doc += `\n\n${liveBlock}`;
+				else doc = liveBlock;
+				docLines.push({text: ''});
+				renderIndex.push(docLines.length - 1);
+				block = {key: 'live', start: renderIndex.length - 1};
+				for (const line of liveBlock.split('\n')) {
+					docLines.push({text: line});
+					renderIndex.push(docLines.length - 1);
+				}
+				ranges.push({...block, end: renderIndex.length - 1});
+			}
+		}
+		lineMap = renderIndex.map(index => docLines[index]?.key);
+		renderText = renderIndex.map(index => docLines[index]?.text ?? '');
+		blockRanges = ranges;
+		currentBlock = block;
+	return doc;
+	});
+	const lines = createMemo(() => renderText);
+
+	/**
+	 * Mouse click-to-toggle (parity: nanocoder C16, every expandable toggles
+	 * both ways). The transcript is one markdown node, so the click row is
+	 * mapped back to the doc line via the renderable's screen position.
+	 */
+	const handleMouseDown = (event: MouseEvent) => {
+		if (!markdownRef) return;
+		if (
+			settingsOpen() ||
+			statusOpen() ||
+			modelOpen() ||
+			agentsOpen() ||
+			resumeOpen()
+		)
+			return;
+		const row = event.y - markdownRef.screenY;
+		if (row < 0) return;
+		// A click anywhere inside a tool/thought CONTAINER toggles it (the
+		// whole block, header, `└` output, footer, is the hit target).
+		// Plain transcript text (user rows, replies, diagnostics) has no
+		// block and is NOT clickable. A tight ±1 window absorbs minor
+		// scrollbox drift without pre-emptively toggling blocks 2+ rows away.
+		const range = [row - 1, row, row + 1]
+			.map(r => blockRanges.find(candidate => r >= candidate.start && r <= candidate.end))
+			.find(candidate => candidate && candidate.key !== 'live');
+		if (range) {
+			toggleToolBlock(range.key);
+			return;
+		}
+	};
+
+	// C13: hover, highlight the row under the cursor (moves + ▸ marker).
+	const handleMouseMove = (event: MouseEvent) => {
+		if (!markdownRef) return;
+		if (
+			settingsOpen() ||
+			statusOpen() ||
+			modelOpen() ||
+			agentsOpen() ||
+			resumeOpen()
+		)
+			return;
+		const row = event.y - markdownRef.screenY;
+		if (row < 0) return;
+		if (row !== hoverRow()) setHoverRow(row);
+		// The CONTAINER under the cursor (drift-tolerant) drives the
+		// persistent background highlight.
+		const block =
+			[row - 1, row, row + 1]
+				.map(r =>
+					blockRanges.find(
+						candidate => r >= candidate.start && r <= candidate.end,
+					),
+				)
+				.find(candidate => candidate && candidate.key !== 'live') ?? null;
+		const key = block?.key ?? null;
+		if (key !== hoveredBlockRef) {
+			hoveredBlockRef = key;
+			setHoveredBlock(key);
+		}
+	};
+	const handleMouseOut = () => {
+		setHoverRow(-1);
+		hoveredBlockRef = null;
+		setHoveredBlock(null);
+	};
+
+	return (
+		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
+		<scrollbox
+			ref={element => {
+				scrollRef = element;
+			}}
+			flexGrow={1}
+			flexShrink={1}
+			minHeight={0}
+			height={props.height ?? '100%'}
+			stickyScroll
+			stickyStart="bottom"
+			{...({
+				onMouseDown: handleMouseDown,
+				onMouseMove: handleMouseMove,
+				onMouseOut: handleMouseOut,
+			} as any)}
+		>
+			<markdown
+				ref={element => {
+					markdownRef = element;
+				}}
+				content={transcript()}
+				streaming={running()}
+				fg={colors().text}
+				syntaxStyle={syntaxStyle()}
+				internalBlockMode="top-level"
+				renderNode={renderNode}
+				treeSitterClient={treeSitter}
+				// Markdown tables render as boxed, content-fit tables (parity:
+				// nanocoder's cli-table3 rendering), not plain spaced columns.
+				tableOptions={{style: 'grid', borders: true, widthMode: 'content'}}
+			/>
+		</scrollbox>
+	);
+}
+
+/**
+ * Settled Thought block, `⚙ Thought (Ns)` header with a `└` preview of the
+ * FIRST 4 rendered lines (head once settled), expandable via Ctrl+R.
+ */
+function settledThought(
+	reasoningText: string,
+	durationSec: number | undefined,
+	key: string,
+): string {
+	const header = `⚙ Thought${durationSec ? ` (${durationSec}s)` : ''}`;
+	const lines = reasoningText.replace(/\n+$/, '').split('\n');
+	const expanded = expandedBlocks()[key] ?? thoughtExpanded();
+	const tokens = Math.max(1, Math.ceil(reasoningText.length / 4));
+	if (expanded || lines.length <= PREVIEW_LINES) {
+		return fence(
+			'thought',
+			'done',
+			`${header}\n└ ${lines.join('\n   ')}\n~${tokens} tokens`,
+		);
+	}
+	const preview = lines.slice(0, PREVIEW_LINES).join('\n   ');
+	return fence(
+		'thought',
+		'done',
+		`${header}\n└ ${preview}\n` +
+			`   … +${lines.length - PREVIEW_LINES} more lines\n` +
+			`~${tokens} tokens`,
+	);
+}
+
+function tailLines(text: string): string {
+	const lines = text.replace(/\n+$/, '').split('\n');
+	return lines.slice(-PREVIEW_LINES).join('\n   ');
+}
+
+/**
+ * Info rows: background-task completions are EXPANDABLE (C8), collapsed they
+ * show the summary + first script lines with a `+N lines (ctrl + t to view
+ * transcript)` footer; expanded (Ctrl+O / footer click) they show the full
+ * script. Every other info row renders verbatim.
+ */
+function renderInfoRow(content: string, key: string): string {
+	if (!content.startsWith('Background task completed') && !content.startsWith('Session:   ')) {
+		return content;
+	}
+	// `/status` block (codex-like): render through a custom fenced row so the
+	// `model[effort]` brackets survive (the markdown/tree-sitter pipeline
+	// drops bare `[x]` groups). Everything else stays plain markdown.
+	if (content.startsWith('Session:   ')) {
+		return fence('statusrow', 'done', content);
+	}
+	const lines = content.replace(/\n+$/, '').split('\n');
+	const header = lines[0] ?? '';
+	const script = lines.slice(1);
+	if (expandedBlocks()[key] ?? toolsExpanded()) {
+		return `${header}\n${script.join('\n')}`;
+	}
+	if (script.length <= 2) return content;
+	const preview = script.slice(0, 2).join('\n');
+	return (
+		`${header}\n${preview}\n` +
+		`  … +${script.length - 2} more lines`
+	);
+}
+
+/**
+ * Render a run of consecutive tool calls: same-family calls collapse into ONE
+ * compact block (`✦ Ran Bash ×3` / `✦ Ran WebSearch ×2 and WebFetch`), while
+ * unrelated tools and file-write tools keep their own rows. Ctrl+O toggles
+ * between the compacted header and the individual call entries.
+ */
+function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: string}> {
+	const blocks: ChatMessage[][] = [];
+	for (const message of run) {
+		const name = message.tool?.name ?? '';
+		// File-write tools and AGENTS keep their own rows (nanocoder:
+		// subagents render one compact entry per delegated agent, never a
+		// single `×N` tally).
+		if (isFileWriteTool(name) || name === 'agent') {
+			blocks.push([message]);
+			continue;
+		}
+		const family = toolFamily(name);
+		const last = blocks[blocks.length - 1];
+		const lastFamily =
+			last && last[0]?.tool ? toolFamily(last[0].tool.name) : null;
+		if (
+			last &&
+			lastFamily === family &&
+			!isFileWriteTool(last[0]?.tool?.name ?? '') &&
+			last[0]?.tool?.name !== 'agent'
+		) {
+			last.push(message);
+		} else {
+			blocks.push([message]);
+		}
+	}
+	return blocks.flatMap(block => {
+		if (block.length === 1) {
+			const key = block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+			return [{text: singleToolRow(block[0]!, key), blockKey: key}];
+		}
+		const key =
+			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+		return [{text: compactToolBlock(block, key), blockKey: key}];
+	});
+}
+
+function singleToolRow(message: ChatMessage, key: string): string {
+	if (!message.tool) return message.content;
+	if (message.tool.name === 'agent') return agentRow(message);
+	const status: RowStatus = message.running
+		? 'running'
+		: message.tool.name === 'execute_bash' && message.kind === 'info'
+			? 'bg'
+			: 'done';
+	// 500ms halves (5 frames × 100ms), parity with the original ToolGlyph's
+	// 500ms toggle; the previous 400ms blink felt excessive while streaming.
+	const blinkOn = spinnerFrame() % 10 < 5;
+	return formatToolEntry(
+		{...message.tool, output: liveOutput(message)},
+		expandedBlocks()[key] ?? toolsExpanded(),
+		status,
+		false,
+		blinkOn,
+	);
+}
+
+/**
+ * Agent row (looks parity: nanocoder's compact agent entry), `✦ Ran
+ * agent:name(task) completed` with a `└ ` output preview and a stats footer
+ * `· N tool calls · Xs (ctrl-o to expand)`. While running the header reads
+ * `(running)` and the tail streams.
+ */
+function agentRow(message: ChatMessage): string {
+	const detail = message.tool?.detail ?? '';
+	const output = liveOutput(message);
+	const lines = output.replace(/\s+$/, '').split('\n').filter(line => line !== '');
+	const running = message.running === true;
+	const status = running ? 'running' : 'completed';
+	const first = lines[0] ?? '';
+	const hidden = lines.length - 1;
+	const stats = message.toolStats;
+	const statsText = [
+		stats?.toolCalls ? `${stats.toolCalls} tool ${stats.toolCalls === 1 ? 'call' : 'calls'}` : '',
+		stats?.durationSec ? `${stats.durationSec}s` : '',
+	].filter(Boolean).join(' · ');
+	const footer = hidden > 0
+		? `\n     … +${hidden} more line${hidden === 1 ? '' : 's'}${statsText ? ` · ${statsText}` : ''}`
+		: statsText
+			? `\n     ${statsText}`
+			: '';
+	const statusKind: RowStatus = running ? 'running' : 'done';
+	const blinkOn = spinnerFrame() % 10 < 5;
+	const header = running && !blinkOn
+		? `✦ Ran ${detail} ${status}`.replace(/^[✦⚙]/, ' ')
+		: `✦ Ran ${detail} ${status}`;
+	return fence(
+		'agentrow',
+		statusKind,
+		// Header parity: `✦ Ran agent:explore(<task>) completed` (the detail
+		// already carries the `agent:<type>(<task>)` shape).
+		`${header}\n` + `  └  ${first}${footer}`,
+	);
+}
+
+/** Live output for a running tool row; committed output once settled. */
+function liveOutput(message: ChatMessage): string {
+	if (message.running && message.toolId) {
+		return liveOutputs()[message.toolId] ?? message.tool?.output ?? '';
+	}
+	return message.tool?.output ?? '';
+}
+
+function compactToolBlock(calls: ChatMessage[], key: string): string {
+	const order: string[] = [];
+	const counts = new Map<string, number>();
+	for (const message of calls) {
+		const name = message.tool?.name ?? '';
+		if (!counts.has(name)) order.push(name);
+		counts.set(name, (counts.get(name) ?? 0) + 1);
+	}
+	const entriesText = order
+		.map((name, index) => {
+			const count = counts.get(name) ?? 1;
+			const label = `${displayToolName(name)}${count > 1 ? ` ×${count}` : ''}`;
+			const separator =
+				index === 0
+					? ''
+					: index === order.length - 1 && order.length > 1
+						? ' and '
+						: ', ';
+			return `${separator}${label}`;
+		})
+		.join('');
+	const header = `✦ Ran ${entriesText}`;
+
+	const expanded = expandedBlocks()[key] ?? toolsExpanded();
+	if (expanded) {
+		const entries = calls
+			.map(message =>
+				message.tool
+					? formatToolEntry(
+							{...message.tool, output: liveOutput(message)},
+							true,
+							'done',
+							true,
+						)
+					: message.content,
+			)
+			.join('\n\n');
+		return fence('grouprow', 'done', `${header}\n\n${entries}`);
+	}
+
+	const lastWithTool = [...calls].reverse().find(message => message.tool);
+	const tail = lastWithTool
+		? formatOutputTail(liveOutput(lastWithTool), false)
+		: '';
+	// Universal footer: the collapsed tally hides the individual call
+	// entries behind `+N more lines` (no keyboard hint, the footer IS the
+	// expand affordance).
+	const footer = `\n     … +${calls.length} more line${calls.length === 1 ? '' : 's'}`;
+	const row = tail ? `${header}\n${tail}${footer}` : `${header}${footer}`;
+	return fence('grouprow', 'done', row);
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+scratch/
+*.tmp
+*.log
+.DS_Store
+libghostty
+tmux
+session-export-*.json
