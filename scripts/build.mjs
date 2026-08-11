@@ -14,8 +14,17 @@ const launcher = `#!/usr/bin/env bash
 # bobonyo RELEASE launcher (dist). The compiled binary is blocked by the
 # OpenTUI+bun-compile JSX-transform issue; this runs the release entry.
 set -e
-cd "$(dirname "$0")/.."
-exec /usr/bin/env bun run src/index.tsx "$@"
+# Resolve the repo WITHOUT cd'ing: the app must run in the USER's cwd so
+# skills/AGENTS.md resolve against the project they launched it in (the old
+# cd made 'bobonyo' in /project run with cwd=/repo - wrong rules loaded).
+# The OpenTUI preload is passed EXPLICITLY by ABSOLUTE PATH with -r: a
+# module specifier would resolve against the USER's node_modules (a project
+# with its own node_modules shadows it) and a missing bunfig skips the
+# preload entirely — both crash the UI with "Orphan text" (the preload
+# registers the JSX transform before the module graph is processed).
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PRELOAD="$DIR/node_modules/@opentui/solid/scripts/preload.js"
+exec /usr/bin/env bun run -r "$PRELOAD" "$DIR/src/index.tsx" "$@"
 `;
 writeFileSync('dist/bobonyo', launcher, 'utf8');
 

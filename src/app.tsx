@@ -24,6 +24,7 @@ import {
 	saveConfig,
 	savePreferences,
 } from './config';
+import {resolveRulesFile} from './rules-file';
 import {
 	loadCustomCommands,
 	loadCustomTools,
@@ -230,7 +231,6 @@ export function App() {
 	// The in-flight turn's abort controller, so `/clear` can cancel a running
 	// stream mid-turn (parity: clear starts a NEW conversation).
 	let abortRef: AbortController | null = null;
-	let completionTimer: ReturnType<typeof setTimeout> | null = null;
 	let exitConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 	let currentSession: SessionData | null = null;
 	let interruptedRef = false;
@@ -490,6 +490,7 @@ export function App() {
 	const clear = () => {
 		abortRef?.abort();
 		setInput('');
+		setCompletionMessage('');
 		setTasks([]);
 		setSettingsOpen(false);
 		setStatusOpen(false);
@@ -1495,11 +1496,6 @@ export function App() {
 									? ` · ${completionUsage.total_tokens} tokens`
 									: ''),
 						);
-						if (completionTimer) clearTimeout(completionTimer);
-						completionTimer = setTimeout(
-							() => setCompletionMessage(''),
-							8000,
-						);
 						capturePRs(result.text);
 						// Keep the LOCAL history (what the provider saw) in
 						// sync, the post-loop `setContext(history)` below is
@@ -1928,11 +1924,6 @@ export function App() {
 				setCompletionMessage(
 					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.`,
 				);
-				if (completionTimer) clearTimeout(completionTimer);
-				completionTimer = setTimeout(
-					() => setCompletionMessage(''),
-					8000,
-				);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -2346,6 +2337,10 @@ export function App() {
 								diagnosticsCount() === 1 ? '' : 's'
 							}`
 						: ''),
+				// Exactly the file embedded in the system prompt (nearest
+				// AGENTS.md walking up from the cwd), so the user always
+				// knows which rules the model is running under.
+				rulesFile: resolveRulesFile(process.cwd()) ?? 'none',
 				steeringLabel: steeringRef.enabled
 					? `enabled · ${steeringRef.rules.length} rules`
 					: 'disabled',

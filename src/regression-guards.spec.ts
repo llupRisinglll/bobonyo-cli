@@ -65,4 +65,46 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// header excluded by construction (the bg is only on body rows).
 		expect(component).toMatch(/backgroundColor/);
 	});
+
+	test('the Worked-for completion line never auto-expires on a timer', () => {
+		// The completion line persists during idle; it is cleared only when
+		// a NEW turn starts or `/clear` runs. A timeout clearing it makes
+		// the line vanish mid-idle — that exact regression is banned.
+		const app = read('./app.tsx');
+		expect(app).not.toMatch(/completionTimer/);
+		expect(app).not.toMatch(
+			/setCompletionMessage\(\s*['"]\s*['"]\s*\)\s*,\s*\d+\s*\)/,
+		);
+		// And it must be cleared at turn start + on /clear.
+		expect(app).toMatch(/setCompletionMessage\(''\)/);
+	});
+
+	test('/status always reports the resolved AGENTS.md rules file', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(/resolveRulesFile\(process\.cwd\(\)\)/);
+		const rows = read('./status-rows.ts');
+		expect(rows).toMatch(/'AGENTS\.md'/);
+	});
+
+	test('launcher keeps the USER cwd and applies the OpenTUI preload', () => {
+		const build = read('../scripts/build.mjs');
+		// Running `bobonyo` in another project must NOT cd into the repo
+		// before exec: skills/AGENTS.md resolve against the user's cwd. A
+		// subshell `cd … && pwd` to RESOLVE the repo dir is fine; changing
+		// the launcher's own cwd (the old `cd` + `exec bun run src/…`) is not.
+		expect(build).not.toMatch(
+			/cd "\$\(dirname "\$0"\)\/\.\."\n\s*exec \/usr\/bin\/env bun run src\/index\.tsx/,
+		);
+		// The preload must be passed by ABSOLUTE PATH (-r): a bare module
+		// specifier resolves against the user's node_modules and a missing
+		// bunfig skips the preload — both crash the UI with "Orphan text".
+		expect(build).toMatch(/bun run -r "\$PRELOAD"/);
+		expect(build).toMatch(/@opentui\/solid\/scripts\/preload\.js/);
+	});
+
+	test('trust/approval prompts never dereference a null signal', () => {
+		const input = read('./components/input-box.tsx');
+		expect(input).not.toMatch(/prompt\(\)!/);
+		expect(input).not.toMatch(/approval\(\)!/);
+	});
 });

@@ -11,6 +11,7 @@ const BASE: StatusData = {
 	mcpServers: [],
 	mcpConfigured: [],
 	lspLabel: 'no issues · refreshed after code changes',
+	rulesFile: '/work/AGENTS.md',
 	steeringLabel: 'disabled',
 	watchdogLabel: 'off',
 	streamGuardLabel: 'off',
@@ -30,6 +31,7 @@ describe('buildStatusRows', () => {
 			'Custom commands',
 			'MCP servers',
 			'LSP',
+			'AGENTS.md',
 			'Steering',
 			'Watchdog',
 			'Stream guard',
@@ -37,6 +39,15 @@ describe('buildStatusRows', () => {
 		]) {
 			expect(labels).toContain(expected);
 		}
+	});
+
+	test('AGENTS.md row shows the resolved rules file', () => {
+		const rows = buildStatusRows(BASE);
+		const row = rows.find(r => r.label === 'AGENTS.md');
+		expect(row?.value).toBe('/work/AGENTS.md');
+		expect(row?.valueFg).toBeUndefined();
+		const none = buildStatusRows({...BASE, rulesFile: 'none'});
+		expect(none.find(r => r.label === 'AGENTS.md')?.valueFg).toBe('warning');
 	});
 
 	test('does not duplicate the status line or input corner', () => {

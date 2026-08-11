@@ -11,6 +11,8 @@ export interface StatusData {
 	mcpServers: string[];
 	mcpConfigured: string[];
 	lspLabel: string;
+	/** Resolved AGENTS.md path actually embedded in the system prompt. */
+	rulesFile: string;
 	steeringLabel: string;
 	watchdogLabel: string;
 	streamGuardLabel: string;
@@ -49,6 +51,11 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 				: data.lspLabel.includes('issue')
 					? 'warning'
 					: undefined,
+		},
+		{
+			label: 'AGENTS.md',
+			value: data.rulesFile,
+			valueFg: data.rulesFile === 'none' ? 'warning' : undefined,
 		},
 		{label: 'Steering', value: data.steeringLabel},
 		{label: 'Watchdog', value: data.watchdogLabel},

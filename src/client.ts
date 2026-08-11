@@ -7,6 +7,7 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {activeEndpoint, sessionId, setRetryingAttempt} from './state';
+import {resolveRulesFile} from './rules-file';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -65,9 +66,12 @@ function buildVolatileSystemInfo(): string {
 	const dateStr = new Date().toISOString().split('T')[0]!;
 	const cwd = process.cwd();
 	let agents = '';
-	const agentsPath = join(cwd, 'AGENTS.md');
+	// Nearest AGENTS.md walking UP from the cwd (cwd wins), the same
+	// resolution `/status` reports — the model always runs under the rules
+	// file the status surface shows.
+	const agentsPath = resolveRulesFile(cwd);
 	try {
-		if (existsSync(agentsPath)) {
+		if (agentsPath) {
 			agents = `\n\nAGENTS.md:\n${readFileSync(agentsPath, 'utf8')}`;
 		}
 	} catch {

@@ -999,14 +999,16 @@ export function InputBox(props: {
 				>
 			<Show when={prompt()}>
 				<text fg={colors().primary} attributes={bold()}>
-					{prompt()!.question}: {input()}▌
+					{prompt()?.question ?? ''}: {input()}▌
 				</text>
 				<box height={1} />
 				<text fg={colors().secondary}>Press Esc to cancel</text>
 			</Show>
 			<Show when={approval()}>
 				<text fg={colors().error} attributes={bold()}>
-					Approve ✦ {approval()!.name}({approval()!.detail})? (y/n)
+					Approve ✦ {approval()?.name ?? ''}(
+						{approval()?.detail ?? ''}
+					)? (y/n)
 				</text>
 				<box height={1} />
 				<text fg={colors().secondary}>Press Esc to cancel</text>
