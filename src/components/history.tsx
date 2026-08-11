@@ -67,6 +67,7 @@ import {
 	tokenizeThought,
 	tokenizeTaskRow,
 	tokenizeToolRow,
+	tokenizeWarningRow,
 	tokenizeUserMessage,
 	type RowStatus,
 } from '../row-highlight';
@@ -338,6 +339,14 @@ export function History(props: {height?: number}) {
 						colors(),
 					),
 			}),
+		warningrow: (token) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					tokenizeWarningRow(token.text ?? '', colors()),
+			}),
 		// `/status` block: custom fenced row so the `model[effort]` brackets
 		// survive, the markdown/tree-sitter pipeline parses a bare `[x]` as
 		// a link-ish token and drops the brackets.
@@ -500,6 +509,10 @@ export function History(props: {height?: number}) {
 				for (const row of renderToolRun(run)) pushBlock(row.text, row.blockKey);
 			} else if (message.kind === 'info') {
 				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
+			} else if (message.kind === 'warning') {
+				// Warning rows (e.g. the vision-fallback indicator) render in
+				// the theme WARNING (yellow) color.
+				pushBlock(fence('warningrow', 'done', message.content));
 			} else if (message.error) {
 				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else {

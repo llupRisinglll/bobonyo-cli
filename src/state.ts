@@ -19,7 +19,7 @@ export interface ChatMessage {
 	/** Wall-clock seconds the thinking phase took (settled Thought header). */
 	durationSec?: number;
 	/** Info/notice rows (empty-turn retries, system notes) render dim. */
-	kind?: 'info';
+	kind?: 'info' | 'warning';
 	/**
 	 * Structured tool-call metadata so the history renderer can group
 	 * same-family calls into compact blocks (and expand them per-call).
@@ -285,6 +285,11 @@ export function appendAssistantMessage(
 
 export function appendInfo(content: string): void {
 	appendMessage({role: 'assistant', content, kind: 'info'});
+}
+
+/** Warning rows render in the theme's WARNING (yellow) color. */
+export function appendWarning(content: string): void {
+	appendMessage({role: 'assistant', content, kind: 'warning'});
 }
 
 export function appendError(content: string): void {

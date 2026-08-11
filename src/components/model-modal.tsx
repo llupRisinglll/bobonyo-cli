@@ -61,7 +61,7 @@ export function ModelModal(props: {
 	// Bound the card so it NEVER overlaps the input box/status line below
 	// (parity: the reference popover floats over the composer area).
 	const cardHeight = () =>
-		Math.min(22, Math.max(8, dims().height - cardY() - 5));
+		Math.min(24, Math.max(10, dims().height - cardY() - 5));
 	const listVisible = () => Math.max(3, cardHeight() - 9);
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
@@ -292,7 +292,7 @@ export function ModelModal(props: {
 				width={cardWidth()}
 				backgroundColor={colors().base}
 				paddingX={2}
-				paddingY={1}
+				paddingY={2}
 			>
 				<Show
 					when={confirming() === null}
@@ -323,6 +323,9 @@ export function ModelModal(props: {
 							Esc close
 						</text>
 					</box>
+					<box height={1} />
+					{/* opencode-style title spacing: a comfortable gap before
+					    the search field. */}
 					<box height={1} />
 					<box
 						border

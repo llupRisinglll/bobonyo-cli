@@ -8,6 +8,7 @@ import {
 	tokenizeStatusRow,
 	tokenizeToolRow,
 	tokenizeUserMessage,
+	tokenizeWarningRow,
 } from './row-highlight';
 import {RGBA} from '@opentui/core';
 import {colors, type Colors} from './theme';
@@ -318,5 +319,19 @@ describe('hover contrast (text can never become invisible)', () => {
 		// Secondary-on-secondary (invisible) → swapped to white.
 		const swapped = readableOn(bg, bg, text, base);
 		expect(Math.abs(swapped.r - text.r) < 0.02).toBe(true);
+	});
+});
+
+describe('tokenizeWarningRow', () => {
+	test('renders the fallback indicator in the WARNING (yellow) color', () => {
+		const chunks = tokenizeWarningRow(
+			'  ✦ Vision fallback: mimo-v2.5 analyzed 1 image → mimo-v2.5-pro responds',
+			colors(),
+		);
+		const joined = join(chunks);
+		expect(joined).toContain('Vision fallback');
+		expect(rgb(chunks.find(c => c.text.includes('Vision'))!)).toBe(
+			themeRgb(colors().warning),
+		);
 	});
 });

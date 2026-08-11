@@ -1276,13 +1276,14 @@ export function tokenizeInputLine(
 
 /**
  * The cell the box-background caret occupies: the char under the cursor, or
- * the LAST char when the cursor is at the end, or 0 on an empty line. The
- * caret cell always renders (highlighted when visible, plain when hidden) so
- * the input text NEVER changes width, moves, or gains a fake space.
+ * a TRAILING cell AFTER the last char when the cursor is at the end (a
+ * highlighted space, standard block-cursor position). The caret cell always
+ * renders (highlighted when visible, plain when hidden) so the input text
+ * NEVER changes width or moves.
  */
 export function caretIndexFor(line: string, column: number): number {
 	if (column < line.length) return column;
-	return line.length > 0 ? line.length - 1 : 0;
+	return line.length;
 }
 
 /**

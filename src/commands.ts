@@ -231,6 +231,8 @@ export interface CommandContext {
 	setupProviders: (args: string) => void;
 	/** `/codex` — scaffold the Codex (OpenAI) provider with one API key. */
 	connectCodex: () => void;
+	/** `/connect` — smooth provider connect flow (Codex or custom). */
+	connectProvider: (args: string) => void;
 	providerSwitch: (args: string) => void;
 	mcp: () => void;
 	session: (args: string) => void;
@@ -388,7 +390,7 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			ctx.setupProviders(args);
 			return true;
 		case 'connect':
-			ctx.setupProviders(args);
+			ctx.connectProvider(args);
 			return true;
 		case 'codex':
 			ctx.connectCodex();

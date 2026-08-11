@@ -755,6 +755,26 @@ export function tokenizeErrorRow(
 	}, defaultFg);
 }
 
+/** Warning rows (e.g. the vision-fallback indicator) in the WARNING color. */
+export function tokenizeWarningRow(
+	text: string,
+	colors: Colors,
+): TextChunk[] {
+	const palette = themeColors(colors);
+	const defaultFg = palette.fg.text;
+	const lines = text.replace(/\n+$/, '').split('\n');
+	return emitLines(lines, line => {
+		const m = line.match(/^([✦]\s*)(.*)$/);
+		if (m) {
+			return [
+				chunk(m[1] ?? '', palette.fg.warning),
+				chunk(m[2] ?? '', palette.fg.warning),
+			];
+		}
+		return [chunk(line, palette.fg.warning)];
+	}, defaultFg);
+}
+
 /**
  * Welcome banner: primary mascot + borders, and the detail rows colored by
  * purpose, `model:` info with a text value + secondary hint, `directory:`

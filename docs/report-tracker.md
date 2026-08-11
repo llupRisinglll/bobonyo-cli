@@ -28,6 +28,10 @@ is DONE only when verified live (or unit-tested) and committed.
 | 21 | Cursor blink still moved the text (added a space) | ✅ DONE | the caret cell now ALWAYS renders (the char under the cursor, or the LAST char at end-of-line, or a space on an empty line), highlighted when visible and PLAIN when hidden, so the line width is constant. Verified: input row length identical across 6 blink frames |
 | 22 | Response indentation/formatting inconsistent while rendering vs done; format in realtime | ✅ DONE | the LIVE region now renders the STREAMING REPLY in the SAME glyph-row container as settled replies (glyph at column 1, content at column 3), so markdown formats in realtime and the settled shape is identical; the live THOUGHT stays in its own unpadded node. Verified mid-stream |
 | 23 | Re-test image + web-search fallback models | ✅ DONE | live on mimo-v2.5-pro: web search (deepseek-v4-flash) returned results + indicator; image (mimo-v2.5) analyzed the test image + indicator, and the main model correctly described it ("solid, uniformly filled medium blue vertical rectangle") |
+| 24 | Color the vision-fallback message YELLOW | ✅ DONE | new `kind: 'warning'` message + `warningrow` renderer; the indicator renders in the theme WARNING color (verified `38;2;224;175;104` live) |
+| 25 | Cursor renders AFTER the character (not on the last one) | ✅ DONE | `caretIndexFor` now places the caret cell AFTER the last char (a highlighted trailing space) at end-of-line; the cell always renders so width stays constant (no movement) |
+| 26 | `/connect` should go through the connect-provider flow (Codex included) | ✅ DONE | `/connect` now asks "Connect provider: codex (OpenAI) or custom?"; `codex` routes to the Codex scaffold (API-key prompt), `custom` to the full wizard; `/connect codex` shortcuts |
+| 27 | Fix /model + /resume title spacing (opencode-like) | ✅ DONE | both cards got `paddingY=2` + a comfortable two-row gap between the title and the search field; card heights bumped so the list never overflows |
 
 ## Implementation notes (committed)
 

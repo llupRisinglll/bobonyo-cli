@@ -74,7 +74,7 @@ export function ResumeModal(props: {
 	// quarter-height placement overflowed on short terminals).
 	const cardHeight = () => {
 		const available = Math.max(8, dims().height - 2);
-		return Math.min(24, available);
+		return Math.min(26, available);
 	};
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -239,7 +239,7 @@ export function ResumeModal(props: {
 				width={cardWidth()}
 				backgroundColor={colors().base}
 				paddingX={2}
-				paddingY={1}
+				paddingY={2}
 			>
 				<box flexDirection="row" height={1}>
 					<text fg={colors().primary} attributes={bold()}>
@@ -250,6 +250,9 @@ export function ResumeModal(props: {
 						Esc close
 					</text>
 				</box>
+				<box height={1} />
+				{/* opencode-style title spacing: a comfortable gap before the
+				    search field. */}
 				<box height={1} />
 				<box
 					border

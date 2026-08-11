@@ -102,6 +102,7 @@ import {
 	appendError,
 	appendInfo,
 	appendMessage,
+	appendWarning,
 	showToast,
 	toast,
 	formatElapsed,
@@ -1069,6 +1070,38 @@ export function App() {
 			'Codex provider saved. Switch to it with /model or /provider codex.',
 		);
 	};
+	/** `/connect` — smooth provider-connect flow (Codex or custom wizard). */
+	const connectProvider = async (args: string) => {
+		if (busy()) {
+			appendInfo('Cannot connect while a turn is running.');
+			return;
+		}
+		const name = args.trim().toLowerCase();
+		if (name === 'codex') {
+			await connectCodex();
+			return;
+		}
+		if (name) {
+			await setupProviders(args.trim());
+			return;
+		}
+		const ask = (question: string) =>
+			new Promise<string>(resolve =>
+				setPendingPrompt({
+					question,
+					resolve,
+					onCancel: () => resolve(''),
+				}),
+			);
+		const choice = (
+			await ask('Connect provider: codex (OpenAI) or custom?')
+		).trim().toLowerCase();
+		if (choice === 'codex' || choice === 'c') {
+			await connectCodex();
+			return;
+		}
+		await setupProviders('');
+	};
 
 	const submit = async (
 		value: string,
@@ -1118,7 +1151,7 @@ export function App() {
 				}
 			}
 			if (replaced > 0) {
-				appendInfo(
+				appendWarning(
 					`  ✦ Vision fallback: ${visionFallback.model} analyzed ${replaced} image${replaced === 1 ? '' : 's'} → ` +
 						`${activeEndpoint().model} responds`,
 				);
@@ -1174,6 +1207,7 @@ export function App() {
 				settings: settingsSurface,
 				setupProviders,
 				connectCodex,
+				connectProvider,
 				providerSwitch: switchProvider,
 				mcp: mcpSurface,
 				session: sessionCommand,
