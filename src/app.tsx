@@ -8,6 +8,7 @@ import {
 	looksLikeToolCallText,
 	parseArguments,
 	parseToolCalls,
+	ProviderError,
 	setFallbackEndpoints,
 	streamChat,
 	type ChatMessageLike,
@@ -239,10 +240,16 @@ const SUMMARIZATION_PROMPT =
 	'Include:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n' +
 	'- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\n' +
 	'Be concise, structured, and focused on helping the next LLM seamlessly continue the work.';
-const SUMMARY_PREFIX =
+export const SUMMARY_PREFIX =
 	'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary:';
-/** Cap the summarization input (parity: codex COMPACT_USER_MESSAGE_MAX_TOKENS). */
-const COMPACT_MAX_INPUT_TOKENS = 20_000;
+/**
+ * Cap on USER messages kept verbatim under the compaction summary (parity:
+ * codex COMPACT_USER_MESSAGE_MAX_TOKENS). The newest user messages are kept
+ * first; an oversized OLDEST message is truncated to fit the remaining
+ * budget (codex `build_compacted_history_with_limit`). The summary itself is
+ * never part of this budget.
+ */
+const COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000;
 
 /**
  * App shell, routing (A5), the agent turn loop, sessions (A8) and the
@@ -260,6 +267,12 @@ export function App() {
 	let exitConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 	let currentSession: SessionData | null = null;
 	let interruptedRef = false;
+	// CACHE HEAD GATE: the tool catalog is part of the request prefix
+	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
+	// can still be registering tools when the app paints, so the FIRST LLM
+	// request must wait for loading to finish — otherwise the tool array
+	// grows between turn 1 and turn 2 and busts the whole prefix cache.
+	let startupReadyRef = false;
 	let watchdogRef = false;
 	const autoCompactRef: {enabled: boolean; threshold: number} = {
 		enabled: false,
@@ -528,6 +541,10 @@ export function App() {
 		} catch {
 			// Best-effort init; never let the loader hang on a failure.
 			setStartupLoading([]);
+		} finally {
+			// The catalog is final (built-ins + custom + MCP + LSP tool) once
+			// lazy init settles; allow LLM turns from here on.
+			startupReadyRef = true;
 		}
 	};
 	// F5: register markdown-defined custom tools from the config dirs.
@@ -1366,6 +1383,15 @@ export function App() {
 		}
 
 		// Chat while busy → queued (submitted when the turn settles).
+		// CACHE HEAD GATE: never fire the first LLM request while lazy
+		// MCP/custom-tool loading is still registering tools (the catalog is
+		// the cache head; a mid-session tool arrival would change the prefix
+		// and miss the provider's prompt cache for every later turn).
+		if (!startupReadyRef) {
+			setInput('');
+			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
+			return;
+		}
 		if (busy()) {
 			setPendingQueue(prev => [
 				...prev,
@@ -2148,44 +2174,55 @@ export function App() {
 	 * + the recent user prompts. The compaction is a SEPARATE request, it
 	 * never interrupts or re-sends the old blob to the main conversation, so
 	 * the resumed turns start from a short, cache-friendly prefix.
+	 *
+	 * The summarization request starts with the FULL context (parity: codex
+	 * `drain_to_completed`). If the model's context window rejects it, the
+	 * OLDEST history item is trimmed and the request is retried — same
+	 * trim-from-the-start strategy codex uses on `ContextWindowExceeded`,
+	 * which preserves the cache head AND keeps the recent messages intact.
 	 */
 	const summarizeContext = async (
 		ctx: ChatMessageLike[],
 	): Promise<string> => {
-		// Fit the conversation under the cap (drop the oldest non-system
-		// messages) so the summarization request itself stays fast.
-		let budget = COMPACT_MAX_INPUT_TOKENS;
-		const dropped: ChatMessageLike[] = [];
-		for (let i = ctx.length - 1; i >= 0; i--) {
-			const message = ctx[i]!;
-			const tokens = estimateTokens(
-				message.content ?? '',
-				activeEndpoint().model,
-			);
-			if (budget - tokens >= 0 || i === 0) {
-				budget -= tokens;
-			} else {
-				dropped.unshift(message);
+		let summary = '';
+		let attempt = ctx.filter(message => message.role !== 'system');
+		for (;;) {
+			try {
+				await streamChat(
+					[
+						{role: 'system', content: SUMMARIZATION_PROMPT},
+						...attempt,
+					],
+					{
+						onText: delta => {
+							summary += delta;
+						},
+						onReasoning: () => {},
+					},
+					undefined,
+					[],
+					undefined,
+					toolProfile(),
+				);
+				break;
+			} catch (error) {
+				// Context-window overflow while summarizing: drop the OLDEST
+				// history item and retry (codex trims from the beginning to
+				// preserve the cache head). Anything else fails compaction.
+				const message =
+					error instanceof Error ? error.message : String(error);
+				if (!isCompactOverflowError(error) || attempt.length <= 1) {
+					throw error;
+				}
+				attempt = attempt.slice(1);
+				summary = '';
+				if (process.env.NODE_ENV !== 'test') {
+					appendInfo(
+						`Compaction request overflowed the window, trimming oldest message: ${message}`,
+					);
+				}
 			}
 		}
-		const kept = ctx.filter(message => !dropped.includes(message));
-		let summary = '';
-		await streamChat(
-			[
-				{role: 'system', content: SUMMARIZATION_PROMPT},
-				...kept.filter(message => message.role !== 'system'),
-			],
-			{
-				onText: delta => {
-					summary += delta;
-				},
-				onReasoning: () => {},
-			},
-			undefined,
-			[],
-			undefined,
-			toolProfile(),
-		);
 		return summary.trim();
 	};
 
@@ -2215,14 +2252,17 @@ export function App() {
 			appendError('Compaction failed: the model returned an empty summary.');
 			return;
 		}
-		const system = ctx[0]?.role === 'system' ? [ctx[0]!] : [];
-		// Keep the recent USER prompts (short, resumable) under the summary,
-		// parity: codex's collect_user_messages.
-		const userPrompts = ctx.filter(message => message.role === 'user').slice(-6);
+		// Keep the recent USER prompts under a token budget (newest first,
+		// oldest truncated to fit — codex `collect_user_messages` +
+		// `build_compacted_history_with_limit`), then place the summary LAST
+		// so it sits directly above the next user message (codex ordering).
+		// The client prepends the system prompt on EVERY request, so the
+		// compacted history must NOT carry a system message — a duplicate
+		// head would change the cache prefix and persist into saved sessions.
+		const userPrompts = collectCompactedUserMessages(ctx);
 		const compacted: ChatMessageLike[] = [
-			...system,
-			{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
 			...userPrompts,
+			{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
 		];
 		setContext(compacted);
 		const reduction = Math.round(
@@ -3093,6 +3133,68 @@ function capMessages(
 	let start = 0;
 	while (start < sliced.length && sliced[start]?.role === 'tool') start++;
 	return sliced.slice(start);
+}
+
+/**
+ * Select the user messages kept verbatim under a compaction summary (parity:
+ * codex `collect_user_messages` + `build_compacted_history_with_limit`).
+ * The NEWEST messages are kept first up to COMPACT_USER_MESSAGE_MAX_TOKENS;
+ * when an OLD message would exceed the remaining budget it is TRUNCATED to
+ * fit (never dropped whole, so a giant single user message still leaves a
+ * usable trace). The summary itself is appended after these by the caller.
+ */
+export function collectCompactedUserMessages(
+	ctx: ChatMessageLike[],
+	maxTokens = COMPACT_USER_MESSAGE_MAX_TOKENS,
+): ChatMessageLike[] {
+	// Skip previous compaction summaries (parity: codex `is_summary_message`
+	// in collect_user_messages) so a second compaction never re-summarizes an
+	// old summary — only the real user prompts are candidates.
+	const users = ctx.filter(
+		message =>
+			message.role === 'user' &&
+			!message.content?.startsWith(`${SUMMARY_PREFIX}\n`),
+	);
+	if (users.length === 0 || maxTokens <= 0) return [];
+	const selected: ChatMessageLike[] = [];
+	let remaining = maxTokens;
+	for (let i = users.length - 1; i >= 0; i--) {
+		const message = users[i]!;
+		const content = message.content ?? '';
+		const tokens = estimateTokens(content, activeEndpoint().model);
+		if (tokens <= remaining) {
+			selected.unshift(message);
+			remaining -= tokens;
+			continue;
+		}
+		// Oldest oversized message: keep a truncated trace so the pair
+		// survives instead of being dropped whole (codex truncate_text).
+		if (remaining > 8 && content.length > 32) {
+			// ~4 chars/token for the default model family; the exact bound is
+			// only a budget heuristic, keep it comfortably under `remaining`.
+			const chars = Math.max(32, Math.floor(remaining * 4));
+			selected.unshift({
+				role: 'user',
+				content: `${content.slice(0, chars)}\n… [truncated]`,
+			});
+		}
+		break;
+	}
+	return selected;
+}
+
+/**
+ * Is this error a context-window overflow we can recover from during
+ * compaction by trimming the oldest history item (parity: codex's
+ * `ContextWindowExceeded` handling)? OpenAI-compatible providers report the
+ * window breach as 400 ("context length exceeded") or 413 (payload too
+ * large); anything else fails compaction immediately.
+ */
+export function isCompactOverflowError(error: unknown): boolean {
+	return (
+		error instanceof ProviderError &&
+		(error.status === 400 || error.status === 413)
+	);
 }
 
 const COMPLETION_ADJECTIVES = [

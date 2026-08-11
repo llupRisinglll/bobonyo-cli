@@ -162,6 +162,28 @@ disk and shown as `used N.NM` on the status line, with the full breakdown in
 bobonyo --provider Xiaomi
 ```
 
+### Cache-friendly requests
+
+LLM providers bill cache misses in real money, so bobonyo keeps every request
+prefix stable, the same way codex does:
+
+- **Stable system prompt.** The system block is byte-identical across a
+  session, so the provider's prefix cache keeps hitting.
+- **Stable tool head.** The tool catalog is part of the cache head. Tools are
+  always sent in sorted order, and the first request waits until lazy MCP,
+  skills, and LSP loading finish. A tool list that changes between turns
+  would bust the whole cache, not just the tail.
+- **Append-only history.** Each turn's messages are the previous turn's
+  messages plus new ones. Sessions resume with the exact same prefix the
+  provider already cached.
+- **Compaction keeps the cache warm.** When the context grows, bobonyo sends
+  a separate summary request, then replaces the history with a short
+  handoff summary plus the recent user prompts (capped at 20k tokens). The
+  summary sits right above the next user message, so the next turn starts
+  from a small, cache-friendly prefix instead of resending the old blob.
+  If the summary request overflows the model's window, the oldest messages
+  are trimmed and it retries, keeping the recent context intact.
+
 ### Vision and web-search fallbacks
 
 In **Settings, Capabilities** you can pick a separate model for images and

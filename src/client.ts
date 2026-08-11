@@ -155,18 +155,27 @@ export interface ToolCatalogEntry {
  * the provider uses to emit native tool_calls. Exporting it lets the harness
  * parity be unit-tested (the body MUST carry the tools, or real providers
  * fall back to text-shaped tool calls).
+ *
+ * CACHE INVARIANT: the tool definitions are part of the cache head
+ * (parity: codex `prompt_tools_are_consistent_across_requests`, nanocoder's
+ * tool-filter cache notes). Names are SORTED here so the serialized head is
+ * byte-identical regardless of registration order (built-ins, custom tools,
+ * MCP server connect order) — a per-turn change to the tool array busts the
+ * ENTIRE prefix cache, not just the tail.
  */
 export function openAIToolBlocks(
 	tools: ToolCatalogEntry[],
 ): Array<Record<string, unknown>> {
-	return tools.map(tool => ({
-		type: 'function',
-		function: {
-			name: tool.name,
-			description: tool.description ?? '',
-			parameters: {type: 'object', properties: {}},
-		},
-	}));
+	return [...tools]
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+		.map(tool => ({
+			type: 'function',
+			function: {
+				name: tool.name,
+				description: tool.description ?? '',
+				parameters: {type: 'object', properties: {}},
+			},
+		}));
 }
 
 /**

@@ -33,6 +33,45 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			.toEqual(['execute_bash', 'read_file']);
 	});
 
+	test('the tool head is byte-identical regardless of registration order', () => {
+		// CACHE INVARIANT: the tool definitions are the cache head (parity:
+		// codex + nanocoder tool-filter). MCP servers connect in nondetermin-
+		// istic order, so two instances that register the same tools in a
+		// different order MUST serialize the same request prefix — otherwise
+		// every turn busts the provider's prefix cache.
+		const endpoint = {id: 'x', model: 'm'};
+		const messages: ChatMessageLike[] = [{role: 'user', content: 'hi'}];
+		const orderA = buildOpenAIRequestBody(
+			messages,
+			[
+				{name: 'zebra_mcp__check'},
+				{name: 'execute_bash'},
+				{name: 'alpha_mcp__read'},
+				{name: 'read_file'},
+			],
+			endpoint,
+		);
+		const orderB = buildOpenAIRequestBody(
+			messages,
+			[
+				{name: 'read_file'},
+				{name: 'alpha_mcp__read'},
+				{name: 'execute_bash'},
+				{name: 'zebra_mcp__check'},
+			],
+			endpoint,
+		);
+		expect(JSON.stringify(orderA.tools)).toBe(JSON.stringify(orderB.tools));
+		expect(
+			(orderA.tools as Array<{function: {name: string}}>).map(t => t.function.name),
+		).toEqual([
+			'alpha_mcp__read',
+			'execute_bash',
+			'read_file',
+			'zebra_mcp__check',
+		]);
+	});
+
 	test('message history is append-only: turn N is a strict prefix of turn N+1', () => {
 		const tools = [{name: 'execute_bash'}];
 		const endpoint = {id: 'x', model: 'm'};
