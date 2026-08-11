@@ -2295,36 +2295,14 @@ export function App() {
 
 	const status = () => {
 		const endpoint = activeEndpoint();
-		const effort = endpoint.effort ? `[${endpoint.effort}]` : '';
-		const modelLabel = `${endpoint.model}${effort}`;
-		const percent = contextPercent();
-		const tokens = estimateTokens(
-			context()
-				.map(message => message.content ?? '')
-				.join('\n') + streaming(),
-			endpoint.model,
-		);
-		const bgAll = bgTasks();
-		const bgRunning = bgAll.filter(task => task.running).length;
-		// `/status` opens as a MODAL (parity: settings) listing every detail
-		// the app tracks, session, provider, model[effort], tune, mode,
-		// context, directory, messages plus runtime state (bg tasks, agents,
-		// checkpoints, skills/commands, steering, watchdog, version).
+		// `/status` opens as a MODAL (parity: settings) listing only the
+		// details NOT already visible on the status line (mode, tune, agents,
+		// bg, cwd) or the input corner (model[effort], ctx ~N%).
 		setStatusRows(
 			buildStatusRows({
 				sessionLabel: `${sessionName()} (${sessionId()})`,
 				provider: endpoint.id,
-				modelLabel,
-				tune: toolProfile(),
-				mode: mode() === 'yolo' ? 'yolo' : `${mode()} mode`,
-				contextTokens: tokens,
-				contextWindow: endpoint.contextWindow,
-				contextPercent: percent,
-				directory: process.cwd(),
 				messagesLabel: `${messages().length} transcript · ${context().length} provider`,
-				bgRunning,
-				bgTotal: bgAll.length,
-				agents: activeAgents(),
 				checkpoints: listCheckpoints().length,
 				skills: loadSkills().length,
 				customCommands: loadCustomCommands().length,

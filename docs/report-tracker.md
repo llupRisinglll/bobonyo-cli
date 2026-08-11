@@ -37,6 +37,7 @@ is DONE only when verified live (or unit-tested) and committed.
 | 30 | Breakline before every response | ✅ DONE | reply blocks render a leading blank row (opencode-style reply margin). Verified: `❯ md test` then blank then `✦ Heading` |
 | 31 | `--continue` / resume argument on startup | ✅ DONE | `--continue` is an alias for `--resume last` (or `--continue <id>`); verified `bun run dev --continue` resumed the last session |
 | 32 | Keep the welcome banner on an EMPTY chat; lazy-load indicator animated above the input; no MCP logging | ✅ DONE | MCP connect/fail messages were appended to the chat (making it non-empty and hiding the banner); removed. The animated `⠸ Loading skills · tools · MCP · LSP…` indicator sits ABOVE the input box and clears when init finishes (LSP discovery pre-warmed in the same pass so `/status` opens instantly). Verified live: banner shows on empty, indicator animates above the input, MCP/LSP only in `/status` |
+| 33 | `/status` shows details already visible on the status line + input corner; remove the duplicates | ✅ DONE | removed Model (input corner shows `model[effort]`), Context (`ctx ~N%`), Mode/Tune/Agents/Background (status line) and Directory (cwd on the status line) from the `/status` modal. It now lists only what is NOT visible elsewhere: Session, Provider, Messages, Checkpoints, Skills, Custom commands, MCP servers, LSP, Steering, Watchdog, Stream guard, Version. Regression test asserts the removed rows never return. Unit-tested + typecheck + build |
 
 ## Implementation notes (committed)
 
