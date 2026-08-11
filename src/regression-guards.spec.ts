@@ -100,6 +100,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// bunfig skips the preload — both crash the UI with "Orphan text".
 		expect(build).toMatch(/bun run -r "\$PRELOAD"/);
 		expect(build).toMatch(/@opentui\/solid\/scripts\/preload\.js/);
+		// The dist launcher is STRICTLY the release entry: dev runs go
+		// through the separate `bobonyo-dev` alias, never through dist.
+		expect(build).not.toMatch(/--dev/);
 	});
 
 	test('trust/approval prompts never dereference a null signal', () => {
