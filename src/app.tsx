@@ -362,7 +362,7 @@ export function App() {
 	// Post-open lazy loading: custom-tool file scans + MCP stdio handshakes
 	// run in the background with a spinner indicator (parity: codex).
 	const startupInit = async () => {
-		setStartupLoading('Loading skills · tools · MCP…');
+		setStartupLoading('Loading skills · tools · MCP · LSP…');
 		try {
 			for (const tool of loadCustomTools()) {
 				registerTool(tool.name, {
@@ -400,6 +400,10 @@ export function App() {
 					// clearing without that server in /status.
 				}
 			}
+			// Pre-warm the LSP discovery cache so `/status` opens instantly;
+			// the indicator above the input covers it (parity: codex
+			// lazy-loads MCP/LSP/skills after the app paints).
+			detectLanguageServers();
 		} finally {
 			setStartupLoading('');
 		}
