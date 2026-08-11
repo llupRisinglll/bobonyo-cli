@@ -4,7 +4,7 @@ import {For} from 'solid-js';
 import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
-import {glyphColor, type RowStatus} from '../row-highlight';
+import {settledGlyphColor, type RowStatus} from '../row-highlight';
 
 /**
  * SETTLED tool/thought row — rendered as plain OpenTUI components (boxes +
@@ -27,7 +27,13 @@ export function SettledToolRow(props: {
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
-	const glyph = glyphColor(props.status, themeColors(colors()));
+	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
+	// follow the status (done = success green). The gear never turns green.
+	const glyph = settledGlyphColor(
+		props.glyph ?? '✦',
+		props.status,
+		themeColors(colors()),
+	);
 	const tint = RGBA.fromHex(colors().secondary);
 	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	return (
@@ -38,7 +44,12 @@ export function SettledToolRow(props: {
 			{/* HEADER line: status-colored glyph + name/detail chunks. The
 			    header NEVER carries the hover background. */}
 			<box flexDirection="row">
-				<text fg={glyph}>{(props.glyph ?? '✦') + ' '}</text>
+				<text
+					fg={glyph}
+					attributes={props.glyph === '⚙' ? dim() : undefined}
+				>
+					{(props.glyph ?? '✦') + ' '}
+				</text>
 				<For each={props.segments.header}>
 					{(c) => (
 						<text fg={c.fg as never} attributes={c.attributes}>

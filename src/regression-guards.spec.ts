@@ -154,4 +154,24 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(input).toMatch(/moveToPrevWord/);
 		expect(input).toMatch(/moveToNextWord/);
 	});
+
+	test('thought gears are never success-green; body wraps inside └', () => {
+		const row = read('./components/settled-tool-row.tsx');
+		// The row glyph color must go through the thought-aware helper (a
+		// regression to bare glyphColor would turn the settled ⚙ green).
+		expect(row).toMatch(/settledGlyphColor/);
+		expect(row).not.toMatch(/glyphColor\(props\.status/);
+		const history = read('./components/history.tsx');
+		// Settled + live thought bodies wrap through the tool-style helper
+		// (`  └   ` lead, 6-space continuations) so text never escapes.
+		expect(history).toMatch(/wrapThoughtBody/);
+		expect(history).toMatch(/THOUGHT_BODY_LEAD/);
+		expect(history).toMatch(/THOUGHT_BODY_CONT/);
+		expect(history).not.toMatch(/tailLines/);
+		// The LIVE thinking header must ANIMATE: gear + dots BEFORE the
+		// timer. A regression to the old static `⚙ Thinking · (Ns)...` (dots
+		// AFTER the timer, static gear) fails this.
+		expect(history).toMatch(/liveThinkingHeader\(spinnerFrame\(\), turnElapsed\(\)\)/);
+		expect(history).not.toMatch(/Thinking · \(\$\{formatElapsed/);
+	});
 });

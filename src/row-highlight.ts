@@ -49,6 +49,22 @@ export function glyphColor(status: RowStatus, palette: Palette): RGBA {
 	return status === 'done' ? palette.fg.success : palette.fg.secondary;
 }
 
+/**
+ * Glyph color for a SETTLED tool/thought row. Tools follow the row status
+ * (done = success green, running/bg = secondary); THOUGHTS stay secondary
+ * in every state — thinking is optional info, never a success signal, and
+ * the gear is static (parity: tokenizeThought colors the header
+ * secondary/dim always). Pure, unit-tested.
+ */
+export function settledGlyphColor(
+	glyph: '✦' | '⚙',
+	status: RowStatus,
+	palette: Palette,
+): RGBA {
+	if (glyph === '⚙') return palette.fg.secondary;
+	return glyphColor(status, palette);
+}
+
 function emitLines(
 	lines: string[],
 	render: (line: string, index: number, isHeader: boolean) => TextChunk[],

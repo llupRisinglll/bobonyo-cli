@@ -27,6 +27,7 @@ import {
 	setHoverRow,
 	setThoughtExpanded,
 	setToolsExpanded,
+	spinnerFrame,
 	streaming,
 	turnElapsed,
 	settingsOpen,
@@ -76,6 +77,7 @@ import {
 import {colors} from '../theme';
 import {buildBannerBox, hasConversation} from '../banner';
 import {historyFillWidth} from '../history-width';
+import {wrapText} from './input-box';
 
 const PREVIEW_LINES = 3;
 /**
@@ -499,7 +501,12 @@ export function History(props: {height?: number}) {
 					// previews cap at PREVIEW_LINES=3; click opens the modal).
 					compactDetails.set(thoughtKey, message.reasoning.trim());
 					pushBlock(
-						settledThought(message.reasoning, message.durationSec, thoughtKey),
+						settledThought(
+							message.reasoning,
+							message.durationSec,
+							thoughtKey,
+							fillWidth,
+						),
 						thoughtKey,
 					);
 				}
@@ -654,14 +661,17 @@ export function History(props: {height?: number}) {
 	 */
 	const liveThoughtHeader = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
-		// STATIC gear + fixed dots + 1/s timer: rendered as PLAIN TEXT (no
-		// markdown re-parse), so the thinking block can never flicker while
-		// the reasoning streams.
-		return `⚙ Thinking · (${formatElapsed(turnElapsed())})...`;
+		return liveThinkingHeader(spinnerFrame(), turnElapsed());
 	});
 	const liveThoughtTail = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
-		return `└ ${tailLines(throttledReasoning())}`;
+		const width = historyFillWidth(terminalDimensions().width ?? 80);
+		const tail = throttledReasoning()
+			.replace(/\n+$/, '')
+			.split('\n')
+			.slice(-PREVIEW_LINES)
+			.join('\n');
+		return wrapThoughtBody(tail, width);
 	});
 	// Throttle the STREAMING REPLY to ~7 updates/sec (the provider streams
 	// per word, which would re-parse the live markdown 30+ times a second and
@@ -1029,39 +1039,81 @@ export function History(props: {height?: number}) {
 	);
 }
 
+/** `  └   ` container lead (content starts at col 6, parity: tool rows). */
+const THOUGHT_BODY_LEAD = '  └   ';
+/** `      ` (6 spaces) continuation indent = the content column. */
+const THOUGHT_BODY_CONT = '      ';
+
+/**
+ * LIVE thinking header: ANIMATED gear (⚙ ↔ ✦ in the SAME secondary color —
+ * glyph animation, never a color blink) + spinner dots BEFORE the real-time
+ * timer (parity: the Working indicator animates its glyph and dots). Pure,
+ * unit-tested.
+ */
+export function liveThinkingHeader(
+	frame: number,
+	elapsedSeconds: number,
+): string {
+	return `${gearGlyph(frame)} Thinking ${workingDots(frame)} (${formatElapsed(elapsedSeconds)})`;
+}
+
+/**
+ * Wrap a thought's reasoning text to the chat width using the TOOL body
+ * container format: the first line gets `  └   ` and EVERY continuation
+ * (wrapped piece OR explicit newline) gets `      ` (6 spaces, the content
+ * column), so long prose lines can never escape the `└` indentation
+ * (parity: formatOutputTail's `  └   `/`      ` rows). Pure, unit-tested.
+ */
+export function wrapThoughtBody(text: string, width: number): string {
+	if (!text.trim()) return '';
+	const safe = Math.max(1, width);
+	const contentWidth = Math.max(1, safe - THOUGHT_BODY_CONT.length);
+	const wrapped: string[] = [];
+	for (const line of text.replace(/\n+$/, '').split('\n')) {
+		for (const piece of wrapText(line, contentWidth)) {
+			wrapped.push(piece);
+		}
+	}
+	if (wrapped.length === 0) return '';
+	return wrapped
+		.map((piece, index) =>
+			(index === 0 ? THOUGHT_BODY_LEAD : THOUGHT_BODY_CONT) + piece,
+		)
+		.join('\n');
+}
+
 /**
  * Settled Thought block, `⚙ Thought (Ns)` header with a `└` preview of the
- * FIRST 4 rendered lines (head once settled), expandable via Ctrl+R.
+ * FIRST rendered lines (head once settled), expandable via Ctrl+R. The body
+ * uses the same `  └   ` container as tool rows, and the text is pre-wrapped
+ * to the chat width so wrapped lines stay inside the indentation.
  */
 function settledThought(
 	reasoningText: string,
 	durationSec: number | undefined,
 	key: string,
+	width: number,
 ): string {
 	const header = `⚙ Thought${durationSec ? ` (${durationSec}s)` : ''}`;
-	const lines = reasoningText.replace(/\n+$/, '').split('\n');
+	const body = wrapThoughtBody(reasoningText, width);
+	const lines = body.split('\n');
 	const expanded = expandedBlocks()[key] ?? thoughtExpanded();
 	const tokens = Math.max(1, Math.ceil(reasoningText.length / 4));
 	if (expanded || lines.length <= PREVIEW_LINES) {
 		return fence(
 			'thought',
 			'done',
-			`${header}\n└ ${lines.join('\n   ')}\n~${tokens} tokens`,
+			`${header}\n${body}\n~${tokens} tokens`,
 		);
 	}
-	const preview = lines.slice(0, PREVIEW_LINES).join('\n   ');
+	const preview = lines.slice(0, PREVIEW_LINES).join('\n');
 	return fence(
 		'thought',
 		'done',
-		`${header}\n└ ${preview}\n` +
-			`   … +${lines.length - PREVIEW_LINES} more lines\n` +
+		`${header}\n${preview}\n` +
+			`     … +${lines.length - PREVIEW_LINES} more lines\n` +
 			`~${tokens} tokens`,
 	);
-}
-
-function tailLines(text: string): string {
-	const lines = text.replace(/\n+$/, '').split('\n');
-	return lines.slice(-PREVIEW_LINES).join('\n   ');
 }
 
 /**
