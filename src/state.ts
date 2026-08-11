@@ -109,11 +109,29 @@ export const [deepSeekBalance, setDeepSeekBalance] = createSignal<
 	{currency: string; total: number; isAvailable?: boolean} | undefined
 >();
 /**
- * DeepSeek model catalogs fetched live from `GET /models`, keyed by
- * provider id. The model modal + model validation read the merged catalog
- * (fresh discovery wins over the static config list).
+ * Current month's accumulated provider usage (token-plan providers like
+ * Xiaomi MiMo whose quota is NOT reachable with an API key). Updated from
+ * every turn's `usage` block and read by the status line (`used N.NM`),
+ * the `/status` modal and `/usage`.
  */
-export const [deepSeekModels, setDeepSeekModels] = createSignal<
+export const [providerUsage, setProviderUsage] = createSignal<
+	| {
+			month: string;
+			promptTokens: number;
+			completionTokens: number;
+			cachedTokens: number;
+			totalTokens: number;
+			at: number;
+	  }
+	| undefined
+>();
+/**
+ * Live-discovered model catalogs (`GET /models` for DeepSeek and the MiMo
+ * token-plan gateway), keyed by provider id. The model modal + model
+ * validation read the merged catalog (fresh discovery wins over the static
+ * config list).
+ */
+export const [discoveredModels, setDiscoveredModels] = createSignal<
 	Record<string, string[]>
 >({});
 /** B21/C12: issue count from the last auto-diagnostics run (status line). */

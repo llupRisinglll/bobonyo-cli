@@ -96,10 +96,17 @@ import {
 	cacheStats,
 	formatCacheHitLabel,
 	isDeepSeek,
+	isXiaomiMiMo,
+	refreshProviderModels,
 	refreshDeepSeekBalance,
 	refreshDeepSeekModels,
 	shouldAlertCacheMiss,
 } from './deepseek';
+import {
+	currentMonthUsage,
+	formatTokens,
+	recordProviderUsage,
+} from './provider-usage';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
@@ -124,8 +131,8 @@ import {
 	contextPercent,
 	completionMessage,
 	deepSeekBalance,
-	deepSeekModels,
 	diagnosticsCount,
+	discoveredModels,
 	exitConfirm,
 	input,
 	lastUsage,
@@ -137,6 +144,7 @@ import {
 	pendingPrompt,
 	pendingTrust,
 	prs,
+	providerUsage,
 	reasoning,
 	retrySnapshot,
 	running,
@@ -147,7 +155,7 @@ import {
 	setContext,
 	setCompletionMessage,
 	setDeepSeekBalance,
-	setDeepSeekModels,
+	setDiscoveredModels,
 	setStartupLoading,
 	setMcpServers,
 	setDiagnosticsCount,
@@ -163,6 +171,7 @@ import {
 	setPendingApproval,
 	setPendingPrompt,
 	setPendingTrust,
+	setProviderUsage,
 	setPromptHistory,
 	setReasoning,
 	setRetrySnapshot,
@@ -291,16 +300,24 @@ export function App() {
 		void (async () => {
 			try {
 				const provider = resolveProvider();
-				// DeepSeek catalogs are fetched live from `/models`. Seed the
+				// DeepSeek + Xiaomi MiMo catalogs are fetched live from
+				// `/models` (the MiMo token-plan gateway auto-gets a
+				// `modelDiscoveryUrl` from the config normalizer). Seed the
 				// initial catalog from the DISK cache so the first model is a
-				// real DeepSeek model; when there is no static list AND no
-				// warm cache (the config normalizer would otherwise fall back
-				// to mock-model-1), wait for the fetch before picking a model.
+				// REAL model; when there is no static list AND no warm cache
+				// (the config normalizer would otherwise fall back to
+				// mock-model-1), wait for the fetch before picking a model.
+				const miMoModelsUrl = provider.modelDiscoveryUrl;
 				let catalog = provider.models;
 				if (isDeepSeek(provider)) {
 					catalog = cachedDeepSeekModels(provider) ?? provider.models;
 					if (catalog.every(model => model === 'mock-model-1')) {
 						catalog = await refreshDeepSeekModels(provider);
+					}
+				} else if (isXiaomiMiMo(provider) && miMoModelsUrl) {
+					catalog = cachedDeepSeekModels(provider) ?? provider.models;
+					if (catalog.every(model => model === 'mock-model-1')) {
+						catalog = await refreshProviderModels(provider, miMoModelsUrl);
 					}
 				}
 				const prefs = loadPreferences();
@@ -326,6 +343,12 @@ export function App() {
 					alwaysAllow: provider.alwaysAllow,
 				});
 				savePreferences({lastProvider: provider.id, lastModel: preferredModel});
+				// Seed the monthly usage indicator from the DISK ledger so
+				// the status line shows `used N.NM` immediately on a warm
+				// ledger (even before the first turn of this session).
+				if (isXiaomiMiMo(provider)) {
+					setProviderUsage(currentMonthUsage(provider.baseUrl));
+				}
 				// E6: no declared context window → resolve from models.dev
 				// (cached, async; the ctx% indicator updates when it lands).
 				if (!provider.contextWindow) {
@@ -359,7 +382,7 @@ export function App() {
 					// returns the same result; on a warm cache it is instant.
 					void refreshDeepSeekModels(provider).then(models => {
 						if (models.length > 0) {
-							setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
+							setDiscoveredModels(prev => ({...prev, [provider.id]: models}));
 							setActiveEndpoint(prev => ({...prev, models}));
 						}
 					});
@@ -2098,6 +2121,14 @@ export function App() {
 				ts: Date.now(),
 			},
 		]);
+		// Token-plan providers (Xiaomi MiMo, DeepSeek): accumulate the turn's
+		// usage into the per-provider MONTHLY ledger (`used N.NM` on the
+		// status line). The disk-backed ledger survives restarts, unlike the
+		// session-scoped history above.
+		if (isXiaomiMiMo(activeEndpoint()) || isDeepSeek(activeEndpoint())) {
+			const updated = recordProviderUsage(activeEndpoint().baseUrl, snapshot);
+			if (updated) setProviderUsage(updated);
+		}
 		// DeepSeek prompt-cache alert: an unusually cache-miss-heavy turn is
 		// exactly what drives the cost up. Toast (transient) — never a chat
 		// history row, same policy as setting changes.
@@ -2405,11 +2436,26 @@ export function App() {
 		const history = usageHistory();
 		const current = lastUsage();
 		if (history.length === 0 && !current) {
-			appendInfo('No token usage recorded yet.');
+			const monthly = currentMonthUsage(activeEndpoint().baseUrl);
+			appendInfo(
+				monthly
+					? `This month: ${formatTokens(monthly.totalTokens)} tokens total · ` +
+							`${formatTokens(monthly.promptTokens)} prompt · ` +
+							`${formatTokens(monthly.completionTokens)} completion · ` +
+							`${formatTokens(monthly.cachedTokens)} cached`
+					: 'No token usage recorded yet.',
+			);
 			return;
 		}
+		const monthly = currentMonthUsage(activeEndpoint().baseUrl);
 		appendInfo(
-			`Usage history:\n` +
+			(monthly
+				? `This month: ${formatTokens(monthly.totalTokens)} tokens total · ` +
+					`${formatTokens(monthly.promptTokens)} prompt · ` +
+					`${formatTokens(monthly.completionTokens)} completion · ` +
+					`${formatTokens(monthly.cachedTokens)} cached\n\n`
+				: '') +
+				`Usage history:\n` +
 				history
 					.map(
 						(snapshot, index) =>
@@ -2441,6 +2487,9 @@ export function App() {
 				}
 			});
 		}
+		if (isXiaomiMiMo(endpoint)) {
+			setProviderUsage(currentMonthUsage(endpoint.baseUrl));
+		}
 		const cacheLabel =
 			isDeepSeek(endpoint) && cacheStats(lastUsage())
 				? `deepseek · ${formatCacheHitLabel(cacheStats(lastUsage()))}`
@@ -2453,6 +2502,17 @@ export function App() {
 				sessionLabel: `${sessionName()} (${sessionId()})`,
 				provider: endpoint.id,
 				messagesLabel: `${messages().length} transcript · ${context().length} provider`,
+				providerUsageLabel: isXiaomiMiMo(endpoint)
+					? (() => {
+							const monthly = currentMonthUsage(endpoint.baseUrl);
+							return monthly
+								? `${formatTokens(monthly.totalTokens)} tokens total this month · ` +
+										`${formatTokens(monthly.promptTokens)} prompt · ` +
+										`${formatTokens(monthly.completionTokens)} completion · ` +
+										`${formatTokens(monthly.cachedTokens)} cached`
+								: undefined;
+						})()
+					: undefined,
 				checkpoints: listCheckpoints().length,
 				skills: loadSkills().length,
 				customCommands: loadCustomCommands().length,
@@ -2494,7 +2554,7 @@ export function App() {
 			// grouped model selector) listing the real configured providers.
 			// Opening the picker is a refresh trigger for the live DeepSeek
 			// catalogs (the TTL cache makes this cheap when already fresh).
-			refreshDeepSeekCatalogs();
+			refreshModelCatalogs();
 			setModelModalInherit(false);
 			setModelOpen(true);
 			return;
@@ -2527,18 +2587,26 @@ export function App() {
 		listProviders().map(provider => ({
 			id: provider.id,
 			name: provider.name ?? provider.id,
-			models: deepSeekModels()[provider.id] ?? provider.models,
+			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow,
 		}));
 
-	/** Refresh every configured DeepSeek catalog (deduped + TTL-cached). */
-	const refreshDeepSeekCatalogs = () => {
+	/**
+	 * Refresh every live-discoverable catalog (DeepSeek + Xiaomi MiMo,
+	 * deduped + TTL-cached through the shared disk cache).
+	 */
+	const refreshModelCatalogs = () => {
 		for (const provider of listProviders()) {
-			if (!isDeepSeek(provider)) continue;
-			void refreshDeepSeekModels(provider).then(models => {
+			const refresh = isDeepSeek(provider)
+				? refreshDeepSeekModels(provider)
+				: isXiaomiMiMo(provider) && provider.modelDiscoveryUrl
+					? refreshProviderModels(provider, provider.modelDiscoveryUrl)
+					: undefined;
+			if (!refresh) continue;
+			void refresh.then(models => {
 				if (models.length > 0) {
-					setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
+					setDiscoveredModels(prev => ({...prev, [provider.id]: models}));
 				}
 			});
 		}
@@ -2583,7 +2651,7 @@ export function App() {
 			baseUrl: provider.baseUrl,
 			apiKey: provider.apiKeyResolved,
 			model,
-			models: deepSeekModels()[provider.id] ?? provider.models,
+			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow ?? 128_000,
 			sdkProvider: provider.sdkProvider,
@@ -2595,6 +2663,11 @@ export function App() {
 			alwaysAllow: provider.alwaysAllow,
 		});
 		savePreferences({lastProvider: provider.id, lastModel: model});
+		// The status-line `used` segment follows the ACTIVE provider: seed it
+		// from the MiMo ledger on switch (or clear it when leaving MiMo).
+		setProviderUsage(
+			isXiaomiMiMo(provider) ? currentMonthUsage(provider.baseUrl) : undefined,
+		);
 		showToast(
 			`Model: ${model}${effort ? ` [${effort}]` : ''} · ${provider.id}`,
 		);
@@ -2804,7 +2877,7 @@ export function App() {
 						setSettingsOpen(false);
 						setFallbackTarget(target === 'main' ? null : target);
 						setModelModalInherit(true);
-						refreshDeepSeekCatalogs();
+						refreshModelCatalogs();
 						setModelOpen(true);
 					}}
 				/>

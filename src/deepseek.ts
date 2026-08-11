@@ -79,11 +79,30 @@ export function isDeepSeek(endpoint: DeepSeekEndpoint): boolean {
 	);
 }
 
+/**
+ * Is this the Xiaomi MiMo token-plan gateway? Detected by the host
+ * (`token-plan-*.xiaomimimo.com`) or the provider id/name, so any config
+ * spelling works without a flag. MiMo token plans bill a fixed monthly
+ * allowance instead of a balance, which is why the harness tracks local
+ * usage for it (see src/provider-usage.ts).
+ */
+export function isXiaomiMiMo(endpoint: DeepSeekEndpoint): boolean {
+	const base = endpoint.baseUrl.toLowerCase();
+	const id = (endpoint.id ?? endpoint.name ?? '').toLowerCase();
+	return (
+		base.includes('xiaomimimo.com') ||
+		id.includes('xiaomimimo') ||
+		id.includes('mimo') ||
+		id.includes('xiaomi')
+	);
+}
+
 function deepSeekCachePath(): string {
 	return join(configDir(), 'deepseek-cache.json');
 }
 
-function cacheKey(baseUrl: string): string {
+/** Normalized cache key for a provider base URL (shared by all caches). */
+export function cacheKey(baseUrl: string): string {
 	return baseUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '').toLowerCase();
 }
 
@@ -190,6 +209,31 @@ export async function fetchDeepSeekModels(
 		.filter((id): id is string => Boolean(id));
 }
 
+/**
+ * `GET <modelsUrl>` for an OpenAI-compatible catalog. Generic: DeepSeek and
+ * the Xiaomi token-plan gateway both speak the OpenAI `/models` contract.
+ */
+export async function fetchProviderModels(
+	modelsUrl: string,
+	apiKey: string,
+): Promise<string[]> {
+	const response = await fetch(modelsUrl, {
+		headers: {
+			accept: 'application/json',
+			...(apiKey ? {authorization: `Bearer ${apiKey}`} : {}),
+		},
+	});
+	if (!response.ok) {
+		throw new Error(`models endpoint responded ${response.status}`);
+	}
+	const body = (await response.json()) as {
+		data?: Array<{id?: string}>;
+	};
+	return (body.data ?? [])
+		.map(model => model.id)
+		.filter((id): id is string => Boolean(id));
+}
+
 /** `GET /user/balance` → the parsed balance, USD preferred. */
 export async function fetchDeepSeekBalance(
 	baseUrl: string,
@@ -246,6 +290,51 @@ export async function refreshDeepSeekModels(
 		try {
 			const ids = await fetchDeepSeekModels(
 				provider.baseUrl,
+				provider.apiKey ?? '',
+			);
+			if (ids.length === 0) return provider.models ?? [];
+			const entries = loadDeepSeekCache();
+			entries[key] = {...(entries[key] ?? {}), models: {ids, at: now}};
+			saveDeepSeekCache(entries);
+			return ids;
+		} catch {
+			return provider.models ?? [];
+		}
+	})();
+	inFlight.set(inflightKey, promise);
+	try {
+		return (await promise) as string[];
+	} finally {
+		inFlight.delete(inflightKey);
+	}
+}
+
+/**
+ * Refresh a provider model catalog through the shared disk cache (the same
+ * `deepseek-cache.json` file: entries are keyed by base URL, so DeepSeek
+ * and Xiaomi never collide). Fresh cache wins, otherwise one shared fetch
+ * per key, persisted on success. NEVER throws — the static list remains
+ * the offline fallback.
+ *
+ * `modelsUrl` is the COMPLETE catalog URL (e.g. DeepSeek
+ * `https://api.deepseek.com/models`, MiMo
+ * `https://token-plan-sgp.xiaomimimo.com/v1/models`).
+ */
+export async function refreshProviderModels(
+	provider: DeepSeekEndpoint,
+	modelsUrl: string,
+	now = Date.now(),
+): Promise<string[]> {
+	const key = cacheKey(provider.baseUrl);
+	const cached = freshCachedModels(loadDeepSeekCache(), key, now);
+	if (cached) return cached;
+	const inflightKey = `models:${key}`;
+	const existing = inFlight.get(inflightKey);
+	if (existing) return existing as Promise<string[]>;
+	const promise = (async () => {
+		try {
+			const ids = await fetchProviderModels(
+				modelsUrl,
 				provider.apiKey ?? '',
 			);
 			if (ids.length === 0) return provider.models ?? [];

@@ -14,7 +14,9 @@ import {
 	freshCachedBalance,
 	freshCachedModels,
 	isDeepSeek,
+	isXiaomiMiMo,
 	loadDeepSeekCache,
+	refreshProviderModels,
 	refreshDeepSeekBalance,
 	refreshDeepSeekModels,
 	resetDeepSeekInFlight,
@@ -72,6 +74,40 @@ describe('isDeepSeek', () => {
 	});
 });
 
+describe('isXiaomiMiMo', () => {
+	test('detects the token-plan gateway host', () => {
+		expect(
+			isXiaomiMiMo({
+				id: 'Xiaomi',
+				baseUrl: 'https://token-plan-sgp.xiaomimimo.com/v1',
+				apiKey: 'tp-x',
+			}),
+		).toBe(true);
+		expect(
+			isXiaomiMiMo({
+				id: 'Xiaomi',
+				baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+			}),
+		).toBe(true);
+	});
+
+	test('detects a mimo/xiaomi provider id even with a custom base URL', () => {
+		expect(isXiaomiMiMo({id: 'MiMo', baseUrl: 'https://proxy.example.com'})).toBe(
+			true,
+		);
+		expect(isXiaomiMiMo({name: 'Xiaomi', baseUrl: 'https://relay.example.com'})).toBe(
+			true,
+		);
+	});
+
+	test('other providers are not mimo', () => {
+		expect(
+			isXiaomiMiMo({id: 'DeepSeek', baseUrl: 'https://api.deepseek.com'}),
+		).toBe(false);
+		expect(isXiaomiMiMo({id: 'mock', baseUrl: 'http://127.0.0.1:4010'})).toBe(false);
+	});
+});
+
 describe('formatCred', () => {
 	const balance = (overrides: Partial<DeepSeekBalance>): DeepSeekBalance => ({
 		currency: 'USD',
@@ -119,6 +155,64 @@ describe('fetchDeepSeekModels', () => {
 		await expect(
 			fetchDeepSeekModels('https://api.deepseek.com', 'sk-bad'),
 		).rejects.toThrow();
+	});
+});
+
+describe('refreshProviderModels (MiMo catalog via the shared disk cache)', () => {
+	const provider = {
+		id: 'Xiaomi',
+		baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+		apiKey: 'tp-x',
+	};
+	const modelsUrl = 'https://token-plan-sgp.xiaomimimo.com/v1/models';
+
+	test('fetches /v1/models and persists to the DeepSeek cache file', async () => {
+		stubFetch(async () =>
+			new Response(
+				JSON.stringify({
+					object: 'list',
+					data: [
+						{id: 'mimo-v2.5', object: 'model', owned_by: 'xiaomi'},
+						{id: 'mimo-v2.5-pro', object: 'model', owned_by: 'xiaomi'},
+					],
+				}),
+				{status: 200},
+			),
+		);
+		expect(await refreshProviderModels(provider, modelsUrl)).toEqual([
+			'mimo-v2.5',
+			'mimo-v2.5-pro',
+		]);
+		// The catalog lands in the same disk cache, keyed by base URL, so a
+		// warm instance starts on real MiMo models without a fetch.
+		expect(
+			cachedDeepSeekModels(provider, Date.now()),
+		).toEqual(['mimo-v2.5', 'mimo-v2.5-pro']);
+	});
+
+	test('fresh disk cache wins without a network call', async () => {
+		const at = Date.now();
+		saveDeepSeekCache({
+			['token-plan-sgp.xiaomimimo.com']: {
+				models: {ids: ['mimo-v2.5'], at},
+			},
+		});
+		stubFetch(async () => {
+			throw new Error('fetch must not be called for a fresh cache');
+		});
+		expect(await refreshProviderModels(provider, modelsUrl, at)).toEqual([
+			'mimo-v2.5',
+		]);
+	});
+
+	test('a failed fetch falls back to the static list', async () => {
+		stubFetch(async () => new Response('nope', {status: 500}));
+		expect(
+			await refreshProviderModels(
+				{...provider, models: ['mimo-v2.5-pro']},
+				modelsUrl,
+			),
+		).toEqual(['mimo-v2.5-pro']);
 	});
 });
 

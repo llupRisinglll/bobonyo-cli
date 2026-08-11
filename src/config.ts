@@ -156,6 +156,16 @@ function substituteEnv(value: string): string {
 	});
 }
 
+/**
+ * MiMo token-plan gateways are `token-plan-*.xiaomimimo.com` — their
+ * catalog endpoint is `/v1/models` (the `/v1` prefix is part of the host
+ * path, unlike `api.deepseek.com/models`).
+ */
+function isMiMoTokenPlanHost(rawBaseUrl: string): boolean {
+	const base = rawBaseUrl.toLowerCase();
+	return base.includes('xiaomimimo.com') && base.includes('token-plan');
+}
+
 function normalize(config: AppConfig): AppConfig {
 	return {
 		providers: (config.providers ?? []).map(provider => ({
@@ -173,6 +183,19 @@ function normalize(config: AppConfig): AppConfig {
 			models: provider.models?.length ? provider.models : ['mock-model-1'],
 			contextWindow: provider.contextWindow,
 			alwaysAllow: provider.alwaysAllow ?? [],
+			// MiMo token-plan providers auto-discover their catalog from
+			// `GET /v1/models` (same live-discover story as DeepSeek), so the
+			// static `models` list becomes optional. Other providers only
+			// discover when the config explicitly sets `modelDiscoveryUrl`.
+			...(isMiMoTokenPlanHost(provider.baseUrl) &&
+			!provider.modelDiscoveryUrl
+				? {
+						modelDiscoveryUrl: `${substituteEnv(provider.baseUrl).replace(
+							/\/+$/,
+							'',
+						)}/models`,
+					}
+				: {}),
 		})),
 	};
 }
@@ -347,9 +370,10 @@ const DISCOVERY_TTL_MS = 5 * 60 * 1000;
 const discoveryCache = new Map<string, {at: number; models: string[]}>();
 
 /**
- * Live model discovery (`modelDiscoveryUrl`): fetch `/v1/models`, cache by URL
- * with a 5-minute TTL, and NEVER throw, stale-but-usable fallback to the
- * static list (parity: model-discovery.ts).
+ * Live model discovery (`modelDiscoveryUrl`): the value IS the complete
+ * catalog URL (e.g. `https://token-plan-sgp.xiaomimimo.com/v1/models`) —
+ * fetch it directly, cache by URL with a 5-minute TTL, and NEVER throw,
+ * stale-but-usable fallback to the static list (parity: model-discovery.ts).
  */
 export async function discoverModels(provider: ResolvedProvider): Promise<string[]> {
 	const discoveryUrl = provider.modelDiscoveryUrl;
@@ -358,7 +382,7 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 	if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) return cached.models;
 	try {
 		const response = await fetch(
-			`${discoveryUrl.replace(/\/+$/, '')}/v1/models`,
+			discoveryUrl.replace(/\/+$/, ''),
 			{
 				headers: provider.apiKeyResolved
 					? {authorization: `Bearer ${provider.apiKeyResolved}`}

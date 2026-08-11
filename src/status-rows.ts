@@ -5,6 +5,8 @@ export interface StatusData {
 	sessionLabel: string;
 	provider: string;
 	messagesLabel: string;
+	/** Monthly usage label (`1.24M tokens · …`) or undefined when none. */
+	providerUsageLabel?: string;
 	checkpoints: number;
 	skills: number;
 	customCommands: number;
@@ -27,6 +29,9 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 		{label: 'Session', value: data.sessionLabel},
 		{label: 'Provider', value: data.provider},
 		{label: 'Messages', value: data.messagesLabel},
+		...(data.providerUsageLabel
+			? [{label: 'Provider usage', value: data.providerUsageLabel}]
+			: []),
 		{label: 'Checkpoints', value: String(data.checkpoints)},
 		{label: 'Skills', value: `${data.skills} loaded`},
 		{label: 'Custom commands', value: `${data.customCommands} loaded`},

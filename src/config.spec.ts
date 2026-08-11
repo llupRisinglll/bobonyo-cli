@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, test} from 'bun:test';
 import {mkdirSync, writeFileSync} from 'node:fs';
-import {listProviders, normalizeModels} from './config';
+import {discoverModels, listProviders, normalizeModels} from './config';
 import {nanocoderConfigDir, nanocoderDataDir} from './nanocoder-paths';
 
 const ORIGINAL_PROVIDERS = process.env.NANOCODER_PROVIDERS;
@@ -56,6 +56,71 @@ describe('listProviders (per-model effort)', () => {
 		const provider = providers[0]!;
 		expect(provider.models).toEqual(['m1', 'm2']);
 		expect(provider.modelEfforts).toEqual({m1: 'high'});
+	});
+});
+
+describe('MiMo token-plan model discovery', () => {
+	test('auto-sets modelDiscoveryUrl to /v1/models for token-plan hosts', () => {
+		process.env.NANOCODER_CONFIG_DIR = '/tmp/bobonyo-config-spec-mimo';
+		process.env.NANOCODER_PROVIDERS = JSON.stringify({
+			providers: [
+				{
+					id: 'Xiaomi',
+					baseUrl: 'https://token-plan-sgp.xiaomimimo.com/v1',
+					apiKey: 'tp-x',
+					models: ['mimo-v2.5'],
+				},
+			],
+		});
+		const provider = listProviders()[0]!;
+		expect(provider.baseUrl).toBe('https://token-plan-sgp.xiaomimimo.com');
+		expect(provider.modelDiscoveryUrl).toBe(
+			'https://token-plan-sgp.xiaomimimo.com/v1/models',
+		);
+	});
+
+	test('other providers do not get an implicit discovery URL', () => {
+		process.env.NANOCODER_CONFIG_DIR = '/tmp/bobonyo-config-spec-other';
+		process.env.NANOCODER_PROVIDERS = JSON.stringify({
+			providers: [
+				{
+					id: 'custom',
+					baseUrl: 'https://relay.example.com/v1',
+					models: ['m1'],
+				},
+			],
+		});
+		const provider = listProviders()[0]!;
+		expect(provider.modelDiscoveryUrl).toBeUndefined();
+	});
+});
+
+describe('discoverModels (full-URL contract)', () => {
+	test('fetches modelDiscoveryUrl AS-IS and never appends /v1/models', async () => {
+		let requested = '';
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: RequestInfo | URL) => {
+			requested = String(input);
+			return new Response(
+				JSON.stringify({data: [{id: 'mimo-v2.5'}, {id: 'mimo-v2.5-pro'}]}),
+				{status: 200},
+			);
+		}) as typeof fetch;
+		try {
+			const models = await discoverModels({
+				id: 'Xiaomi',
+				baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+				apiKeyResolved: 'tp-x',
+				models: ['mimo-v2.5'],
+				modelEfforts: {},
+				alwaysAllow: [],
+				modelDiscoveryUrl: 'https://token-plan-sgp.xiaomimimo.com/v1/models',
+			});
+			expect(requested).toBe('https://token-plan-sgp.xiaomimimo.com/v1/models');
+			expect(models).toEqual(['mimo-v2.5', 'mimo-v2.5-pro']);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
 	});
 });
 

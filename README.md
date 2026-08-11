@@ -92,34 +92,48 @@ juggle:
 }
 ```
 
-DeepSeek is special: its `models` list is optional. bobonyo fetches the
-current catalog from the DeepSeek `/models` API automatically (and shows
-your remaining balance on the status line), so new models appear in
-`/model` without editing this file. A static `models` list, if you add one,
-is only used as an offline fallback when the API cannot be reached.
+DeepSeek and Xiaomi MiMo are special: their `models` lists are optional.
+bobonyo fetches the current catalog from each provider's `/models` API
+automatically, so new models appear in `/model` without editing this file. A
+static `models` list, if you add one, is only used as an offline fallback
+when the API cannot be reached.
 
 Then switch models live with `/model`. The conversation follows you, and the
 model's reasoning effort shows next to its name.
 
-### DeepSeek, first class
+### DeepSeek and Xiaomi MiMo, first class
 
-bobonyo is built to be the best terminal harness for DeepSeek. It talks to
-the DeepSeek API directly and puts the platform's own data on screen:
+bobonyo is built to be the best terminal harness for DeepSeek and Xiaomi
+MiMo. Both providers are special: the API key is all you need, the model
+catalog is fetched live, and usage data is put on screen instead of forcing
+you to open a dashboard.
+
+- **Models auto discovered.** The model list is fetched from each provider's
+  `/models` API (DeepSeek and the MiMo token-plan gateway), so new models
+  show up in `/model` without editing your config by hand.
+- **Usage tracking.** MiMo token plans bill a fixed monthly allowance, but
+  Xiaomi only exposes the quota behind the browser login, not the API key.
+  bobonyo accumulates every turn's `usage` block into a monthly ledger and
+  shows it on the status line as `used 1.24M`, with a breakdown in `/status`
+  and `/usage`. The ledger lives on disk and survives restarts.
+- **Multi instance safe.** Model and usage data is cached on disk with a
+  short TTL and atomic writes, so several terminals at once share one
+  refresh instead of flooding the API.
+
+#### DeepSeek
+
+DeepSeek-specific features on top of the shared ones:
 
 - **Live balance on the status line.** Your remaining credit shows as
   `Cred: $12.34` next to the mode and tune settings, refreshed every few
   minutes without a dashboard.
-- **Models auto discovered.** The model list is fetched from the DeepSeek
-  `/models` API, so new models show up in `/model` without editing your
-  config by hand.
 - **Cache hit awareness.** DeepSeek caches your prompt automatically.
   bobonyo reads the cache fields on every turn and shows the hit share on
   the completion line (`cache hit 99%`) and in `/status`. When a large turn
   misses the cache, a toast warns you, because cache misses are what drive
   the cost up.
-- **Multi instance safe.** Model and balance data is cached on disk with a
-  short TTL and atomic writes, so several terminals at once share one
-  refresh instead of flooding the API.
+
+The DeepSeek recording shows the provider's own data on screen:
 
 ![DeepSeek demo](docs/deepseek-demo.gif)
 
@@ -134,6 +148,19 @@ bobonyo --provider DeepSeek
 
 The status line shows your balance, `/model` lists the live catalog, and
 every reply shows its cache hit share.
+
+#### Xiaomi MiMo
+
+The MiMo token-plan gateway (`token-plan-sgp.xiaomimimo.com`) accepts a
+`tp-...` key for inference and model discovery. Because Xiaomi does not let
+an API key read the token-plan quota, bobonyo keeps its own monthly ledger:
+every reply's token usage (prompt, completion, and cache) is accumulated on
+disk and shown as `used N.NM` on the status line, with the full breakdown in
+`/status` and `/usage`. Use a MiMo provider exactly like any other:
+
+```bash
+bobonyo --provider Xiaomi
+```
 
 ### Vision and web-search fallbacks
 

@@ -6,6 +6,7 @@ import {
 	activeAgents,
 	deepSeekBalance,
 	mode,
+	providerUsage,
 	toolProfile,
 } from '../state';
 import {bgTasks} from '../bash';
@@ -13,6 +14,8 @@ import {createTextAttributes} from '@opentui/core';
 import {resolveProfile} from '../tools';
 import {colors} from '../theme';
 import {statusPathLabel} from '../status-path';
+import {formatMonthlyUsage, formatTokens} from '../provider-usage';
+import {isXiaomiMiMo} from '../deepseek';
 
 /**
  * Mode line, parity flavor of nanocoder's footer: mode · model · ctx.
@@ -53,6 +56,16 @@ export function Status() {
 					: `${balance.currency} `;
 		return ` · Cred: ${symbol}${balance.total.toFixed(2)}`;
 	};
+	// `used N.NM` (Xiaomi MiMo token plan): the quota endpoint is browser-
+	// cookie only, so the harness accumulates each turn's `usage` block into
+	// a monthly ledger (see src/provider-usage.ts). Same two-tone treatment
+	// as `Cred:` / `tune:`. Gated to the MiMo gateway: DeepSeek shows `Cred:`
+	// instead, other providers show neither.
+	const usageSegment = () => {
+		if (!isXiaomiMiMo(activeEndpoint())) return '';
+		const label = formatMonthlyUsage(providerUsage());
+		return label ? ` · ${label}` : '';
+	};
 	const cwdLabel = createMemo(() => {
 		const cwd = process.cwd();
 		const user = process.env.USER ?? 'user';
@@ -66,6 +79,7 @@ export function Status() {
 			`⏵⏵⏵ ${modeLabel()} · tune: ` +
 			`${tuneLabel().replace(/^tune:\s*/, '')}` +
 			credSegment() +
+			usageSegment() +
 			// agents/bg counts appear mid-line, budget them too or a narrow
 			// pane clips the `bg: 1` digit at the status-line edge.
 			agents() +
@@ -90,6 +104,13 @@ export function Status() {
 							? '¥'
 							: `${deepSeekBalance()!.currency} `}
 					{deepSeekBalance()!.total.toFixed(2)}
+				</text>
+			</Show>
+			<Show when={isXiaomiMiMo(activeEndpoint()) && formatMonthlyUsage(providerUsage())}>
+				<text fg={colors().secondary}> · used</text>
+				<text fg={colors().primary}>
+					{' '}
+					{formatTokens(providerUsage()!.totalTokens)}
 				</text>
 			</Show>
 			<text fg={colors().secondary}>{agents()}</text>
