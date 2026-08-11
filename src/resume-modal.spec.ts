@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test';
-import {sessionInFolder, sessionLabel} from './components/resume-modal';
+import {
+	sessionInFolder,
+	sessionLabel,
+	sessionMatchesQuery,
+} from './components/resume-modal';
 
 const base = {
 	id: 'sess_abc_1',
@@ -46,5 +50,43 @@ describe('sessionInFolder (resume scope filter)', () => {
 	test('legacy sessions without a cwd always show (never silently drop)', () => {
 		expect(sessionInFolder(legacy, cwd, false)).toBe(true);
 		expect(sessionInFolder(legacy, cwd, true)).toBe(true);
+	});
+});
+
+describe('sessionMatchesQuery (resume search)', () => {
+	const session = {
+		...base,
+		name: 'Refactor theme',
+		firstMessage: 'Please extract the color tokens',
+	};
+
+	test('empty or whitespace query matches everything', () => {
+		expect(sessionMatchesQuery(session, '')).toBe(true);
+		expect(sessionMatchesQuery(session, '   ')).toBe(true);
+	});
+
+	test('matches by SESSION ID (exact and partial, case-insensitive)', () => {
+		expect(sessionMatchesQuery(session, 'sess_abc_1')).toBe(true);
+		expect(sessionMatchesQuery(session, 'abc_1')).toBe(true);
+		expect(sessionMatchesQuery(session, 'SESS_ABC')).toBe(true);
+	});
+
+	test('matches by conversation name and last prompt', () => {
+		expect(sessionMatchesQuery(session, 'theme')).toBe(true);
+		expect(sessionMatchesQuery(session, 'color tokens')).toBe(true);
+	});
+
+	test('no match returns false', () => {
+		expect(sessionMatchesQuery(session, 'definitely-not-here')).toBe(false);
+	});
+
+	test('missing id/name/firstMessage never crashes', () => {
+		expect(sessionMatchesQuery({...base, id: '', name: ''}, 'x')).toBe(false);
+		expect(
+			sessionMatchesQuery(
+				{...base, name: '', firstMessage: ''},
+				'sess_abc_1',
+			),
+		).toBe(true);
 	});
 });

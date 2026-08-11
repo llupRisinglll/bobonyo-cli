@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import {createSignal, For, Show} from 'solid-js';
+import {createEffect, createSignal, For, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
@@ -24,6 +24,20 @@ type Row =
 	| {kind: 'empty'};
 
 /**
+ * Row the `/model` modal OPENS on: the CURRENT model row when it is in the
+ * list, otherwise the first navigable row (a model, or the Inherit row in
+ * settings fallback mode). -1 when there is nothing to navigate to. Pure,
+ * unit-tested.
+ */
+export function initialModelRowIndex(
+	rows: ReadonlyArray<{kind: string; isCurrent?: boolean}>,
+): number {
+	const current = rows.findIndex(row => row.kind === 'model' && row.isCurrent);
+	if (current !== -1) return current;
+	return rows.findIndex(row => row.kind === 'model' || row.kind === 'inherit');
+}
+
+/**
  * `/model` MODAL (parity: nanocoder's grouped ModelSelector), providers
  * grouped and expandable, searchable, ↑/↓ + Enter, ←/→ cycles the reasoning
  * effort on a highlighted model, Esc closes. Selecting a model calls
@@ -45,28 +59,6 @@ export function ModelModal(props: {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [query, setQuery] = createSignal('');
-	const [confirming, setConfirming] = createSignal<{
-		providerId: string;
-		model: string;
-		effort?: string;
-	} | null>(null);
-	const [rowIndex, setRowIndex] = createSignal(0);
-	// Per-model effort OVERRIDE selected with ←/→ (keyed provider\0model).
-	const [effortOverrides, setEffortOverrides] = createSignal<
-		Record<string, string>
-	>({});
-	const cardWidth = () => Math.min(80, Math.max(56, dims().width - 6));
-	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
-	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	// Bound the card so it NEVER overlaps the input box/status line below
-	// (parity: the reference popover floats over the composer area).
-	const cardHeight = () =>
-		Math.min(24, Math.max(10, dims().height - cardY() - 5));
-	const listVisible = () => Math.max(3, cardHeight() - 9);
-	const bold = () => createTextAttributes({bold: true});
-	const dim = () => createTextAttributes({dim: true});
-	// Active-row palette: info tint + guaranteed-readable foreground.
-	const activeRow = () => activeRowPalette(colors());
 
 	const matches = (text: string): boolean => {
 		const q = query().trim().toLowerCase();
@@ -126,6 +118,37 @@ export function ModelModal(props: {
 		return rows;
 	};
 
+	const cardWidth = () => Math.min(80, Math.max(56, dims().width - 6));
+	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
+	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
+	// Bound the card so it NEVER overlaps the input box/status line below
+	// (parity: the reference popover floats over the composer area).
+	const cardHeight = () =>
+		Math.min(24, Math.max(10, dims().height - cardY() - 5));
+	const listVisible = () => Math.max(3, cardHeight() - 9);
+
+	const [confirming, setConfirming] = createSignal<{
+		providerId: string;
+		model: string;
+		effort?: string;
+	} | null>(null);
+	// Open on the CURRENT model row: the highlight starts there and ↑/↓
+	// navigate from it, and the list scrolls so that row is VISIBLE even on
+	// short terminals (parity: the reference highlights the active model).
+	const initialIndex = initialModelRowIndex(buildRows());
+	const [rowIndex, setRowIndex] = createSignal<number>(initialIndex);
+	const [scrollStart, setScrollStart] = createSignal(
+		Math.max(0, initialIndex - listVisible() + 1),
+	);
+	// Per-model effort OVERRIDE selected with ←/→ (keyed provider\0model).
+	const [effortOverrides, setEffortOverrides] = createSignal<
+		Record<string, string>
+	>({});
+	const bold = () => createTextAttributes({bold: true});
+	const dim = () => createTextAttributes({dim: true});
+	// Active-row palette: info tint + guaranteed-readable foreground.
+	const activeRow = () => activeRowPalette(colors());
+
 	// Navigation moves between MODEL/INHERIT rows only, provider headers are
 	// display-only.
 	const moveRow = (delta: number): void => {
@@ -167,7 +190,6 @@ export function ModelModal(props: {
 		}));
 
 	const currentRow = (): Row | undefined => items()[rowIndex()]?.row;
-	const [scrollStart, setScrollStart] = createSignal(0);
 	const effortKey = (provider: string, model: string): string =>
 		`${provider}\u0000${model}`;
 	const effectiveEffort = (
@@ -176,6 +198,26 @@ export function ModelModal(props: {
 	): string | undefined =>
 		effortOverrides()[effortKey(provider.id, model)] ??
 		provider.modelEfforts[model];
+
+	// After a QUERY change the selection re-snaps to a REAL row: the current
+	// model when it still matches, otherwise the first model/Inherit row
+	// (typing sets index 0, which is a header or spacer).
+	createEffect(() => {
+		const rows = buildRows();
+		const row = rows[rowIndex()];
+		if (row?.kind === 'model' || row?.kind === 'inherit') return;
+		const target = initialModelRowIndex(rows);
+		if (target !== -1 && target !== rowIndex()) {
+			setRowIndex(target);
+			setScrollStart(prev =>
+				target < prev
+					? target
+					: target >= prev + listVisible()
+						? target - listVisible() + 1
+						: prev,
+			);
+		}
+	});
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {

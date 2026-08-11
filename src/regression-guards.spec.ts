@@ -124,4 +124,24 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/Yes, trust this directory/);
 		expect(modal).toMatch(/No, do not trust/);
 	});
+
+	test('the /model modal opens on the CURRENT model row', () => {
+		const modal = read('./components/model-modal.tsx');
+		// The initial row index must come from the pure helper (current
+		// model first, then first navigable row) — never a hardcoded 0,
+		// which lands on the provider header and shows no highlight.
+		expect(modal).toMatch(/initialModelRowIndex\(buildRows\(\)\)/);
+		expect(modal).not.toMatch(/rowIndex, setRowIndex\] = createSignal\(0\)/);
+		// Query changes re-snap through the same helper.
+		expect(modal).toMatch(/createEffect/);
+	});
+
+	test('resume search covers the session id', () => {
+		const modal = read('./components/resume-modal.tsx');
+		// The filter must go through the pure helper that matches the id,
+		// the name AND the last prompt — not just name/prompt inline.
+		expect(modal).toMatch(/sessionMatchesQuery\(session, q\)/);
+		const spec = read('../src/resume-modal.spec.ts');
+		expect(spec).toMatch(/matches by SESSION ID/);
+	});
 });

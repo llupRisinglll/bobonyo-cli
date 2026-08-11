@@ -47,6 +47,24 @@ export function sessionInFolder(
 	return showAll || !session.cwd || session.cwd === cwd;
 }
 
+/**
+ * Whether a session matches the `/resume` search: matches the SESSION ID
+ * (so you can search `sess_…`), the conversation name, or the last prompt.
+ * Case-insensitive; an empty query matches everything. Pure, unit-tested.
+ */
+export function sessionMatchesQuery(
+	session: ResumeSession,
+	query: string,
+): boolean {
+	const q = query.trim().toLowerCase();
+	if (!q) return true;
+	return (
+		(session.id ?? '').toLowerCase().includes(q) ||
+		(session.name ?? '').toLowerCase().includes(q) ||
+		(session.firstMessage ?? '').toLowerCase().includes(q)
+	);
+}
+
 function dateGroup(createdAt: number): string {
 	const now = new Date();
 	const date = new Date(createdAt);
@@ -129,10 +147,9 @@ export function ResumeModal(props: {
 				if (session.id === '' || seen.has(session.id)) return false;
 				seen.add(session.id);
 				return (
-					!q ||
-					(session.name ?? '').toLowerCase().includes(q) ||
-					(session.firstMessage ?? '').toLowerCase().includes(q)
-				) && sessionInFolder(session, props.cwd, showAll());
+					sessionMatchesQuery(session, q) &&
+					sessionInFolder(session, props.cwd, showAll())
+				);
 			})
 			.slice(0, 500);
 		const groups: Row[] = [];
