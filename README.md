@@ -96,6 +96,36 @@ juggle:
 Then switch models live with `/model`. The conversation follows you, and the
 model's reasoning effort shows next to its name.
 
+### DeepSeek, first class
+
+bobonyo is built to be the best terminal harness for DeepSeek. It talks to
+the DeepSeek API directly and puts the platform's own data on screen:
+
+- **Live balance on the status line.** Your remaining credit shows as
+  `Cred: $5.18` next to the mode and tune settings, refreshed every few
+  minutes without a dashboard.
+- **Models auto discovered.** The model list is fetched from the DeepSeek
+  `/models` API, so new models show up in `/model` without editing your
+  config by hand.
+- **Cache hit awareness.** DeepSeek caches your prompt automatically.
+  bobonyo reads the cache fields on every turn and shows the hit share on
+  the completion line (`cache hit 99%`) and in `/status`. When a large turn
+  misses the cache, a toast warns you, because cache misses are what drive
+  the cost up.
+- **Multi instance safe.** Model and balance data is cached on disk with a
+  short TTL and atomic writes, so several terminals at once share one
+  refresh instead of flooding the API.
+
+The demo above was recorded against the real DeepSeek API. You can try it
+with:
+
+```bash
+bobonyo --provider DeepSeek
+```
+
+The status line shows your balance, `/model` lists the live catalog, and
+every reply shows its cache hit share.
+
 ### Vision and web-search fallbacks
 
 In **Settings, Capabilities** you can pick a separate model for images and
