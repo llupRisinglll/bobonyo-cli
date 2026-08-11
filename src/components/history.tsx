@@ -54,9 +54,10 @@ import {
 	fence,
 	formatOutputTail,
 	formatToolEntry,
+	rowLanguage,
 } from '../tool-display';
+import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
 import {
-	applyHoverBackground,
 	tokenizeAgentRow,
 	tokenizeBanner,
 	tokenizeBashRow,
@@ -111,11 +112,6 @@ function buildWelcomeBanner(titleShape: string): string {
 function rowPath(text: string): string {
 	const line = text.split('\n')[0] ?? '';
 	return line.replace(/^[✦⚙]\s*[A-Za-z ]+?\s+/, '').trim();
-}
-
-/** Tag a fenced row's language with `:hover` so its renderer tints it. */
-function markHover(text: string): string {
-	return text.replace(/^(```+[^:\n]+:[^:\n]+)/, '$1:hover');
 }
 
 /**
@@ -194,110 +190,82 @@ export function History(props: {height?: number}) {
 	/** Custom tool-row renderers, tokenize the row into themed chunks. */
 	const rowRenderers: Record<
 		string,
-		(token: RenderToken, status: RowStatus, hovered: boolean) => CodeRenderable
+		(token: RenderToken, status: RowStatus) => CodeRenderable
 	> = {
-		toolrow: (token, status, hovered) =>
+		toolrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeToolRow(token.text ?? '', status, colors()),
-						hovered,
+					tokenizeToolRow(token.text ?? '', status, colors()),
+			}),
+		bashrow: (token, status) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					tokenizeBashRow(token.text ?? '', status, colors()),
+			}),
+		filerow: (token, status) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					tokenizeFileRow(
+						token.text ?? '',
+						rowPath(token.text ?? ''),
+						status,
 						colors(),
 					),
 			}),
-		bashrow: (token, status, hovered) =>
+		filediff: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeBashRow(token.text ?? '', status, colors()),
-						hovered,
+					tokenizeFileDiff(
+						token.text ?? '',
+						rowPath(token.text ?? ''),
+						status,
 						colors(),
+						historyFillWidth(terminalDimensions().width ?? 80),
 					),
 			}),
-		filerow: (token, status, hovered) =>
+		diffrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeFileRow(token.text ?? '', rowPath(token.text ?? ''), status, colors()),
-						// File previews keep their own look, no container tint.
-						false,
-						colors(),
-					),
+					tokenizeDiffRow(token.text ?? '', status, colors()),
 			}),
-		filediff: (token, status, hovered) =>
+		agentrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeFileDiff(
-							token.text ?? '',
-							rowPath(token.text ?? ''),
-							status,
-							colors(),
-							historyFillWidth(terminalDimensions().width ?? 80),
-						),
-						false,
-						colors(),
-					),
+					tokenizeAgentRow(token.text ?? '', status, colors()),
 			}),
-		diffrow: (token, status, hovered) =>
+		grouprow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeDiffRow(token.text ?? '', status, colors()),
-						hovered,
-						colors(),
-					),
+					tokenizeToolRow(token.text ?? '', status, colors()),
 			}),
-		agentrow: (token, status, hovered) =>
+		thought: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeAgentRow(token.text ?? '', status, colors()),
-						hovered,
-						colors(),
-					),
-			}),
-		grouprow: (token, status, hovered) =>
-			new CodeRenderable(renderer as unknown as RenderContext, {
-				content: token.text ?? '',
-				filetype: 'txt',
-				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					applyHoverBackground(
-						tokenizeToolRow(token.text ?? '', status, colors()),
-						hovered,
-						colors(),
-					),
-			}),
-		thought: (token, status, hovered) =>
-			new CodeRenderable(renderer as unknown as RenderContext, {
-				content: token.text ?? '',
-				filetype: 'txt',
-				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					applyHoverBackground(
-						tokenizeThought(token.text ?? '', status, colors()),
-						hovered,
-						colors(),
-					),
+					tokenizeThought(token.text ?? '', status, colors()),
 			}),
 		usermsg: (token) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
@@ -315,30 +283,21 @@ export function History(props: {height?: number}) {
 						String(token.lang ?? '').split(':')[2] ?? '',
 					),
 			}),
-		taskrow: (token, status, hovered) =>
+		taskrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () =>
-					applyHoverBackground(
-						tokenizeTaskRow(token.text ?? '', status, colors()),
-						hovered,
-						colors(),
-					),
+					tokenizeTaskRow(token.text ?? '', status, colors()),
 			}),
 		// Error rows (`⚠ …`) render in the error color.
-		errorrow: (token, _status, hovered) =>
+		errorrow: (token, _status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					applyHoverBackground(
-						tokenizeErrorRow(token.text ?? '', colors()),
-						hovered,
-						colors(),
-					),
+				onChunks: () => tokenizeErrorRow(token.text ?? '', colors()),
 			}),
 		warningrow: (token) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
@@ -351,17 +310,12 @@ export function History(props: {height?: number}) {
 		// `/status` block: custom fenced row so the `model[effort]` brackets
 		// survive, the markdown/tree-sitter pipeline parses a bare `[x]` as
 		// a link-ish token and drops the brackets.
-		statusrow: (token, _status, hovered) =>
+		statusrow: (token, _status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					applyHoverBackground(
-						tokenizeStatusRow(token.text ?? '', colors()),
-						hovered,
-						colors(),
-					),
+				onChunks: () => tokenizeStatusRow(token.text ?? '', colors()),
 			}),
 		// Real-language code previews: built-in tree-sitter highlights, with
 		// the leading LINE NUMBERS re-colored to secondary (they're parsed as
@@ -380,11 +334,10 @@ export function History(props: {height?: number}) {
 		const parts = lang.split(':');
 		const kind = parts[0] ?? lang;
 		const status = (parts[1] ?? 'done') as RowStatus;
-		const hovered = parts[2] === 'hover';
 		const custom = rowRenderers[kind];
 		if (custom) {
 			try {
-				return custom(token, status, hovered);
+				return custom(token, status);
 			} catch (error) {
 				return undefined;
 			}
@@ -681,15 +634,17 @@ export function History(props: {height?: number}) {
 	/**
 	 * RUNNING tool rows, rendered in the live region with their streaming
 	 * output (the settled memo skips them so it never re-runs mid-stream).
-	 * Each row goes through the SAME `formatToolEntry` + fenced-row pipeline
-	 * as the settled rows (`status: 'running'`), so colors, syntax
-	 * highlighting and spacing are IDENTICAL while streaming and when done;
-	 * the only differences are the blinking glyph and the streaming tail.
+	 * Each row is tokenized with the SAME tokenizers the settled rows use
+	 * (`status: 'running'`), so colors, syntax highlighting and spacing are
+	 * IDENTICAL while streaming and when done. The chunks render as PLAIN
+	 * text cells (never markdown), so OpenTUI only repaints changed cells —
+	 * no re-parse, no flicker. The glyph is rendered separately (blinking),
+	 * NOT part of these chunks.
 	 */
 	const liveToolRows = createMemo(() => {
 		if (!running()) return [];
 		const outputs = throttledToolOutputs();
-		const rows: Array<{text: string; toolId?: string}> = [];
+		const rows: Array<LiveRowSegments & {toolId?: string}> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
 				const streamed = message.toolId
@@ -699,17 +654,22 @@ export function History(props: {height?: number}) {
 					streamed !== undefined
 						? streamed
 						: (message.tool.output ?? '');
+				// Plain text (no fence, no blink swap): `✦ Name(detail)`
+				// header + `  └   ` body, exactly like the settled row.
+				const raw = formatToolEntry(
+					{...message.tool, output},
+					false,
+					'running',
+					true,
+				);
 				rows.push({
 					toolId: message.toolId,
-					// `blinkOn` toggles with the ticker: the hidden frame
-					// swaps the glyph for a space (width-stable), the exact
-					// same blink the old ToolGlyph used.
-					text: formatToolEntry(
-						{...message.tool, output},
-						false,
+					...liveRowSegments(
+						raw,
+						rowLanguage(message.tool.name),
 						'running',
-						false,
-						glyphBlinkOn(spinnerFrame()),
+						colors(),
+						historyFillWidth(terminalDimensions().width ?? 80),
 					),
 				});
 			}
@@ -774,7 +734,10 @@ export function History(props: {height?: number}) {
 		if (range) {
 			// Compact tallies open the DETAILS MODAL (scrollable per-call
 			// entries) instead of toggling in place, so a reader never has to
-			// parse the whole expanded block inline.
+			// parse the whole expanded block inline. Clear the hover state so
+			// no highlight lingers behind the modal.
+			hoveredBlockRef = null;
+			setHoveredBlock(null);
 			const details = compactDetails.get(range.key);
 			if (details) {
 				setDetailsTitle(renderText[range.start] ?? 'Tool details');
@@ -821,6 +784,42 @@ export function History(props: {height?: number}) {
 		hoveredBlockRef = null;
 		setHoveredBlock(null);
 	};
+	/**
+	 * HOVER OVERLAY geometry: the hovered expandable block's BODY rows get a
+	 * full-width semi-transparent tint box. The header line is excluded by
+	 * construction (the box starts BELOW it), and because the highlight is a
+	 * plain Box — never a text-buffer background — OpenTUI cannot bleed it
+	 * into other rows and the settled text never re-parses on hover.
+	 */
+	const hoverOverlay = createMemo(() => {
+		const key = hoveredBlock();
+		if (!key || !scrollRef) return null;
+		const range = blockRanges.find(candidate => candidate.key === key);
+		if (!range) return null;
+		const group = blockRefs.find(
+			candidate =>
+				candidate.ref &&
+				range.start >= candidate.start &&
+				range.end <= candidate.start + candidate.rows - 1,
+		);
+		if (!group?.ref) return null;
+		const scrollY = (scrollRef as unknown as {screenY: number}).screenY;
+		const groupY = (group.ref as unknown as {screenY: number}).screenY;
+		const tint = RGBA.fromHex(colors().secondary);
+		return {
+			// The body starts ONE row below the block's header; the absolute
+			// coordinate origin inside the scrollbox sits ONE row above the
+			// content grid, so the body offset needs +2 in total. The range
+			// end includes the block's trailing row, so height is −1.
+			top: Math.max(
+				0,
+				groupY - scrollY + (range.start - group.start) + 2,
+			),
+			height: Math.max(1, range.end - range.start - 1),
+			width: historyFillWidth(terminalDimensions().width ?? 80),
+			bg: RGBA.fromValues(tint.r, tint.g, tint.b, 0.24),
+		};
+	});
 
 	return (
 		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
@@ -854,34 +853,15 @@ export function History(props: {height?: number}) {
 					const setRef = (element: unknown): void => {
 						blockRefs[index()]!.ref = element as never;
 					};
-					// Hover is applied HERE, per part, reactively: only the
-					// hovered block's content string changes, so only that
-					// markdown node re-parses (the MarkdownRenderable content
-					// setter no-ops on unchanged values). The settled array
-					// stays stable and the rest of the transcript never
-					// repaints on a hover change.
+					// Hover is a pure OVERLAY (see hoverOverlay below), never
+					// a content change: the settled text stays byte-identical
+					// on hover, so no markdown re-parses and nothing else can
+					// ever repaint. (The old `:hover` fence marker re-parsed
+					// the block and OpenTUI's buffer filled EVERY line —
+					// header included — with the tint.)
 					const contentFor = () =>
 						block.parts
-							.map(part => {
-								const hasFooter =
-									/\+(\d+) (more )?lines?/.test(part.text);
-								const expandable =
-									part.key !== undefined &&
-									(hasFooter ||
-										Boolean(
-											expandedBlocks()[part.key],
-										));
-								if (
-									part.key &&
-									expandable &&
-									hasFooter &&
-									!expandedBlocks()[part.key] &&
-									part.key === hoveredBlock()
-								) {
-									return markHover(part.text);
-								}
-								return part.text;
-							})
+							.map(part => part.text)
 							.join('\n\n');
 					if (block.kind === 'reply') {
 						return (
@@ -955,29 +935,51 @@ export function History(props: {height?: number}) {
 				</box>
 			</Show>
 			{/* RUNNING tool rows (streaming output) — their own node so the
-			    settled blocks never re-render mid-stream. Each row renders
-			    through the SAME fenced-row pipeline as settled rows (syntax
-			    highlighting, spacing, colors), throttled so the re-parse is
-			    ~7/s, never per stream chunk. The glyph blinks via the text
-			    swap in `liveToolRows`; the markdown content setter no-ops on
-			    unchanged values, so idle ticks never repaint. */}
+			    settled blocks never re-render mid-stream. The rows are
+			    tokenized ONCE per throttled update and rendered as PLAIN
+			    text cells (never markdown), so OpenTUI repaints only the
+			    changed cells — the same syntax colors/spacing as settled
+			    rows, with ZERO re-parse flicker. The blinking glyph is a
+			    separate cell and never re-tokenizes the row. */}
 			<Show when={liveToolRows().length > 0}>
 				<For each={liveToolRows()}>
 					{(row) => (
-						<markdown
-							content={row.text}
-							streaming={running()}
-							fg={colors().text}
-							syntaxStyle={syntaxStyle()}
-							internalBlockMode="top-level"
-							renderNode={renderNode}
-							treeSitterClient={treeSitter}
-							tableOptions={{
-								style: 'grid',
-								borders: true,
-								widthMode: 'content',
-							}}
-						/>
+						<box flexDirection="column">
+							<box flexDirection="row">
+								<text
+									fg={colors().secondary}
+									attributes={dim()}
+								>
+									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
+								</text>
+								<For each={row.header}>
+									{(c) => (
+										<text
+											fg={c.fg as never}
+											attributes={c.attributes}
+										>
+											{c.text}
+										</text>
+									)}
+								</For>
+							</box>
+							<For each={row.body}>
+								{(line) => (
+									<box flexDirection="row">
+										<For each={line}>
+											{(c) => (
+												<text
+													fg={c.fg as never}
+													attributes={c.attributes}
+												>
+													{c.text}
+												</text>
+											)}
+										</For>
+									</box>
+								)}
+							</For>
+						</box>
 					)}
 				</For>
 			</Show>
@@ -1012,6 +1014,21 @@ export function History(props: {height?: number}) {
 						/>
 					</box>
 				</box>
+			</Show>
+			{/* HOVER OVERLAY: full-width tint over the hovered block's BODY
+			    rows only — the header line stays untouched. A plain Box, so
+			    it never bleeds into other rows and never re-parses content.
+			    Mouse events bubble to the scrollbox, so hover/click keep
+			    working over the tint. */}
+			<Show when={hoverOverlay()}>
+				<box
+					position="absolute"
+					left={0}
+					top={hoverOverlay()!.top}
+					width={hoverOverlay()!.width}
+					height={hoverOverlay()!.height}
+					backgroundColor={hoverOverlay()!.bg}
+				/>
 			</Show>
 		</scrollbox>
 	);

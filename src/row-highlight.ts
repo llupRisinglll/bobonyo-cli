@@ -951,35 +951,3 @@ export function activeRowPalette(colors: Colors): {bg: RGBA; fg: RGBA} {
 	);
 	return {bg, fg};
 }
-
-/**
- * Apply the container hover/expanded tint to a row's chunks. Every chunk
- * whose foreground is too close to the tint gets a readable replacement,
- * a chunk can NEVER become invisible on hover, whatever the theme.
- */
-export function applyHoverBackground(
-	chunks: TextChunk[],
-	hovered: boolean,
-	colors: Colors,
-): TextChunk[] {
-	if (!hovered) return chunks;
-	const palette = themeColors(colors);
-	const bg = palette.fg.secondary;
-	// Hover highlights ONLY the content inside the `└` container (the body),
-	// never the title/header line, so the header stays readable and only the
-	// expandable output is the interactive target.
-	let headerDone = false;
-	return chunks.map(chunkEntry => {
-		if (!headerDone) {
-			if (chunkEntry.text.includes('\n')) headerDone = true;
-			return chunkEntry;
-		}
-		const fg = readableOn(
-			bg,
-			chunkEntry.fg,
-			palette.fg.text,
-			RGBA.fromHex(colors.base),
-		);
-		return {...chunkEntry, fg, bg};
-	});
-}

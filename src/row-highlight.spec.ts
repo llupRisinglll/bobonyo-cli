@@ -1,7 +1,6 @@
 import {describe, expect, test} from 'bun:test';
 import type {TextChunk} from '@opentui/core';
 import {
-	applyHoverBackground,
 	readableOn,
 	tokenizeBanner,
 	tokenizeFileDiff,
@@ -284,33 +283,8 @@ describe('group header colors (compact tally)', () => {
 	});
 });
 
-describe('hover contrast (text can never become invisible)', () => {
-	test('secondary text on the secondary tint is replaced with a readable fg', () => {
-		const chunks = tokenizeToolRow(
-			'✦ Bash(echo hi)\n  └   EXIT_CODE: 0',
-			'done',
-			colors(),
-		);
-		const hovered = applyHoverBackground(chunks, true, colors());
-		// The TITLE line keeps NO tint (hover highlights only the `└` body);
-		// every BODY chunk carries the tint background…
-		const firstNewline = chunks.findIndex(c => c.text.includes('\n'));
-		expect(hovered.slice(0, firstNewline + 1).every(c => !bg(c))).toBe(true);
-		expect(hovered.slice(firstNewline + 1).every(c => bg(c))).toBe(true);
-		// …and none of the BODY chunks has the SAME color as the tint
-		// (invisible text).
-		const tint = RGBA.fromHex(colors().secondary);
-		for (const c of hovered.slice(firstNewline + 1)) {
-			if (!c.fg) continue;
-			const same =
-				Math.abs(c.fg.r - tint.r) < 0.02 &&
-				Math.abs(c.fg.g - tint.g) < 0.02 &&
-				Math.abs(c.fg.b - tint.b) < 0.02;
-			expect(same).toBe(false);
-		}
-	});
-
-	test('readableOn keeps a contrasting fg and swaps a matching one', () => {
+describe('readableOn', () => {
+	test('keeps a contrasting fg and swaps a matching one', () => {
 		const bg = RGBA.fromHex('#565f89');
 		const text = RGBA.fromHex('#ffffff');
 		const base = RGBA.fromHex('#1a1b26');

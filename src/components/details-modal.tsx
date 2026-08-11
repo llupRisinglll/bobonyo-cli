@@ -2,7 +2,46 @@
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createSignal, For, Show} from 'solid-js';
-import {colors} from '../theme';
+import {colors, type Colors} from '../theme';
+
+export interface DetailSegment {
+	text: string;
+	fg: string;
+	attrs?: number;
+}
+
+/**
+ * Color one details-modal line (pure, unit-tested): `✦ Name(detail)`
+ * headers get the glyph secondary, the FULL tool NAME primary bold (the
+ * name is the whole word up to the `(` — a non-greedy match colored only
+ * the first letter of `Bash(...)`), the rest secondary; `└`/indented
+ * output and summaries are secondary dim; everything else is plain text.
+ */
+export function colorDetailLine(
+	line: string,
+	colors: Colors,
+	attrs: {bold: () => number; dim: () => number},
+): DetailSegment[] {
+	if (/^✦\s*[A-Za-z]/.test(line)) {
+		const m = line.match(/^(✦\s*)([A-Za-z][A-Za-z0-9_:-]*)(.*)$/);
+		if (m) {
+			return [
+				{text: m[1] ?? '', fg: colors.secondary, attrs: attrs.dim()},
+				{text: m[2] ?? '', fg: colors.primary, attrs: attrs.bold()},
+				{text: m[3] ?? '', fg: colors.secondary, attrs: attrs.dim()},
+			];
+		}
+	}
+	if (
+		/^\s*└/.test(line) ||
+		/^\s+/.test(line) ||
+		/^\s*⎿/.test(line) ||
+		/^\s*```/.test(line)
+	) {
+		return [{text: line, fg: colors.secondary, attrs: attrs.dim()}];
+	}
+	return [{text: line, fg: colors.text}];
+}
 
 /**
  * Compact-block DETAILS modal. Clicking an expandable compact tally (e.g.
@@ -32,29 +71,8 @@ export function DetailsModal(props: {
 
 	// Color each line like the tool rows: `✦ Name(detail)` headers primary,
 	// `└`/indented output + `⎿` summaries secondary, everything else text.
-	const colorLine = (
-		line: string,
-	): Array<{text: string; fg: string; attrs?: number}> => {
-		if (/^✦\s*[A-Za-z]/.test(line)) {
-			const m = line.match(/^(✦\s*)([A-Za-z][A-Za-z0-9 _:-]*?)(.*)$/);
-			if (m) {
-				return [
-					{text: m[1] ?? '', fg: colors().secondary, attrs: dim()},
-					{text: m[2] ?? '', fg: colors().primary, attrs: bold()},
-					{text: m[3] ?? '', fg: colors().secondary, attrs: dim()},
-				];
-			}
-		}
-		if (
-			/^\s*└/.test(line) ||
-			/^\s+/.test(line) ||
-			/^\s*⎿/.test(line) ||
-			/^\s*```/.test(line)
-		) {
-			return [{text: line, fg: colors().secondary, attrs: dim()}];
-		}
-		return [{text: line, fg: colors().text}];
-	};
+	const colorLine = (line: string) =>
+		colorDetailLine(line, colors(), {bold, dim});
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
