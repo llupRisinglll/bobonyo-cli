@@ -194,4 +194,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/<box flexGrow=\{1\} paddingLeft=\{2\}>/);
 		expect(history).not.toMatch(/✦\{' '\}/);
 	});
+
+	test('Ran tally/agent headers split colors even WITHOUT the glyph', () => {
+		const rh = read('./row-highlight.ts');
+		// liveRowSegments strips the leading ✦/⚙ before tokenizing, so the
+		// `Ran … ×N` / `Ran agent:…` header regexes must make the glyph
+		// OPTIONAL — a required glyph regresses the whole header to primary.
+		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(Ran\\s\+\)\(\.\*\)\$/);
+		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(\.\*\)\$/);
+	});
 });

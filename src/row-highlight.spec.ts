@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import type {TextChunk} from '@opentui/core';
 import {
 	readableOn,
+	tokenizeAgentRow,
 	tokenizeBanner,
 	tokenizeFileDiff,
 	tokenizeStatusRow,
@@ -279,6 +280,55 @@ describe('group header colors (compact tally)', () => {
 		);
 		expect(rgb(chunks.find(c => c.text === ' ×3')!)).toBe(
 			themeRgb(colors().text),
+		);
+	});
+
+	test('GLYPH-LESS Ran header (liveRowSegments strips the glyph) still splits', () => {
+		// The real pipeline passes the header WITHOUT the leading ✦/⚙ (the
+		// glyph renders/blinks separately), so the tokenizer must color the
+		// glyph-less form identically — a regression makes everything primary.
+		const chunks = tokenizeToolRow('Ran Read ×2\n  └   tail', 'done', colors());
+		expect(join(chunks)).toContain('Ran Read ×2');
+		expect(rgb(chunks.find(c => c.text === 'Ran ')!)).toBe(
+			themeRgb(colors().text),
+		);
+		expect(rgb(chunks.find(c => c.text === 'Read')!)).toBe(
+			themeRgb(colors().primary),
+		);
+		expect(rgb(chunks.find(c => c.text === ' ×2')!)).toBe(
+			themeRgb(colors().text),
+		);
+	});
+
+	test('glyph-less multi-tool tally keeps separators and ×N white', () => {
+		const chunks = tokenizeToolRow(
+			'Ran WebSearch ×3 and WebFetch ×2 (ctrl-o to expand)',
+			'done',
+			colors(),
+		);
+		expect(join(chunks)).toContain('WebSearch ×3 and WebFetch ×2');
+		expect(rgb(chunks.find(c => c.text === 'Ran ')!)).toBe(
+			themeRgb(colors().text),
+		);
+		expect(rgb(chunks.find(c => c.text === ' and ')!)).toBe(
+			themeRgb(colors().text),
+		);
+		expect(rgb(chunks.find(c => c.text === ' ×2')!)).toBe(
+			themeRgb(colors().text),
+		);
+	});
+
+	test('glyph-less agent row: Ran secondary, agent name primary', () => {
+		const chunks = tokenizeAgentRow(
+			'Ran agent:explore(task) done',
+			'done',
+			colors(),
+		);
+		expect(rgb(chunks.find(c => c.text === 'Ran ')!)).toBe(
+			themeRgb(colors().secondary),
+		);
+		expect(rgb(chunks.find(c => c.text === 'agent:explore')!)).toBe(
+			themeRgb(colors().primary),
 		);
 	});
 });

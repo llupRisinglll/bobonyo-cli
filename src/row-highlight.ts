@@ -109,18 +109,20 @@ function commonAffix(
  * are part of the sentence, not optional info); ONLY the tool names are
  * primary; the trailing `(hint)` stays secondary (parity:
  * CompactToolCountsLine + the "secondary is for output/optional info" rule).
+ * The leading glyph is OPTIONAL: liveRowSegments strips it (it renders
+ * separately/blinks), so the tokenizer also receives glyph-less
+ * `Ran Read ×2` headers and must color them the same way.
  */
 function groupHeaderChunks(
 	line: string,
 	status: RowStatus,
 	palette: Palette,
 ): TextChunk[] {
-	const m = line.match(/^([✦⚙]\s*)(Ran\s+)(.*)$/);
+	const m = line.match(/^([✦⚙]\s*)?(Ran\s+)(.*)$/);
 	if (!m) return headerChunks(line, status, palette, palette.fg.text);
-	const chunks: TextChunk[] = [
-		chunk(m[1] ?? '', glyphColor(status, palette)),
-		chunk(m[2] ?? '', palette.fg.text),
-	];
+	const chunks: TextChunk[] = [];
+	if (m[1]) chunks.push(chunk(m[1], glyphColor(status, palette)));
+	chunks.push(chunk(m[2] ?? '', palette.fg.text));
 	const rest = m[3] ?? '';
 	const hintAt = rest.search(/\(ctrl-o|\(ctrl \+ t/);
 	// Keep the space that separated the names from the hint (names.trim()
@@ -192,7 +194,7 @@ export function tokenizeToolRow(
 	const lines = text.replace(/\n+$/, '').split('\n');
 	return emitLines(lines, (line, index, isHeader) => {
 		if (isHeader) {
-			if (/^[✦⚙]\s*Ran\s+/.test(line)) {
+			if (/^(?:[✦⚙]\s*)?Ran\s+/.test(line)) {
 				return groupHeaderChunks(line, status, palette);
 			}
 			const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
@@ -558,23 +560,27 @@ export function tokenizeAgentRow(
 		if (isHeader) {
 			// `✦ Ran agent:explore(<task>) <status>`, ONLY `agent:explore` is
 			// primary; `Ran `, `(<task>)` and the status stay secondary.
-			const m = line.match(/^([✦⚙]\s*)(.*)$/);
+			const m = line.match(/^([✦⚙]\s*)?(.*)$/);
 			if (m) {
 				const rest = m[2] ?? '';
 				const agentMatch = rest.match(/^(Ran\s+)(agent:[^()\s]+)((?:\([^)]*\))?)(.*)$/);
 				if (agentMatch) {
+					const agentChunks: TextChunk[] = [];
+					if (m[1]) {
+						agentChunks.push(chunk(m[1], glyphColor(status, palette)));
+					}
 					return [
-						chunk(m[1] ?? '', glyphColor(status, palette)),
+						...agentChunks,
 						chunk(agentMatch[1] ?? '', palette.fg.secondary),
 						chunk(agentMatch[2] ?? '', palette.fg.primary, bold()),
 						chunk(agentMatch[3] ?? '', palette.fg.secondary),
 						chunk(agentMatch[4] ?? '', palette.fg.secondary),
 					];
 				}
-				return [
-					chunk(m[1] ?? '', glyphColor(status, palette)),
-					chunk(rest, palette.fg.primary, bold()),
-				];
+				const fallback: TextChunk[] = [];
+				if (m[1]) fallback.push(chunk(m[1], glyphColor(status, palette)));
+				fallback.push(chunk(rest, palette.fg.primary, bold()));
+				return fallback;
 			}
 			return headerChunks(line, status, palette, defaultFg);
 		}
