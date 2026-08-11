@@ -83,6 +83,10 @@ import {
 	settingsRows,
 	type SettingsRow,
 } from './components/settings-panel';
+import {
+	SettingsListModal,
+	type SettingsListRow,
+} from './components/settings-list-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
@@ -260,6 +264,10 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000;
 export function App() {
 	const renderer = useRenderer();
 	const [statusRows, setStatusRows] = createSignal<StatusRow[]>([]);
+	const [settingsList, setSettingsList] = createSignal<{
+		title: string;
+		rows: SettingsListRow[];
+	} | null>(null);
 
 	// The in-flight turn's abort controller, so `/clear` can cancel a running
 	// stream mid-turn (parity: clear starts a NEW conversation).
@@ -680,11 +688,115 @@ export function App() {
 			setAgentsOpen(true);
 			return;
 		}
-		if (row.key.startsWith('provider:')) {
-			appendInfo(
-				`${row.label}, ${row.value}\nEdit providers via /setup-providers.`,
-			);
-			return;
+		// LIST surfaces: view-only data gets a proper modal list instead of a
+		// "set value" prompt (parity: the original's managed setting panels).
+		const openSettingsList = (
+			title: string,
+			rows: SettingsListRow[],
+		) => {
+			setSettingsList({title, rows});
+		};
+		switch (row.key) {
+			case 'customCommands':
+				openSettingsList('Custom commands', [
+					...loadCustomCommands().map(command => ({
+						label: `/${command.name}`,
+						value: command.description,
+					})),
+				]);
+				return;
+			case 'skills':
+				openSettingsList(
+					'Skills',
+					loadSkills().map(skill => ({
+						label: skill.name,
+						value: skill.description,
+					})),
+				);
+				return;
+			case 'customTools':
+				openSettingsList(
+					'Custom tools',
+					loadCustomTools().map(tool => ({
+						label: tool.name,
+						value: tool.description,
+					})),
+				);
+				return;
+			case 'sessions':
+				openSettingsList(
+					'Sessions',
+					listSessions().map(session => ({
+						label: session.firstMessage || session.id,
+						value: session.id,
+						activateHint: 'resume',
+						onActivate: () => {
+							setSettingsList(null);
+							resumeSession(session.id);
+						},
+					})),
+				);
+				return;
+			case 'checkpoints':
+				openSettingsList(
+					'Checkpoints',
+					listCheckpoints().map(data => ({
+						label: data.name,
+						value: `${data.messages.length} messages · ${new Date(
+							data.createdAt,
+						).toLocaleString()}`,
+						activateHint: 'restore',
+						onActivate: () => {
+							setSettingsList(null);
+							restoreCheckpoint(data.name);
+						},
+					})),
+				);
+				return;
+			case 'steering':
+				openSettingsList(
+					'Steering (InnerDaemon)',
+					steeringRef.rules.map(rule => ({
+						label: rule.id,
+						value: rule.message ?? rule.action,
+					})),
+				);
+				return;
+			case 'mcp':
+				openSettingsList(
+					'MCP servers',
+					loadMCPConfig().map(server => ({
+						label: server.id ?? server.command,
+						value: `${server.command ?? ''}${
+							mcpServers().includes(server.id ?? '')
+								? ' · connected'
+								: ' · not connected'
+						}`,
+					})),
+				);
+				return;
+			case 'background':
+				openSettingsList(
+					'Background tasks',
+					bgTasks().map(task => ({
+						label: task.id,
+						value: task.running ? 'running' : 'done',
+					})),
+				);
+				return;
+			default:
+				if (row.key.startsWith('provider:')) {
+					openSettingsList(
+						row.label,
+						listProviders()
+							.filter(provider => provider.id === row.key.slice(9))
+							.map(provider => ({
+								label: provider.id,
+								value: provider.baseUrl,
+							})),
+					);
+					return;
+				}
 		}
 		// Defer by a microtask: the SAME Enter keypress that opens the wizard
 		// also reaches the InputBox's own key handler (OpenTUI dispatches to
@@ -2909,18 +3021,31 @@ export function App() {
 			{/* Settings open as an modal-style MODAL: the chat stays visible
 			    behind a translucent backdrop and a card container on top. */}
 			<Show when={settingsOpen()}>
-				<SettingsModal
-					onClose={() => setSettingsOpen(false)}
-					onEdit={editSettingRow}
-					onApply={applySetting}
-					onModelSelect={(target) => {
-						setSettingsOpen(false);
-						setFallbackTarget(target === 'main' ? null : target);
-						setModelModalInherit(true);
-						refreshModelCatalogs();
-						setModelOpen(true);
-					}}
-				/>
+				<Show
+					when={settingsList()}
+					fallback={
+						<SettingsModal
+							onClose={() => setSettingsOpen(false)}
+							onEdit={editSettingRow}
+							onApply={applySetting}
+							onModelSelect={(target) => {
+								setSettingsOpen(false);
+								setFallbackTarget(target === 'main' ? null : target);
+								setModelModalInherit(true);
+								refreshModelCatalogs();
+								setModelOpen(true);
+							}}
+						/>
+					}
+				>
+					{(list) => (
+						<SettingsListModal
+							title={list().title}
+							rows={list().rows}
+							onClose={() => setSettingsList(null)}
+						/>
+					)}
+				</Show>
 			</Show>
 			{/* `/status` opens as a MODAL over the history (input stays
 			    visible below). */}

@@ -9,6 +9,7 @@ import {readFileSync} from 'node:fs';
 import {streamChat, type ChatMessageLike, type MockToolCall} from './client';
 import {bgTasks, runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
+import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
 import {
 	executeNativeWebSearch,
@@ -738,11 +739,18 @@ async function runSubagent(
 	description: string,
 	onProgress?: (output: string) => void,
 ): Promise<string> {
+	// Custom agents (`.nanocoder/agents/*.md`, user agents) carry their own
+	// system prompt; built-ins fall back to the registry instructions.
+	const customPrompt = subagentSystemPrompt(subagentType);
 	let history: ChatMessageLike[] = [
 		{
 			role: 'user',
 			content:
-				`${SUBAGENT_TYPES[subagentType]?.instruction ?? SUBAGENT_TYPES.general!.instruction}\n\n` +
+				`${
+					customPrompt ||
+					(SUBAGENT_TYPES[subagentType]?.instruction ??
+						SUBAGENT_TYPES.general!.instruction)
+				}\n\n` +
 				`Task: ${description}`,
 		},
 	];

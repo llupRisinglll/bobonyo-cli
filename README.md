@@ -204,9 +204,13 @@ or stop turns before they reach the model.
 
 ## Agents
 
-Two built-in agent personalities, General and Explore, are listed under
-**Settings, Capabilities, Agents**. The `agent` tool lets the main model
-delegate work to them, so multi-agent collaboration works out of the box.
+Agents are markdown files with YAML frontmatter. bobonyo discovers them
+exactly like the original nanocoder: built-in personalities (General,
+Explore), your user agents (`~/.config/nanocoder/agents/`), and project
+agents (`.nanocoder/agents/`, project wins on name conflict). **Settings,
+Capabilities, Agents** lists every discoverable agent with a search box;
+Enter opens the full system prompt. The `agent` tool lets the main model
+delegate to any of them, using the agent's own prompt.
 
 ## Tool-call recovery
 

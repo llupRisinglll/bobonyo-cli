@@ -564,6 +564,11 @@ export function SettingsModal(props: {
 			setQuery(prev => prev.slice(0, -1));
 			return;
 		}
+		if (event.name === 'space' && !event.ctrl && !event.meta) {
+			setQuery(prev => prev + ' ');
+			setFocus('search');
+			return;
+		}
 		const char = typedChar(event);
 		if (char && !event.ctrl && !event.meta) {
 			setQuery(prev => prev + char);

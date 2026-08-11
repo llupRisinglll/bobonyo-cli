@@ -290,6 +290,11 @@ export function ModelModal(props: {
 			setQuery(prev => prev.slice(0, -1));
 			return;
 		}
+		if (event.name === 'space' && !event.ctrl && !event.meta) {
+			setQuery(prev => prev + ' ');
+			setRowIndex(0);
+			return;
+		}
 		const char = event.name;
 		if (char && char.length === 1 && !event.ctrl && !event.meta) {
 			setQuery(prev => prev + char);
