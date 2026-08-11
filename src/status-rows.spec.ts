@@ -19,6 +19,7 @@ const BASE: StatusData = {
 	skills: 3,
 	customCommands: 4,
 	mcpServers: [],
+	mcpConfigured: [],
 	lspLabel: 'no issues · refreshed after code changes',
 	steeringLabel: 'disabled',
 	watchdogLabel: 'off',

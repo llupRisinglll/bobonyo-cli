@@ -31,6 +31,13 @@ if (resumeIndex !== -1) {
 	const ref = cliArgs[resumeIndex + 1];
 	process.env.NANOCODER_RESUME = ref && !ref.startsWith('-') ? ref : 'last';
 }
+// `--continue` is an alias for `--resume last` (or `--continue <id>`).
+const continueIndex = cliArgs.indexOf('--continue');
+if (continueIndex !== -1) {
+	const ref = cliArgs[continueIndex + 1];
+	process.env.NANOCODER_RESUME =
+		ref && !ref.startsWith('-') ? ref : 'last';
+}
 const providerIndex = cliArgs.indexOf('--provider');
 if (providerIndex !== -1) {
 	const ref = cliArgs[providerIndex + 1];

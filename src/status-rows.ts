@@ -19,6 +19,7 @@ export interface StatusData {
 	skills: number;
 	customCommands: number;
 	mcpServers: string[];
+	mcpConfigured: string[];
 	lspLabel: string;
 	steeringLabel: string;
 	watchdogLabel: string;
@@ -60,9 +61,16 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 			label: 'MCP servers',
 			value:
 				data.mcpServers.length === 0
-					? 'none connected'
+					? data.mcpConfigured.length === 0
+						? 'none configured'
+						: `${data.mcpConfigured.join(', ')} (connecting…)`
 					: data.mcpServers.join(', '),
-			valueFg: data.mcpServers.length === 0 ? undefined : 'success',
+			valueFg:
+				data.mcpServers.length > 0
+					? 'success'
+					: data.mcpConfigured.length > 0
+						? 'warning'
+						: undefined,
 		},
 		{
 			label: 'LSP',

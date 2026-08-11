@@ -89,6 +89,7 @@ import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {buildStatusRows} from './status-rows';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
+import {detectLanguageServers} from './lsp';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {trustDecision} from './trust';
@@ -2326,14 +2327,17 @@ export function App() {
 				skills: loadSkills().length,
 				customCommands: loadCustomCommands().length,
 				mcpServers: mcpServers(),
+				mcpConfigured: loadMCPConfig().map(server => server.id),
 				// B21: auto-diagnostics refresh after EVERY tool turn, code
 				// changes (write/edit) never leave the LSP stale.
 				lspLabel:
-					diagnosticsCount() > 0
-						? `${diagnosticsCount()} issue${
+					(detectLanguageServers().join(', ') ||
+						'no language servers detected') +
+					(diagnosticsCount() > 0
+						? ` · ${diagnosticsCount()} issue${
 								diagnosticsCount() === 1 ? '' : 's'
-							} · refreshed after code changes`
-						: 'no issues · refreshed after code changes',
+							}`
+						: ''),
 				steeringLabel: steeringRef.enabled
 					? `enabled · ${steeringRef.rules.length} rules`
 					: 'disabled',

@@ -12,7 +12,7 @@ import {
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
-import {createMemo, createSignal, For, Show} from 'solid-js';
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	activeAgents,
 	activeEndpoint,
@@ -48,6 +48,7 @@ import {
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
+import {LiveStreamRows} from './live-stream';
 import {displayToolName, isFileWriteTool, toolFamily} from '../tools';
 import {
 	fence,
@@ -499,6 +500,11 @@ export function History(props: {height?: number}) {
 					),
 				);
 			} else if (message.role === 'tool') {
+				// RUNNING tool rows render in the LIVE region (their output
+				// streams). Including them here would re-read liveOutputs,
+				// re-run the whole settled memo on every output tick, and
+				// re-render every block (the tool-call flicker).
+				if (message.running) continue;
 				// Collect the maximal run of consecutive tool calls, then group
 				// same-family calls into compact blocks (expanding per-call).
 				const run: ChatMessage[] = [message];
@@ -609,7 +615,12 @@ export function History(props: {height?: number}) {
 			blockRefs.push({
 				ref: null,
 				start,
-				rows: renderIndex.length - start,
+				// Replies render a leading blank row (breakline before the
+				// response), so their block is one row taller.
+				rows:
+					renderIndex.length -
+					start +
+					(group.kind === 'reply' ? 1 : 0),
 			});
 		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
@@ -637,23 +648,59 @@ export function History(props: {height?: number}) {
 	 * so the formatting/indentation is identical while rendering and when
 	 * done (real-time consistency).
 	 */
-	const liveThoughtText = createMemo(() => {
-		if (!running() || !reasoning()) return '';
-		const frame = spinnerFrame();
-		return fence(
-			'thought',
-			'running',
-			`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
-				`└ ${tailLines(reasoning())}`,
-		);
+	const liveThoughtHeader = createMemo(() => {
+		if (!running() || !throttledReasoning()) return '';
+		// STATIC gear + fixed dots + 1/s timer: rendered as PLAIN TEXT (no
+		// markdown re-parse), so the thinking block can never flicker while
+		// the reasoning streams.
+		return `⚙ Thinking · (${formatElapsed(turnElapsed())})...`;
+	});
+	const liveThoughtTail = createMemo(() => {
+		if (!running() || !throttledReasoning()) return '';
+		return `└ ${tailLines(throttledReasoning())}`;
+	});
+	// Throttle the STREAMING REPLY to ~7 updates/sec (the provider streams
+	// per word, which would re-parse the live markdown 30+ times a second and
+	// flicker). The settled reply is unaffected.
+	const [throttledStreaming, setThrottledStreaming] = createSignal('');
+	// Throttle the REASONING tail the same way (the thought block must not
+	// re-parse per reasoning word either).
+	const [throttledReasoning, setThrottledReasoning] = createSignal('');
+	createEffect(() => {
+		const timer = setInterval(() => {
+			setThrottledStreaming(streaming());
+			setThrottledReasoning(reasoning());
+		}, 150);
+		return () => clearInterval(timer);
 	});
 	const liveReplyText = createMemo(() =>
-		running() && streaming() ? streaming() : '',
+		running() && throttledStreaming() ? throttledStreaming() : '',
 	);
 	// The streaming reply's glyph blinks (`~✦~` = dim via strikethrough).
-	const liveReplyBlink = createMemo(() =>
-		running() && (spinnerFrame() >> 2) % 2 === 0,
-	);
+	/**
+	 * RUNNING tool rows, rendered in the live region with their streaming
+	 * output (the settled memo skips them so it never re-runs mid-stream).
+	 * PLAIN text rows (LiveStreamRows) so the block never flickers.
+	 */
+	const liveToolRows = createMemo(() => {
+		if (!running()) return [];
+		const rows: Array<{header: string; lines: string[]}> = [];
+		for (const message of messages()) {
+			if (message.role === 'tool' && message.running && message.tool) {
+				const outputLines = (liveOutput(message) ?? '')
+					.replace(/\r\n/g, '\n')
+					.replace(/\s+$/, '')
+					.split('\n')
+					.filter(line => line !== '')
+					.slice(-3);
+				rows.push({
+					header: `✦ ${displayToolName(message.tool.name)}(${message.tool.detail})`,
+					lines: outputLines.map(line => `  └   ${line}`),
+				});
+			}
+		}
+		return rows;
+	});
 	const lines = createMemo(() => renderText);
 
 	/**
@@ -808,18 +855,23 @@ export function History(props: {height?: number}) {
 					};
 					if (block.kind === 'reply') {
 						return (
-						<box flexDirection="row">
-							<text
-								fg={colors().secondary}
-								attributes={dim()}
-							>
-								✦{' '}
-							</text>
-							<box flexGrow={1}>
-								<markdown
-									ref={setRef}
-									{...markdownProps}
-								/>
+						<box flexDirection="column">
+							{/* Breakline before every response (parity: the
+							    original's reply margin). */}
+							<box height={1} />
+							<box flexDirection="row">
+								<text
+									fg={colors().secondary}
+									attributes={dim()}
+								>
+									✦{' '}
+								</text>
+								<box flexGrow={1}>
+									<markdown
+										ref={setRef}
+										{...markdownProps}
+									/>
+								</box>
 							</box>
 						</box>
 						);
@@ -832,30 +884,29 @@ export function History(props: {height?: number}) {
 					);
 				}}
 			</For>
-			{/* LIVE THOUGHT: its own node streams every frame; it is NOT part
-			    of the settled For, so the ticker can never touch settled
-			    blocks. */}
-			<Show when={liveThoughtText()}>
-				<markdown
+			{/* LIVE THOUGHT: PLAIN TEXT (no markdown re-parse) so the thinking
+			    block can never flicker while reasoning streams. */}
+			<Show when={liveThoughtHeader()}>
+				<box
 					ref={element => {
 						liveThoughtRef = element as never;
-						liveThoughtLines = liveThoughtText()
-							.replace(/\s+$/, '')
-							.split('\n').length;
+						liveThoughtLines = 2;
 					}}
-					content={liveThoughtText()}
-					streaming={running()}
-					fg={colors().text}
-					syntaxStyle={syntaxStyle()}
-					internalBlockMode="top-level"
-					renderNode={renderNode}
-					treeSitterClient={treeSitter}
-					tableOptions={{
-						style: 'grid',
-						borders: true,
-						widthMode: 'content',
-					}}
-				/>
+					flexDirection="column"
+				>
+					<text fg={colors().secondary} attributes={dim()}>
+						{liveThoughtHeader()}
+					</text>
+					<text fg={colors().secondary} attributes={dim()}>
+						{liveThoughtTail()}
+					</text>
+				</box>
+			</Show>
+			{/* RUNNING tool rows (streaming output) — their own node so the
+			    settled blocks never re-render mid-stream. PLAIN text (no
+			    markdown re-parse) so the block can never flicker. */}
+			<Show when={liveToolRows().length > 0}>
+				<LiveStreamRows rows={liveToolRows()} />
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are
@@ -864,7 +915,7 @@ export function History(props: {height?: number}) {
 				<box flexDirection="row">
 					<text
 						fg={colors().secondary}
-						attributes={liveReplyBlink() ? dim() : undefined}
+						attributes={dim()}
 					>
 						✦{' '}
 					</text>
@@ -1042,9 +1093,10 @@ function singleToolRow(message: ChatMessage, key: string): string {
 		: message.tool.name === 'execute_bash' && message.kind === 'info'
 			? 'bg'
 			: 'done';
-	// 500ms halves (5 frames × 100ms), parity with the original ToolGlyph's
-	// 500ms toggle; the previous 400ms blink felt excessive while streaming.
-	const blinkOn = spinnerFrame() % 10 < 5;
+	// Settled rows never blink (running rows stream in the LIVE region, which
+	// owns the blink) — reading spinnerFrame here would re-run the whole
+	// settled memo every tick and re-render every block (the flicker loop).
+	const blinkOn = true;
 	return formatToolEntry(
 		{...message.tool, output: liveOutput(message)},
 		expandedBlocks()[key] ?? toolsExpanded(),
@@ -1079,7 +1131,8 @@ function agentRow(message: ChatMessage): string {
 			? `\n     ${statsText}`
 			: '';
 	const statusKind: RowStatus = running ? 'running' : 'done';
-	const blinkOn = spinnerFrame() % 10 < 5;
+	// Settled agent rows never blink (running agents stream live).
+	const blinkOn = true;
 	const header = running && !blinkOn
 		? `✦ Ran ${detail} ${status}`.replace(/^[✦⚙]/, ' ')
 		: `✦ Ran ${detail} ${status}`;

@@ -7,8 +7,8 @@
  */
 
 import {existsSync, readFileSync} from 'node:fs';
-import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {nanocoderConfigDir} from './nanocoder-paths';
 
 export interface MCPServerConfig {
 	id: string;
@@ -35,9 +35,35 @@ export function loadMCPConfig(): MCPServerConfig[] {
 			// fall through to the file
 		}
 	}
-	const base =
-		process.env.NANOCODER_CONFIG_DIR ??
-		join(homedir(), '.local', 'share', 'bobonyo');
+	const base = process.env.NANOCODER_CONFIG_DIR ?? nanocoderConfigDir();
+	// The original nanocoder stores MCP servers in `.mcp.json` as
+	// `{ "mcpServers": { "<name>": { command, args, env } } }` — read that
+	// FIRST so a nanocoder-configured MCP setup is detected.
+	try {
+		const dotFile = join(base, '.mcp.json');
+		if (existsSync(dotFile)) {
+			const dot = JSON.parse(readFileSync(dotFile, 'utf8')) as {
+				mcpServers?: Record<
+					string,
+					{command?: string; args?: string[]; env?: Record<string, string>}
+				>;
+			};
+			for (const [name, server] of Object.entries(dot.mcpServers ?? {})) {
+				if (!server?.command) continue;
+				const key = name.toLowerCase();
+				if (!parsed.some(existing => existing.id.toLowerCase() === key)) {
+					parsed.push({
+						id: name,
+						command: server.command,
+						args: server.args ?? [],
+						env: server.env,
+					});
+				}
+			}
+		}
+	} catch {
+		// corrupt .mcp.json — fall through
+	}
 	try {
 		const file = join(base, 'mcp.json');
 		if (existsSync(file)) {
@@ -46,7 +72,10 @@ export function loadMCPConfig(): MCPServerConfig[] {
 			};
 			const ids = new Set(parsed.map(server => server.id.toLowerCase()));
 			for (const server of fileConfig.servers ?? []) {
-				if (!ids.has(server.id.toLowerCase())) parsed.push(server);
+				if (!ids.has(server.id.toLowerCase())) {
+					parsed.push(server);
+					ids.add(server.id.toLowerCase());
+				}
 			}
 		}
 	} catch {
