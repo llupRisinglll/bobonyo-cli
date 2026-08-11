@@ -129,6 +129,9 @@ export const glyphBlinkOn = (frame: number): boolean =>
 /** `Working` dots animate 1→2→3. */
 export const workingDots = (frame: number): string =>
 	'.'.repeat(((frame >> 2) % 3) + 1);
+/** Lazy-load dots animate 1→2→3 (every 200ms on the 100ms ticker). */
+export const loadingDots = (frame: number): string =>
+	'.'.repeat(((frame >> 1) % 3) + 1);
 /**
  * Real-time elapsed timer (parity: the Working/Thinking headers): renders
  * `52s`, `1m 2s`, `1h 2m 3s`, never a bare seconds count past 60.
@@ -261,11 +264,17 @@ export function showToast(message: string): void {
 	toastTimer = setTimeout(() => setToast(''), 2500);
 }
 /**
- * Post-open lazy-load indicator (parity: codex loads MCP/LSP/skills after
- * the app paints). Non-empty while background init is still running; the
- * input area renders it with the spinner so the user sees what's loading.
+ * One background lazy-load item (parity: codex loads MCP/LSP/skills after
+ * the app paints). Each item animates and clears INDEPENDENTLY, because the
+ * scans finish at different times (skills are file reads, MCP is a stdio
+ * handshake, LSP is a sync binary scan).
  */
-export const [startupLoading, setStartupLoading] = createSignal('');
+export interface StartupLoad {
+	id: string;
+	label: string;
+}
+/** Post-open lazy-load indicator rows, one per still-loading service. */
+export const [startupLoading, setStartupLoading] = createSignal<StartupLoad[]>([]);
 /** MCP servers that finished connecting (for /status + indicators). */
 export const [mcpServers, setMcpServers] = createSignal<string[]>([]);
 /** Status-line footer visibility (Settings → Appearance → Status Line). */

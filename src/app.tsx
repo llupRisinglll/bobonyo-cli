@@ -362,7 +362,29 @@ export function App() {
 	// Post-open lazy loading: custom-tool file scans + MCP stdio handshakes
 	// run in the background with a spinner indicator (parity: codex).
 	const startupInit = async () => {
-		setStartupLoading('Loading skills · tools · MCP · LSP…');
+		// Each service loads on its OWN row and clears INDEPENDENTLY (skills
+		// are file reads, MCP is a stdio handshake, LSP a sync binary scan —
+		// one can finish long before the others).
+		const startedAt = Date.now();
+		setStartupLoading([
+			{id: 'skills', label: 'Loading skills · tools'},
+			{id: 'mcp', label: 'Loading MCP'},
+			{id: 'lsp', label: 'Loading LSP'},
+		]);
+		// MIN_LOAD_MS floor: MCP can connect in one tick and the LSP scan is
+		// synchronous, so without a floor the rows would vanish before the
+		// glyph/dots could ever be seen animating.
+		const MIN_LOAD_MS = 600;
+		const finish = (id: string) => {
+			const wait = Math.max(0, MIN_LOAD_MS - (Date.now() - startedAt));
+			setTimeout(
+				() =>
+					setStartupLoading(prev =>
+						prev.filter(item => item.id !== id),
+					),
+				wait,
+			);
+		};
 		try {
 			for (const tool of loadCustomTools()) {
 				registerTool(tool.name, {
@@ -376,6 +398,7 @@ export function App() {
 					},
 				});
 			}
+			finish('skills');
 			for (const server of loadMCPConfig()) {
 				try {
 					const tools = await connectMCPServer(server);
@@ -400,12 +423,15 @@ export function App() {
 					// clearing without that server in /status.
 				}
 			}
+			finish('mcp');
 			// Pre-warm the LSP discovery cache so `/status` opens instantly;
 			// the indicator above the input covers it (parity: codex
 			// lazy-loads MCP/LSP/skills after the app paints).
 			detectLanguageServers();
-		} finally {
-			setStartupLoading('');
+			finish('lsp');
+		} catch {
+			// Best-effort init; never let the loader hang on a failure.
+			setStartupLoading([]);
 		}
 	};
 	// F5: register markdown-defined custom tools from the config dirs.
@@ -2134,7 +2160,9 @@ export function App() {
 		setSessionName(name);
 		if (currentSession) currentSession.name = name;
 		persist();
-		appendInfo(`Session renamed to "${name}".`);
+		// Session logs render as WARNING rows: yellow with the `✦` glyph
+		// (parity: the vision-fallback indicator), never plain info.
+		appendWarning(`  ✦ Session renamed to "${name}".`);
 	};
 
 	const checkpoint = (name: string) => {
@@ -2575,11 +2603,11 @@ export function App() {
 		// open (the modal overlays ONLY the history region).
 		Math.max(
 			4,
-			terminalHeight() -
+				terminalHeight() -
 				inputBoxRows() -
 				2 -
 				(running() ? 1 : 0) -
-				(startupLoading() ? 1 : 0) -
+				startupLoading().length -
 				(completionMessage() ? 1 : 0) -
 				(exitConfirm() ? 1 : 0) -
 				(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -

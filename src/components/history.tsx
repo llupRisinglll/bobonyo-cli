@@ -73,7 +73,7 @@ import {
 	type RowStatus,
 } from '../row-highlight';
 import {colors} from '../theme';
-import {buildBannerBox} from '../banner';
+import {buildBannerBox, hasConversation} from '../banner';
 import {historyFillWidth} from '../history-width';
 
 const PREVIEW_LINES = 3;
@@ -477,8 +477,10 @@ export function History(props: {height?: number}) {
 		};
 		const all = messages();
 		// Welcome block (parity: nanocoder shows a welcome message on an
-		// empty conversation instead of a blank transcript).
-		if (all.length === 0 && !running()) {
+		// empty conversation instead of a blank transcript). SYSTEM logs
+		// (e.g. `Session renamed to "x"`) carry a `kind` and must NOT hide
+		// the banner — only real conversation rows do.
+		if (!hasConversation(all) && !running()) {
 			pushBlock(
 				buildWelcomeBanner(
 					titleShape(),

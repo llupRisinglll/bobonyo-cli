@@ -44,6 +44,8 @@ import {
 	streaming,
 	turnElapsed,
 	workingDots,
+	loadingDots,
+	glyphBlinkOn,
 	formatElapsed,
 	startupLoading,
 	setHistoryIndex,
@@ -782,15 +784,32 @@ export function InputBox(props: {
 					</text>
 				</box>
 			</Show>
-			{/* Post-open lazy-load indicator (MCP/skills/tools), spinner +
-			    what is loading, cleared when the background init finishes. */}
-			<Show when={startupLoading() && !busy()}>
-				<box height={1}>
-					<text fg={colors().secondary} attributes={dim()}>
-						{SPINNER_FRAMES[spinnerFrame() % SPINNER_FRAMES.length]}{' '}
-						{startupLoading()}
-					</text>
-				</box>
+			{/* Post-open lazy-load indicator: ONE ROW PER service, each with
+			    a BLINKING secondary ✦ glyph + ANIMATED dots, clearing
+			    independently as its scan finishes (MCP/LSP/skills load at
+			    different speeds). */}
+			<Show when={startupLoading().length > 0 && !busy()}>
+				<For each={startupLoading()}>
+					{(item) => (
+						<box height={1} flexDirection="row">
+							{/* Width-stable glyph cell: the hidden blink
+							    frame keeps a space so nothing shifts. */}
+							<text
+								fg={colors().secondary}
+								attributes={dim()}
+							>
+								{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
+							</text>
+							<text
+								fg={colors().secondary}
+								attributes={dim()}
+							>
+								{item.label}
+								{loadingDots(spinnerFrame())}
+							</text>
+						</box>
+					)}
+				</For>
 			</Show>
 			{/* Static completion line above the input (parity: the Working
 			    indicator slot, diamond glyph + secondary). */}

@@ -3,6 +3,18 @@
  * unit-tested). Returns the boxed lines WITHOUT the ```banner fence or the
  * trailing tip.
  */
+import type {ChatMessage} from './state';
+
+/**
+ * Whether the transcript holds a REAL conversation. System log rows carry a
+ * `kind` (`info`/`warning` — e.g. `Session renamed to "x"`), and they must
+ * NOT hide the welcome banner on an otherwise empty conversation. Anything
+ * without a kind (user turns, assistant replies, tool rows, errors) counts.
+ */
+export function hasConversation(messages: ChatMessage[]): boolean {
+	return messages.some(message => !message.kind);
+}
+
 export function buildBannerBox(options: {
 	titleShape: string;
 	model: string;

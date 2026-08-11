@@ -1,5 +1,6 @@
 import {describe, expect, test} from 'bun:test';
-import {buildBannerBox} from './banner';
+import {buildBannerBox, hasConversation} from './banner';
+import type {ChatMessage} from './state';
 
 const BASE = {
 	titleShape: 'powerline-angled',
@@ -17,6 +18,44 @@ function keyColumn(line: string, key: string): number {
 	const text = interior(line);
 	return text.indexOf(key);
 }
+
+describe('hasConversation', () => {
+	const info = (content: string): ChatMessage => ({
+		role: 'assistant',
+		content,
+		kind: 'info',
+	});
+	const warning = (content: string): ChatMessage => ({
+		role: 'assistant',
+		content,
+		kind: 'warning',
+	});
+
+	test('system logs never count as conversation (banner stays)', () => {
+		expect(hasConversation([])).toBe(false);
+		expect(hasConversation([info('Session renamed to "x".')])).toBe(false);
+		expect(
+			hasConversation([warning('  ✦ Vision fallback: mock analyzed')]),
+		).toBe(false);
+	});
+
+	test('any real row hides the banner', () => {
+		expect(hasConversation([{role: 'user', content: 'hello'}])).toBe(true);
+		expect(
+			hasConversation([{role: 'assistant', content: 'a reply'}]),
+		).toBe(true);
+		expect(
+			hasConversation([
+				info('Session renamed to "x".'),
+				{
+					role: 'tool',
+					content: '',
+					tool: {name: 'bash', detail: '', output: ''},
+				},
+			]),
+		).toBe(true);
+	});
+});
 
 describe('buildBannerBox', () => {
 	test('all keys start on the same column', () => {

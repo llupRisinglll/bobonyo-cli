@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {glyphBlinkOn} from './state';
+import {glyphBlinkOn, loadingDots} from './state';
 
 describe('glyphBlinkOn', () => {
 	test('blinks on a 500ms cadence (4 frames per 100ms tick)', () => {
@@ -11,5 +11,17 @@ describe('glyphBlinkOn', () => {
 		expect(glyphBlinkOn(6)).toBe(false);
 		expect(glyphBlinkOn(7)).toBe(false);
 		expect(glyphBlinkOn(8)).toBe(true);
+	});
+});
+
+describe('loadingDots', () => {
+	test('cycles 1→2→3 every 200ms', () => {
+		expect(loadingDots(0)).toBe('.');
+		expect(loadingDots(1)).toBe('.');
+		expect(loadingDots(2)).toBe('..');
+		expect(loadingDots(3)).toBe('..');
+		expect(loadingDots(4)).toBe('...');
+		expect(loadingDots(5)).toBe('...');
+		expect(loadingDots(6)).toBe('.');
 	});
 });
