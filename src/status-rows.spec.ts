@@ -10,7 +10,7 @@ const BASE: StatusData = {
 	customCommands: 4,
 	mcpServers: [],
 	mcpConfigured: [],
-	lspLabel: 'no issues · refreshed after code changes',
+	lspLabel: 'typescript-language-server, rust-analyzer, clangd',
 	rulesFile: '/work/AGENTS.md',
 	steeringLabel: 'disabled',
 	watchdogLabel: 'off',
@@ -48,6 +48,30 @@ describe('buildStatusRows', () => {
 		expect(row?.valueFg).toBeUndefined();
 		const none = buildStatusRows({...BASE, rulesFile: 'none'});
 		expect(none.find(r => r.label === 'AGENTS.md')?.valueFg).toBe('warning');
+	});
+
+	test('LSP row is green when servers are detected', () => {
+		const rows = buildStatusRows(BASE);
+		const lsp = rows.find(r => r.label === 'LSP');
+		expect(lsp?.value).toBe(
+			'typescript-language-server, rust-analyzer, clangd',
+		);
+		// The label is the SERVER LIST, so a working LSP is GREEN (the old
+		// check looked for "no issues", which the label never contains).
+		expect(lsp?.valueFg).toBe('success');
+	});
+
+	test('LSP row warns when no servers are detected or issues exist', () => {
+		const none = buildStatusRows({
+			...BASE,
+			lspLabel: 'no language servers detected',
+		});
+		expect(none.find(r => r.label === 'LSP')?.valueFg).toBe('warning');
+		const issues = buildStatusRows({
+			...BASE,
+			lspLabel: 'typescript-language-server · 3 issues',
+		});
+		expect(issues.find(r => r.label === 'LSP')?.valueFg).toBe('warning');
 	});
 
 	test('does not duplicate the status line or input corner', () => {

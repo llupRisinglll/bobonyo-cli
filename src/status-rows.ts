@@ -46,11 +46,15 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 		{
 			label: 'LSP',
 			value: data.lspLabel,
-			valueFg: data.lspLabel.includes('no issues')
-				? 'success'
-				: data.lspLabel.includes('issue')
+			// GREEN when servers are detected (the label is the server
+			// list — it never literally says "no issues", which is why the
+			// old check never turned green); warning when none are detected
+			// or diagnostics found real issues (`N issues`).
+			valueFg: /\d+ issues?/.test(data.lspLabel)
+				? 'warning'
+				: data.lspLabel.startsWith('no language servers')
 					? 'warning'
-					: undefined,
+					: 'success',
 		},
 		{
 			label: 'AGENTS.md',
