@@ -18,7 +18,6 @@ import {
 	activeEndpoint,
 	expandedBlocks,
 	gearGlyph,
-	glyphBlinkOn,
 	hoverRow,
 	liveOutputs,
 	messages,
@@ -29,7 +28,6 @@ import {
 	setThoughtExpanded,
 	setToolsExpanded,
 	streaming,
-	spinnerFrame,
 	turnElapsed,
 	settingsOpen,
 	statusOpen,
@@ -57,6 +55,7 @@ import {
 	rowLanguage,
 } from '../tool-display';
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
+import {LiveToolRows} from './live-tool-rows';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -917,15 +916,17 @@ export function History(props: {height?: number}) {
 				}}
 			</For>
 			{/* LIVE THOUGHT: PLAIN TEXT (no markdown re-parse) so the thinking
-			    block can never flicker while reasoning streams. */}
+			    block can never flicker while reasoning streams. The leading
+			    breakline matches the settled blank row before the block. */}
 			<Show when={liveThoughtHeader()}>
 				<box
 					ref={element => {
 						liveThoughtRef = element as never;
-						liveThoughtLines = 2;
+						liveThoughtLines = 3;
 					}}
 					flexDirection="column"
 				>
+					<box height={1} />
 					<text fg={colors().secondary} attributes={dim()}>
 						{liveThoughtHeader()}
 					</text>
@@ -935,53 +936,12 @@ export function History(props: {height?: number}) {
 				</box>
 			</Show>
 			{/* RUNNING tool rows (streaming output) — their own node so the
-			    settled blocks never re-render mid-stream. The rows are
-			    tokenized ONCE per throttled update and rendered as PLAIN
-			    text cells (never markdown), so OpenTUI repaints only the
-			    changed cells — the same syntax colors/spacing as settled
-			    rows, with ZERO re-parse flicker. The blinking glyph is a
-			    separate cell and never re-tokenizes the row. */}
+			    settled blocks never re-render mid-stream. Rendered ONLY via
+			    the LiveToolRows component (plain text cells, never markdown):
+			    same syntax colors/spacing as settled rows, ZERO re-parse
+			    flicker, and each row carries the settled leading breakline. */}
 			<Show when={liveToolRows().length > 0}>
-				<For each={liveToolRows()}>
-					{(row) => (
-						<box flexDirection="column">
-							<box flexDirection="row">
-								<text
-									fg={colors().secondary}
-									attributes={dim()}
-								>
-									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
-								</text>
-								<For each={row.header}>
-									{(c) => (
-										<text
-											fg={c.fg as never}
-											attributes={c.attributes}
-										>
-											{c.text}
-										</text>
-									)}
-								</For>
-							</box>
-							<For each={row.body}>
-								{(line) => (
-									<box flexDirection="row">
-										<For each={line}>
-											{(c) => (
-												<text
-													fg={c.fg as never}
-													attributes={c.attributes}
-												>
-													{c.text}
-												</text>
-											)}
-										</For>
-									</box>
-								)}
-							</For>
-						</box>
-					)}
-				</For>
+				<LiveToolRows rows={liveToolRows()} />
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are

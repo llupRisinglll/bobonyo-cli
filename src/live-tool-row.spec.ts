@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import {liveRowSegments, splitChunksByLine} from './live-tool-row';
 import {tokenizeBashRow} from './row-highlight';
 import {colors} from './theme';
+import {formatOutputTail} from './tool-display';
 
 describe('splitChunksByLine', () => {
 	test('splits a chunk stream on newline separators', () => {
@@ -36,5 +37,24 @@ describe('liveRowSegments', () => {
 		expect(joined).toContain('"line $i"');
 		expect(body.length).toBe(1);
 		expect(body[0]!.map(c => c.text).join('')).toBe('  └   line 1');
+	});
+
+	test('live body lines are byte-identical to the settled output tail', () => {
+		// The settled row and the live row both go through formatOutputTail,
+		// so the `  └   ` container + cap + `+N lines` footer must match
+		// exactly while streaming and when done (spacing parity).
+		const output =
+			'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7';
+		const settledTail = formatOutputTail(output, false).split('\n');
+		const {body} = liveRowSegments(
+			`Bash(echo hi)\n${settledTail.join('\n')}`,
+			'bashrow',
+			'running',
+			colors(),
+			80,
+		);
+		expect(body.map(line => line.map(c => c.text).join(''))).toEqual(
+			settledTail,
+		);
 	});
 });
