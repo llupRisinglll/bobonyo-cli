@@ -30,6 +30,32 @@ export function DetailsModal(props: {
 	const lines = () => props.content.replace(/\s+$/, '').split('\n');
 	const [scroll, setScroll] = createSignal(0);
 
+	// Color each line like the tool rows: `✦ Name(detail)` headers primary,
+	// `└`/indented output + `⎿` summaries secondary, everything else text.
+	const colorLine = (
+		line: string,
+	): Array<{text: string; fg: string; attrs?: number}> => {
+		if (/^✦\s*[A-Za-z]/.test(line)) {
+			const m = line.match(/^(✦\s*)([A-Za-z][A-Za-z0-9 _:-]*?)(.*)$/);
+			if (m) {
+				return [
+					{text: m[1] ?? '', fg: colors().secondary, attrs: dim()},
+					{text: m[2] ?? '', fg: colors().primary, attrs: bold()},
+					{text: m[3] ?? '', fg: colors().secondary, attrs: dim()},
+				];
+			}
+		}
+		if (
+			/^\s*└/.test(line) ||
+			/^\s+/.test(line) ||
+			/^\s*⎿/.test(line) ||
+			/^\s*```/.test(line)
+		) {
+			return [{text: line, fg: colors().secondary, attrs: dim()}];
+		}
+		return [{text: line, fg: colors().text}];
+	};
+
 	useKeyboard(event => {
 		if (event.name === 'escape') {
 			props.onClose();
@@ -122,14 +148,18 @@ export function DetailsModal(props: {
 							}))}
 					>
 						{(line) => (
-							<text
-								fg={colors().text}
-								attributes={
-									line.index === scroll() ? bold() : undefined
-								}
-							>
-								{line.text || ' '}
-							</text>
+							<box flexDirection="row">
+								<For each={colorLine(line.text)}>
+									{(segment) => (
+										<text
+											fg={segment.fg}
+											attributes={segment.attrs}
+										>
+											{segment.text}
+										</text>
+									)}
+								</For>
+							</box>
 						)}
 					</For>
 					<Show when={lines().length > cardHeight() - 7}>

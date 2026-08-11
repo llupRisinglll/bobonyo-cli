@@ -217,6 +217,33 @@ describe('tokenizeUserMessage', () => {
 			expect(total).toBeLessThanOrEqual(width);
 		}
 	});
+
+	test('colors KNOWN commands and REAL attachment tokens in the content', () => {
+		const chunks = tokenizeUserMessage(
+			'❯ check /status and [Image #1]',
+			colors(),
+			0,
+			'1',
+		);
+		expect(rgb(chunks.find(c => c.text === '/status')!)).toBe(
+			themeRgb(colors().primary),
+		);
+		expect(rgb(chunks.find(c => c.text === '[Image #1]')!)).toBe(
+			themeRgb(colors().primary),
+		);
+	});
+
+	test('MANUALLY typed [Image #N] tokens stay plain (not real attachments)', () => {
+		const chunks = tokenizeUserMessage(
+			'❯ [Image #1] is not attached',
+			colors(),
+			0,
+			'',
+		);
+		expect(rgb(chunks.find(c => c.text === '[Image #1]')!)).toBe(
+			themeRgb(colors().text),
+		);
+	});
 });
 
 describe('group header colors (compact tally)', () => {

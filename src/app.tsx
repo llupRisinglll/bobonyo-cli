@@ -1217,13 +1217,14 @@ export function App() {
 
 		// The transcript shows the ORIGINAL user text; the provider sees the
 		// prompt with vision-description blocks substituted for [Image #N].
-		await runTurn(value, prompt);
+		await runTurn(value, prompt, attachments);
 		processQueue();
 	};
 
 	const runTurn = async (
 		value: string,
 		providerValue: string = value,
+		attachments?: Record<string, string>,
 	) => {
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
@@ -1240,7 +1241,13 @@ export function App() {
 
 		// B22: the transcript shows the original; the provider sees scrubbed
 		// text (placeholders are rehydrated in replies).
-		appendMessage({role: 'user', content: value});
+		appendMessage({
+			role: 'user',
+			content: value,
+			...(attachments && Object.keys(attachments).length > 0
+				? {attachments}
+				: {}),
+		});
 		const userMsg = {
 			role: 'user' as const,
 			content: scrubberRef.scrub(providerValue),

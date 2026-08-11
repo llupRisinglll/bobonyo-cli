@@ -2,6 +2,7 @@
 import {
 	CodeRenderable,
 	RGBA,
+	createTextAttributes,
 	getTreeSitterClient,
 	type RenderNodeContext,
 	type MouseEvent,
@@ -73,7 +74,7 @@ import {colors} from '../theme';
 import {buildBannerBox} from '../banner';
 import {historyFillWidth} from '../history-width';
 
-const PREVIEW_LINES = 4;
+const PREVIEW_LINES = 3;
 /**
  * Expanded per-call entries of every multi-call compact block, keyed by block
  * key. Clicking an expandable tally opens the DETAILS MODAL with these
@@ -160,6 +161,7 @@ function markHover(text: string): string {
  */
 export function History(props: {height?: number}) {
 	const renderer = useRenderer();
+	const dim = () => createTextAttributes({dim: true});
 	// OpenTUI's built-in tree-sitter grammars (ts/js/md) highlight fenced
 	// code blocks, attach the client so ` ```typescript ` previews get real
 	// syntax colors instead of a hand-rolled tokenizer. In the COMPILED
@@ -334,6 +336,10 @@ export function History(props: {height?: number}) {
 						token.text ?? '',
 						colors(),
 						historyFillWidth(terminalDimensions().width ?? 80),
+						// The fence language suffix carries the REAL
+						// attachment token numbers (`a13` = #1 + #3), so only
+						// genuine [Image #N]/[Text #N] tokens get colored.
+						String(token.lang ?? '').split(':')[2] ?? '',
 					),
 			}),
 		taskrow: (token, status, hovered) =>
@@ -418,6 +424,7 @@ export function History(props: {height?: number}) {
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
+			detailsOpen() ||
 			resumeOpen()
 		)
 			return false;
@@ -442,7 +449,19 @@ export function History(props: {height?: number}) {
 		start: number;
 		rows: number;
 	}> = [];
-	const transcriptBlocks = createMemo(() => {
+	/** Global rendered-row offset of the SETTLED content (live rows follow). */
+	let baseRowCount = 0;
+	/** The live streaming markdown node's ref (last block while running). */
+	let liveBlockRef: {screenY: number} | null = null;
+	/**
+	 * SETTLED blocks only: consecutive non-reply parts share ONE markdown
+	 * node; every REPLY gets its OWN padded node. The memo reads NO ticker
+	 * signals (spinnerFrame/turnElapsed), so during streaming the settled
+	 * blocks keep IDENTITY and OpenTUI never re-renders them, the whole
+	 * chatbox flashing with "christmas lights" was the settled blocks being
+	 * rebuilt every 100ms tick.
+	 */
+	const settledBlocks = createMemo(() => {
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
 		// the full-row-bg code blocks instead of keeping the old-width chunks.
@@ -487,7 +506,15 @@ export function History(props: {height?: number}) {
 			if (message.role === 'user') {
 				// User messages render as a surface-filled `❯ content` block
 				// (parity: nanocoder's arrow-style UserMessage background).
-				pushBlock(fence('usermsg', 'done', `❯ ${message.content}`));
+				const keys = Object.keys(message.attachments ?? {}).join('');
+				pushBlock(
+					fence(
+						'usermsg',
+						'done',
+						`❯ ${message.content}`,
+						keys ? `a${keys}` : '',
+					),
+				);
 			} else if (message.role === 'tool') {
 				// Collect the maximal run of consecutive tool calls, then group
 				// same-family calls into compact blocks (expanding per-call).
@@ -504,6 +531,9 @@ export function History(props: {height?: number}) {
 			} else {
 				if (message.reasoning) {
 					const thoughtKey = `thought-${i}`;
+					// Full reasoning text for the DETAILS modal (collapsed
+					// previews cap at PREVIEW_LINES=3; click opens the modal).
+					compactDetails.set(thoughtKey, message.reasoning.trim());
 					pushBlock(
 						settledThought(message.reasoning, message.durationSec, thoughtKey),
 						thoughtKey,
@@ -514,7 +544,9 @@ export function History(props: {height?: number}) {
 				// renders it DIM (the strikethrough style maps to dim).
 				if (message.content) {
 					pushBlock(
-						`~✦~ ${indentContinuations(message.content)}`,
+						// The `✦` glyph renders OUTSIDE the reply container
+						// (aligned with tool glyphs); the content is plain.
+						message.content,
 						undefined,
 						'reply',
 					);
@@ -534,41 +566,6 @@ export function History(props: {height?: number}) {
 			} else {
 				last.parts.push(part);
 			}
-		}
-
-		// Live region (running thought + streaming reply) becomes the LAST
-		// block, so it streams inside its own markdown node.
-		let liveBlock = '';
-		if (running()) {
-			const live: string[] = [];
-			// The Working indicator renders as a FIXED line above the input
-			// box (App), not inside the scrollable transcript.
-			const frame = spinnerFrame();
-			if (reasoning()) {
-				// Tail while streaming (last 4 lines), like a running bash.
-				live.push(
-					fence(
-						'thought',
-						'running',
-						// LIVE header: STATIC gear + REAL-TIME timer + animated
-						// dots, all secondary/dim. Thinking is not primary
-						// info, and the glyph must NOT toggle (⚙↔✦ at a dim
-						// color reads as a blink, not an animation).
-						`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
-							`└ ${tailLines(reasoning())}`,
-					),
-				);
-			}
-			if (streaming()) {
-				// The reply glyph BLINKS while the response is streaming
-				// (`~✦~` = dim via the strikethrough style).
-				const blink = (spinnerFrame() >> 2) % 2 === 0;
-				live.push(
-					`${blink ? '~✦~' : '✦'} ${indentContinuations(streaming())}`,
-				);
-			}
-			liveBlock = live.join('\n\n');
-			if (liveBlock) blocks.push({kind: 'md', parts: [{text: liveBlock}]});
 		}
 
 		const docLines: Array<{text: string; key?: string}> = [];
@@ -632,20 +629,52 @@ export function History(props: {height?: number}) {
 		renderText = renderIndex.map(index => docLines[index]?.text ?? '');
 		blockRanges = ranges;
 		currentBlock = block;
-		return {
-			blocks: blocks.map(group => ({
-				kind: group.kind,
-				text: group.parts
-					.map(part =>
-						part.text.replace(
-							/^(```+)(filediff|usermsg)(:[^:\n]+)/,
-							(_m, fenceChar, kind, status) =>
-								`${fenceChar}${kind}${status}:w${fillWidth}`,
-						),
-					)
-					.join('\n\n'),
-			})),
-		};
+		baseRowCount = renderIndex.length;
+		return blocks.map(group => ({
+			kind: group.kind,
+			text: group.parts
+				.map(part =>
+					part.text.replace(
+						/^(```+)(filediff|usermsg)(:[^:\n]+)/,
+						(_m, fenceChar, kind, status) =>
+							`${fenceChar}${kind}${status}:w${fillWidth}`,
+					),
+				)
+				.join('\n\n'),
+		}));
+	});
+	/**
+	 * LIVE block (running thought + streaming reply), computed on the ticker
+	 * signals ONLY, so its node re-renders every frame while settled content
+	 * stays untouched.
+	 */
+	const liveBlockText = createMemo(() => {
+		if (!running()) return '';
+		const frame = spinnerFrame();
+		const live: string[] = [];
+		if (reasoning()) {
+			live.push(
+				fence(
+					'thought',
+					'running',
+					`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
+						`└ ${tailLines(reasoning())}`,
+				),
+			);
+		}
+		if (streaming()) {
+			const blink = (spinnerFrame() >> 2) % 2 === 0;
+			live.push(
+				`${blink ? '~✦~' : '✦'} ${indentContinuations(streaming())}`,
+			);
+		}
+		return live.join('\n\n');
+	});
+	/** Render blocks = settled (stable identity) + live (last, streaming). */
+	const renderBlocks = createMemo(() => {
+		const settled = settledBlocks();
+		const live = liveBlockText();
+		return live ? [...settled, {kind: 'md' as const, text: live}] : settled;
 	});
 	const lines = createMemo(() => renderText);
 
@@ -661,6 +690,13 @@ export function History(props: {height?: number}) {
 			const top = entry.ref.screenY;
 			if (event.y >= top && event.y < top + entry.rows) {
 				return entry.start + (event.y - top);
+			}
+		}
+		// The LIVE block is the last one; its rows follow the settled base.
+		if (liveBlockRef) {
+			const top = liveBlockRef.screenY;
+			if (event.y >= top) {
+				return baseRowCount + (event.y - top);
 			}
 		}
 		return -1;
@@ -762,12 +798,20 @@ export function History(props: {height?: number}) {
 				onMouseOut: handleMouseOut,
 			} as any)}
 		>
-			{/* Replies render in their OWN padded container (the hard left gap
-			    that markdown re-wrapping or block normalization can never
-			    break); everything else stays one streaming markdown block. */}
-			<For each={transcriptBlocks().blocks}>
+			{/* Replies render with the glyph OUTSIDE the container (aligned
+			    with tool glyphs at column 1) and the markdown inside a box
+			    that starts after `✦ `, so every content line and re-wrap
+			    stays at column 3, never column 0. */}
+			<For each={renderBlocks()}>
 				{(block, index) => {
-					const isLast = index() === transcriptBlocks().blocks.length - 1;
+					const isLast = index() === renderBlocks().length - 1;
+					const setRef = (element: unknown): void => {
+						if (index() < blockRefs.length) {
+							blockRefs[index()]!.ref = element as never;
+						} else {
+							liveBlockRef = element as never;
+						}
+					};
 					const markdownProps = {
 						content: block.text,
 						streaming: running() && isLast,
@@ -783,21 +827,25 @@ export function History(props: {height?: number}) {
 						},
 					};
 					return block.kind === 'reply' ? (
-						<box paddingLeft={2}>
-							<markdown
-								ref={element => {
-									blockRefs[index()]!.ref = element as never;
-								}}
-								{...markdownProps}
-							/>
+						<box flexDirection="row">
+							<text
+								fg={colors().secondary}
+								attributes={dim()}
+							>
+								✦{' '}
+							</text>
+							<box flexGrow={1}>
+								<markdown
+									ref={setRef}
+									{...markdownProps}
+								/>
+							</box>
 						</box>
 					) : (
-						<markdown
-							ref={element => {
-								blockRefs[index()]!.ref = element as never;
-							}}
-							{...markdownProps}
-						/>
+							<markdown
+								ref={setRef}
+								{...markdownProps}
+							/>
 					);
 				}}
 			</For>
@@ -905,6 +953,22 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 	return blocks.flatMap(block => {
 		if (block.length === 1) {
 			const key = block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+			// Expanded details for the modal (collapsed output caps at 3
+			// lines; clicking the `+N` footer opens the full scrollable view).
+			if (block[0]!.tool) {
+				compactDetails.set(
+					key,
+					formatToolEntry(
+						{
+							...block[0]!.tool,
+							output: liveOutput(block[0]!),
+						},
+						true,
+						'done',
+						true,
+					),
+				);
+			}
 			return [{text: singleToolRow(block[0]!, key), blockKey: key}];
 		}
 		const key =

@@ -95,6 +95,14 @@ export function InputBox(props: {
 		setInput(value.slice(0, c - len) + value.slice(c));
 		setCursorPos(c - len);
 	};
+	// Fast-erase (parity: opencode): holding Backspace accelerates, deleting
+	// up to 4 chars per repeat once the key has been held for a while.
+	let backspaceHold = 0;
+	const handleBackspace = (): void => {
+		backspaceHold += 1;
+		const extra = Math.min(3, Math.floor(backspaceHold / 10));
+		for (let i = 0; i <= extra; i++) deleteBeforeCursor();
+	};
 	const deleteAfterCursor = (): void => {
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
@@ -376,9 +384,18 @@ export function InputBox(props: {
 	const prompt = createMemo(() => pendingPrompt());
 	// Cursor blink: the App ticker advances `spinnerFrame` every 100ms; the
 	// caret toggles every 4 frames (400ms on/off, a standard terminal blink).
-	// A space replaces the caret on the OFF half so the placeholder never
-	// shifts columns.
-	const cursorVisible = createMemo(() => (spinnerFrame() >> 2) % 2 === 0);
+	// TYPING forces the caret VISIBLE and pauses the blink; a debounce timer
+	// resumes blinking ~900ms after the last key.
+	const [cursorForced, setCursorForced] = createSignal(false);
+	let cursorForceTimer: ReturnType<typeof setTimeout> | null = null;
+	const forceCursorVisible = (): void => {
+		setCursorForced(true);
+		if (cursorForceTimer) clearTimeout(cursorForceTimer);
+		cursorForceTimer = setTimeout(() => setCursorForced(false), 900);
+	};
+	const cursorVisible = createMemo(
+		() => cursorForced() || (spinnerFrame() >> 2) % 2 === 0,
+	);
 	// Dynamic tips appear once a turn has been Working for a while (parity:
 	// codex/ rotate contextual hints instead of a static tip).
 	const dynamicTip = createMemo(() => {
@@ -393,6 +410,11 @@ export function InputBox(props: {
 	});
 
 	useKeyboard(event => {
+		// Any key pauses the caret blink (visible while typing, debounced).
+		forceCursorVisible();
+		// Reset the fast-erase hold counter whenever a non-backspace key
+		// arrives (a fresh keypress means a fresh, deliberate press).
+		if (!isDeleteKey(event.name)) backspaceHold = 0;
 		const pendingText = prompt();
 		if (pendingText) {
 			if (event.name === 'escape') {
@@ -711,8 +733,9 @@ export function InputBox(props: {
 				return;
 			}
 			// Backspace deletes at the CURSOR, a whole atomic token when the
-			// cursor sits at its end, otherwise one char (parity: Ink).
-			deleteBeforeCursor();
+			// cursor sits at its end, otherwise one char, ACCELERATING while
+			// held (parity: opencode's fast-erase).
+			handleBackspace();
 			setExitConfirm(false);
 			return;
 		}
@@ -1045,18 +1068,27 @@ export function InputBox(props: {
 										</text>
 									)}
 								</For>
+								{/* BOX-BACKGROUND caret (parity: opencode): the
+								    char under the cursor is highlighted with
+								    the active-row background, so the text
+								    NEVER moves, shifts or duplicates. At the
+								    end of the line a highlighted space fills
+								    the block cell. */}
 								<text
-									attributes={
-										cursorVisible() ? undefined : dim()
+									bg={
+										cursorVisible()
+											? activeRow().bg
+											: undefined
+									}
+									fg={
+										cursorVisible()
+											? activeRow().fg
+											: undefined
 									}
 								>
-									{/* Block caret: it REPLACES the cell under
-									    the cursor (a real terminal cursor never
-									    inserts a cell). When hidden the line
-									    renders with no extra cell, no fake
-									    space, no duplicated character, no
-									    width shift. */}
-									{cursorVisible() ? '▌' : ''}
+									{cursorVisible()
+										? (line[cursorInfo().column] ?? ' ')
+										: ''}
 								</text>
 								<For
 									each={tokenizeInputLine(

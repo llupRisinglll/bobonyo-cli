@@ -15,6 +15,14 @@ is DONE only when verified live (or unit-tested) and committed.
 | 8 | Bug: typing `/rename` + space, cursor does not move (space invisible) | ✅ DONE | root cause: `wrapTextDetailed` trimmed trailing spaces so the caret snapped before the space; trailing spaces are now preserved + the caret maps after them; live capture `❯ /rename ▌` |
 | 9 | Bug: `/rename    asdasd` multiple spaces looked like a tab | ✅ DONE | same root cause as #8; spaces now render normally |
 | 10 | Keep a report tracker md with status | ✅ DONE | this file |
+| 11 | [PRIORITY] Chatbox flashes during "Working…" (christmas lights) | ✅ DONE | root cause: the transcript memo rebuilt EVERY markdown block each 100ms tick (spinnerFrame dependency). Split into SETTLED blocks (no ticker deps, stable identity) + a LIVE block (streams alone); verified: settled rows byte-identical across 3 captures 1s apart during streaming |
+| 12 | Pressing a key should pause the cursor blink (visible while typing, debounce-resume) | ✅ DONE | `cursorForced` signal + 900ms debounce timer on every keypress |
+| 13 | Fast backspace/erase (hold to accelerate, opencode parity) | ✅ DONE | `handleBackspace` deletes up to 4 chars per repeat once held |
+| 14 | Sent user messages should color commands + REAL [Box #n] tokens | ✅ DONE | `ChatMessage.attachments` records real attachment paths; the usermsg fence carries the real token numbers; `tokenizeUserMessage` colors known `/commands` + real tokens only (manual `[Image #1]` stays plain). Unit-tested |
+| 15 | Tool details modal missing color; arrow keys leaked to the chat | ✅ DONE | modal lines tokenized (primary tool names, secondary output); history + app key handlers gate on `detailsOpen` so arrows only scroll the modal |
+| 16 | All expand opens a modal (incl. thought); collapsed previews cap at 3 lines | ✅ DONE | thoughts, single tool rows and compact tallies all stash expanded details; clicks open the DetailsModal; `PREVIEW_LINES` = 3 |
+| 17 | Reply `✦` must align with tool glyphs (column 1), NOT indented | ✅ DONE | the reply glyph renders OUTSIDE the markdown container (row: glyph + content box); content + re-wraps start at column 3 |
+| 18 | Replace the caret with a box background (opencode-style) | ✅ DONE | the char under the cursor is highlighted with the active-row bg/fg; text never moves; verified insertions land correctly |
 
 ## Implementation notes (committed)
 
@@ -31,8 +39,16 @@ is DONE only when verified live (or unit-tested) and committed.
 - `src/client.ts`: system prompts updated to BoboNyo; OpenAI request body
   carries standard `tools` + `tool_calls` shapes.
 - `src/components/history.tsx`: transcript renders as multiple markdown blocks;
-  replies get padded containers; mouse hover/click maps through per-block row
-  offsets.
+  replies get padded containers with the glyph outside; SETTLED vs LIVE blocks
+  are split so streaming never re-renders settled content (flash fix); mouse
+  hover/click maps through per-block row offsets; all expandable content
+  (thoughts, tool rows, compact tallies) opens the DetailsModal; collapsed
+  previews cap at 3 lines; user-message tokens colored from real attachments.
+- `src/components/details-modal.tsx`: scrollable, colored (primary tool names,
+  secondary output), keys isolated from the chat behind it.
+- `src/components/input-box.tsx`: trailing-space wrap fix; attachments passed
+  through submit; box-background caret (typing pauses the blink via debounce);
+  fast-erase backspace; suggestions borderless + scrollable.
 - `src/components/input-box.tsx`: trailing-space wrap fix; attachments passed
   through submit; suggestions borderless + scrollable.
 - `src/components/details-modal.tsx`: compact-tally click opens a scrollable

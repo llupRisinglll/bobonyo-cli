@@ -1,5 +1,7 @@
 import {RGBA, createTextAttributes, type TextChunk} from '@opentui/core';
 import type {Colors} from './theme';
+import {commandNames, customCommandNames} from './commands';
+import {loadSkills} from './custom';
 import {
 	tokenizeBash,
 	tokenizeCode,
@@ -603,9 +605,48 @@ export function tokenizeUserMessage(
 	text: string,
 	colors: Colors,
 	width = 0,
+	realAttachments = '',
 ): TextChunk[] {
 	const palette = themeColors(colors);
 	const bg = RGBA.fromHex('#2a2a2a');
+	// Known `/commands` + REAL attachment token numbers (the fence language
+	// marker). A manually typed `[Image #1]` is NOT in the marker and stays
+	// plain text.
+	const known = new Set<string>([
+		...commandNames(),
+		...customCommandNames(),
+		...loadSkills().map(skill => `skill:${skill.name}`),
+	]);
+	const real = new Set(
+		realAttachments.split('').filter(char => /[0-9]/.test(char)),
+	);
+	const contentChunks = (content: string): TextChunk[] => {
+		const parts: Array<{text: string; token: boolean}> = [];
+		let cursor = 0;
+		for (const match of content.matchAll(/\[(?:Image|Text) #(\d+)\]|\/[^\s]*/g)) {
+			const at = match.index ?? 0;
+			if (at > cursor) {
+				parts.push({text: content.slice(cursor, at), token: false});
+			}
+			const token = match[0];
+			const isRealAttachment =
+				token.startsWith('[') && real.has(match[1] ?? '');
+			const isCommand =
+				token.startsWith('/') && known.has(token.slice(1));
+			parts.push({text: token, token: isRealAttachment || isCommand});
+			cursor = at + token.length;
+		}
+		if (cursor < content.length) {
+			parts.push({text: content.slice(cursor), token: false});
+		}
+		if (parts.length === 0) parts.push({text: content, token: false});
+		return parts.map(part =>
+			chunk(
+				part.text,
+				part.token ? palette.fg.primary : palette.fg.text,
+			),
+		);
+	};
 	// The fenced token text carries a leading blank line after the opener,
 	// KEEP it as the bg-free breakline BEFORE the message (the separator is
 	// required; only its BACKGROUND was wrong). Blank rows render plain.
@@ -628,7 +669,7 @@ export function tokenizeUserMessage(
 			return fill(
 				[
 					chunk(m[1] ?? '', palette.fg.primary, bold()),
-					chunk(m[2] ?? '', palette.fg.text),
+					...contentChunks(m[2] ?? ''),
 				].map(c => ({...c, bg})),
 				line.length,
 			);

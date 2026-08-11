@@ -5,6 +5,13 @@ import type {Mode, ToolProfile} from './settings';
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
+	/**
+	 * REAL attachment paths (image/text) that produced the `[Image #N]` /
+	 * `[Text #N]` tokens in this user message. The history tokenizer only
+	 * highlights tokens that are ACTUALLY in this map, so a manually typed
+	 * `[Image #1]` never gets colored.
+	 */
+	attachments?: Record<string, string>;
 	running?: boolean;
 	error?: string;
 	/** Reasoning text that preceded this assistant message (Thought UI). */
