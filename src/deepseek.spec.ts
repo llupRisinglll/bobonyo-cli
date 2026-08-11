@@ -3,6 +3,7 @@ import {mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
+	cachedDeepSeekModels,
 	cacheStats,
 	DEEPSEEK_BALANCE_TTL_MS,
 	DEEPSEEK_MODELS_TTL_MS,
@@ -221,6 +222,36 @@ describe('disk cache (TTL + atomic write + multi-instance freshness)', () => {
 			'deepseek-v4-flash',
 		]);
 		expect(freshCachedBalance(loadDeepSeekCache(), key, at)).toBeUndefined();
+	});
+
+	test('cachedDeepSeekModels seeds the initial catalog from disk', () => {
+		const at = Date.now();
+		saveDeepSeekCache({
+			[key]: {
+				models: {ids: ['deepseek-v4-flash', 'deepseek-v4-pro'], at},
+			},
+		});
+		expect(
+			cachedDeepSeekModels(
+				{id: 'DeepSeek', baseUrl: 'https://api.deepseek.com'},
+				at,
+			),
+		).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+	});
+
+	test('cachedDeepSeekModels is undefined when absent or stale', () => {
+		const at = Date.now();
+		expect(
+			cachedDeepSeekModels({baseUrl: 'https://api.deepseek.com'}, at),
+		).toBeUndefined();
+		saveDeepSeekCache({
+			[key]: {
+				models: {ids: ['stale-model'], at: at - DEEPSEEK_MODELS_TTL_MS - 1},
+			},
+		});
+		expect(
+			cachedDeepSeekModels({baseUrl: 'https://api.deepseek.com'}, at),
+		).toBeUndefined();
 	});
 
 	test('a failed balance fetch falls back to the stale cached value', async () => {

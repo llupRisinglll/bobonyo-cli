@@ -142,6 +142,24 @@ export function staleCachedBalance(
 	return entries[key]?.balance;
 }
 
+/**
+ * Fresh model catalog from the DISK cache for a provider. Lets the app pick
+ * the initial model from the REAL DeepSeek catalog without waiting for a
+ * network round trip, so a config that omits the static `models` list (the
+ * models are fetched automatically) never falls back to mock-model-1 on a
+ * warm cache. Undefined when absent or stale (callers then fetch).
+ */
+export function cachedDeepSeekModels(
+	provider: DeepSeekEndpoint,
+	now = Date.now(),
+): string[] | undefined {
+	return freshCachedModels(
+		loadDeepSeekCache(),
+		cacheKey(provider.baseUrl),
+		now,
+	);
+}
+
 async function deepSeekGet(
 	baseUrl: string,
 	path: string,

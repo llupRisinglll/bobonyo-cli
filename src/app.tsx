@@ -92,6 +92,7 @@ import {buildStatusRows} from './status-rows';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
 import {
+	cachedDeepSeekModels,
 	cacheStats,
 	formatCacheHitLabel,
 	isDeepSeek,
@@ -287,87 +288,103 @@ export function App() {
 	// Provider init (E2): resolve the requested/first provider and publish the
 	// active endpoint; the client reads it for every request.
 	{
-		try {
-			const provider = resolveProvider();
-			const prefs = loadPreferences();
-			const preferredModel =
-				prefs.lastModel && provider.models.includes(prefs.lastModel)
-					? prefs.lastModel
-					: provider.models[0] ?? 'mock-model-1';
-			setActiveEndpoint({
-				id: provider.id,
-				name: provider.name ?? provider.id,
-				baseUrl: provider.baseUrl,
-				apiKey: provider.apiKeyResolved,
-				model: preferredModel,
-				models: provider.models,
-				modelEfforts: provider.modelEfforts,
-				contextWindow: provider.contextWindow ?? 128_000,
-				sdkProvider: provider.sdkProvider,
-				providerOptions: provider.providerOptions,
-				// EFFORT IS PER MODEL: the badge comes from the SELECTED
-				// model's catalog entry, never an env var.
-				effort: (provider.modelEfforts ?? {})[preferredModel],
-				promptCacheKey: provider.promptCacheKey,
-				alwaysAllow: provider.alwaysAllow,
-			});
-			savePreferences({lastProvider: provider.id, lastModel: preferredModel});
-			// E6: no declared context window → resolve from models.dev (cached,
-			// async; the ctx% indicator updates when it lands).
-			if (!provider.contextWindow) {
-				void resolveContextWindow(preferredModel).then(window => {
-					if (window && window > 0) {
-						setActiveEndpoint(prev => ({...prev, contextWindow: window}));
+		void (async () => {
+			try {
+				const provider = resolveProvider();
+				// DeepSeek catalogs are fetched live from `/models`. Seed the
+				// initial catalog from the DISK cache so the first model is a
+				// real DeepSeek model; when there is no static list AND no
+				// warm cache (the config normalizer would otherwise fall back
+				// to mock-model-1), wait for the fetch before picking a model.
+				let catalog = provider.models;
+				if (isDeepSeek(provider)) {
+					catalog = cachedDeepSeekModels(provider) ?? provider.models;
+					if (catalog.every(model => model === 'mock-model-1')) {
+						catalog = await refreshDeepSeekModels(provider);
 					}
-				});
-			}
-			if (provider.modelDiscoveryUrl) {
-				void discoverModels(provider).then(models => {
-					if (models.length > 0) {
-						setActiveEndpoint(prev => ({...prev, models}));
-					}
-				});
-			}
-			// DeepSeek live integration: balance on the status line + the
-			// fetched model catalog (both TTL-cached on disk, atomic writes,
-			// shared in-flight, stale-safe — see src/deepseek.ts).
-			if (isDeepSeek(provider)) {
-				void refreshDeepSeekBalance(provider).then(balance => {
-					if (balance) {
-						setDeepSeekBalance({
-							currency: balance.currency,
-							total: balance.total,
-							isAvailable: balance.isAvailable,
-						});
-					}
-				});
-				void refreshDeepSeekModels(provider).then(models => {
-					if (models.length > 0) {
-						setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
-						setActiveEndpoint(prev => ({...prev, models}));
-					}
-				});
-			}
-		} catch (error) {
-			appendInfo(
-				`Provider error: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-		// E2: fallback chain, every OTHER provider, in order, tried when the
-		// active one fails.
-		setFallbackEndpoints(
-			listProviders()
-				.filter(provider => provider.id !== activeEndpoint().id)
-				.map(provider => ({
+				}
+				const prefs = loadPreferences();
+				const preferredModel =
+					prefs.lastModel && catalog.includes(prefs.lastModel)
+						? prefs.lastModel
+						: catalog[0] ?? 'mock-model-1';
+				setActiveEndpoint({
 					id: provider.id,
+					name: provider.name ?? provider.id,
 					baseUrl: provider.baseUrl,
 					apiKey: provider.apiKeyResolved,
-					model: provider.models[0] ?? 'mock-model-1',
+					model: preferredModel,
+					models: catalog,
+					modelEfforts: provider.modelEfforts,
+					contextWindow: provider.contextWindow ?? 128_000,
 					sdkProvider: provider.sdkProvider,
 					providerOptions: provider.providerOptions,
+					// EFFORT IS PER MODEL: the badge comes from the SELECTED
+					// model's catalog entry, never an env var.
+					effort: (provider.modelEfforts ?? {})[preferredModel],
 					promptCacheKey: provider.promptCacheKey,
-				})),
-		);
+					alwaysAllow: provider.alwaysAllow,
+				});
+				savePreferences({lastProvider: provider.id, lastModel: preferredModel});
+				// E6: no declared context window → resolve from models.dev
+				// (cached, async; the ctx% indicator updates when it lands).
+				if (!provider.contextWindow) {
+					void resolveContextWindow(preferredModel).then(window => {
+						if (window && window > 0) {
+							setActiveEndpoint(prev => ({...prev, contextWindow: window}));
+						}
+					});
+				}
+				if (provider.modelDiscoveryUrl) {
+					void discoverModels(provider).then(models => {
+						if (models.length > 0) {
+							setActiveEndpoint(prev => ({...prev, models}));
+						}
+					});
+				}
+				// DeepSeek live integration: balance on the status line + the
+				// fetched model catalog (both TTL-cached on disk, atomic
+				// writes, shared in-flight, stale-safe — see src/deepseek.ts).
+				if (isDeepSeek(provider)) {
+					void refreshDeepSeekBalance(provider).then(balance => {
+						if (balance) {
+							setDeepSeekBalance({
+								currency: balance.currency,
+								total: balance.total,
+								isAvailable: balance.isAvailable,
+							});
+						}
+					});
+					// Deduped: if the init already awaited a fetch above, this
+					// returns the same result; on a warm cache it is instant.
+					void refreshDeepSeekModels(provider).then(models => {
+						if (models.length > 0) {
+							setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
+							setActiveEndpoint(prev => ({...prev, models}));
+						}
+					});
+				}
+			} catch (error) {
+				appendInfo(
+					`Provider error: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			// E2: fallback chain, every OTHER provider, in order, tried when
+			// the active one fails.
+			setFallbackEndpoints(
+				listProviders()
+					.filter(provider => provider.id !== activeEndpoint().id)
+					.map(provider => ({
+						id: provider.id,
+						baseUrl: provider.baseUrl,
+						apiKey: provider.apiKeyResolved,
+						model: provider.models[0] ?? 'mock-model-1',
+						sdkProvider: provider.sdkProvider,
+						providerOptions: provider.providerOptions,
+						promptCacheKey: provider.promptCacheKey,
+					})),
+			);
+		})();
 	}
 	// Runtime settings (mode/profile/message cap).
 	{

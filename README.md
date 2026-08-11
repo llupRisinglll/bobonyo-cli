@@ -79,8 +79,7 @@ juggle:
       {
         "name": "DeepSeek",
         "baseUrl": "https://api.deepseek.com/",
-        "apiKey": "sk-...",
-        "models": ["deepseek-v4-flash", "deepseek-v4-pro"]
+        "apiKey": "sk-..."
       },
       {
         "name": "Xiaomi",
@@ -92,6 +91,12 @@ juggle:
   }
 }
 ```
+
+DeepSeek is special: its `models` list is optional. bobonyo fetches the
+current catalog from the DeepSeek `/models` API automatically (and shows
+your remaining balance on the status line), so new models appear in
+`/model` without editing this file. A static `models` list, if you add one,
+is only used as an offline fallback when the API cannot be reached.
 
 Then switch models live with `/model`. The conversation follows you, and the
 model's reasoning effort shows next to its name.
