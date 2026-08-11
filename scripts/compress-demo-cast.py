@@ -174,19 +174,37 @@ def main() -> int:
     # input events keep their original absolute time. Redundant repaints
     # inside a collapsed run map to the same time as the run's first frame
     # and are dropped (they would replay the identical screen).
+    #
+    # The drop test is CONTENT-based, never time-based: several output
+    # events can legitimately share a timestamp (0.0-delta chunks), and a
+    # frame whose CHARACTERS changed at the same timestamp (for example the
+    # status line first painting `Cred: $5.06` after the balance fetch,
+    # which OpenTUI emits once and then never re-paints) must survive even
+    # though its time equals the previous frame's time.
     absolute = 0.0
     out_index = 0
     kept: list[tuple[float, str, str]] = []
     previous_desired: float | None = None
+    previous_content: str | None = None
     for delta, kind, data in raw_events:
         absolute += delta
-        desired = mapped[out_index] if kind == 'o' else absolute
+        content = None
         if kind == 'o':
+            idx = out_index
             out_index += 1
-            if desired == previous_desired:
+            desired = mapped[idx]
+            content = contents[idx]
+            if (
+                desired == previous_desired
+                and content == previous_content
+            ):
                 continue  # identical repaint inside a collapsed static run
+        else:
+            desired = absolute
         kept.append((desired, kind, data))
         previous_desired = desired
+        if content is not None:
+            previous_content = content
 
     # Apply the gap cap as a monotone warp: any gap above MAX_GAP_S is
     # absorbed once, so every event AFTER it shifts earlier by the same

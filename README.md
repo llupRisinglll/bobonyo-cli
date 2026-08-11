@@ -102,7 +102,7 @@ bobonyo is built to be the best terminal harness for DeepSeek. It talks to
 the DeepSeek API directly and puts the platform's own data on screen:
 
 - **Live balance on the status line.** Your remaining credit shows as
-  `Cred: $5.18` next to the mode and tune settings, refreshed every few
+  `Cred: $12.34` next to the mode and tune settings, refreshed every few
   minutes without a dashboard.
 - **Models auto discovered.** The model list is fetched from the DeepSeek
   `/models` API, so new models show up in `/model` without editing your
@@ -116,8 +116,12 @@ the DeepSeek API directly and puts the platform's own data on screen:
   short TTL and atomic writes, so several terminals at once share one
   refresh instead of flooding the API.
 
-The demo above was recorded against the real DeepSeek API. You can try it
-with:
+![DeepSeek demo](docs/deepseek-demo.gif)
+
+The recording above was made against the real DeepSeek API: the status line
+shows the live balance, the model list comes from `/models`, and the second
+turn hits the warm prompt cache (`cache hit 99%`), which is exactly what
+keeps the cost down. You can try it with:
 
 ```bash
 bobonyo --provider DeepSeek
