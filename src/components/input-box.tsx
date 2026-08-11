@@ -298,24 +298,24 @@ export function InputBox(props: {
 				active: selectedCompletion() === index,
 			}));
 	});
-	// Rendered WINDOW of the completion list (6 rows) that keeps the
-	// highlighted row centered, ↑/↓ walk the FULL list, the window follows.
+	// Rendered WINDOW of the completion list (6 rows), REVERSED so the
+	// SELECTED item sits at the BOTTOM (bottom-anchored palette, the opposite
+	// of top-down). ↑ walks FORWARD through the list (the content scrolls up),
+	// ↓ walks back.
 	const completionWindow = createMemo(() => {
 		const all = completions();
 		const visible = 6;
-		if (all.length <= visible) {
-			return all.map((item, index) => ({...item, index}));
-		}
-		const start = Math.max(
-			0,
-			Math.min(
-				selectedCompletion(),
-				all.length - visible,
-			),
+		const sel = Math.min(
+			Math.max(0, selectedCompletion()),
+			Math.max(0, all.length - 1),
 		);
-		return all
-			.slice(start, start + visible)
-			.map((item, offset) => ({...item, index: start + offset}));
+		const slice = all.slice(sel, sel + visible);
+		return [...slice]
+			.reverse()
+			.map((item, offset) => ({
+				...item,
+				index: sel + (slice.length - 1 - offset),
+			}));
 	});
 	// `@` file-mention suggestions (parity: the reference mentions files).
 	const mentionFiles = createMemo(() => {
@@ -520,13 +520,15 @@ export function InputBox(props: {
 		const matches = completions();
 		if (matches.length > 0 && !event.ctrl && !event.meta) {
 			if (event.name === 'up') {
-				setSelectedCompletion(prev => Math.max(0, prev - 1));
-				return;
-			}
-			if (event.name === 'down') {
+				// ↑ walks FORWARD through the list (bottom-anchored: the
+				// selected item is at the bottom, navigation goes up).
 				setSelectedCompletion(prev =>
 					Math.min(matches.length - 1, prev + 1),
 				);
+				return;
+			}
+			if (event.name === 'down') {
+				setSelectedCompletion(prev => Math.max(0, prev - 1));
 				return;
 			}
 			if (event.name === 'return') {
@@ -1052,7 +1054,13 @@ export function InputBox(props: {
 							>
 								<For
 									each={tokenizeInputLine(
-										line.slice(0, cursorInfo().column),
+										line.slice(
+											0,
+											caretIndexFor(
+												line,
+												cursorInfo().column,
+											),
+										),
 										knownCommands(),
 									)}
 								>
@@ -1069,11 +1077,12 @@ export function InputBox(props: {
 									)}
 								</For>
 								{/* BOX-BACKGROUND caret (parity: opencode): the
-								    char under the cursor is highlighted with
-								    the active-row background, so the text
-								    NEVER moves, shifts or duplicates. At the
-								    end of the line a highlighted space fills
-								    the block cell. */}
+								    cell under the cursor is ALWAYS rendered
+								    (the char at the cursor, or the LAST char at
+								    end-of-line, or a space on an empty line),
+								    highlighted when visible and PLAIN when
+								    hidden, so the line width NEVER changes and
+								    the text never shifts or adds a space. */}
 								<text
 									bg={
 										cursorVisible()
@@ -1087,14 +1096,26 @@ export function InputBox(props: {
 									}
 								>
 									{cursorVisible()
-										? (line[cursorInfo().column] ?? ' ')
-										: ''}
+										? (line[
+												caretIndexFor(
+													line,
+													cursorInfo().column,
+												)
+											] ?? ' ')
+										: (line[
+												caretIndexFor(
+													line,
+													cursorInfo().column,
+												)
+											] ?? ' ')}
 								</text>
 								<For
 									each={tokenizeInputLine(
 										line.slice(
-											cursorInfo().column +
-												(cursorVisible() ? 1 : 0),
+											caretIndexFor(
+												line,
+												cursorInfo().column,
+											) + 1,
 										),
 										knownCommands(),
 									)}
@@ -1251,6 +1272,17 @@ export function tokenizeInputLine(
 	}
 	if (cursor < line.length) parts.push({text: line.slice(cursor), token: false});
 	return parts.length > 0 ? parts : [{text: line, token: false}];
+}
+
+/**
+ * The cell the box-background caret occupies: the char under the cursor, or
+ * the LAST char when the cursor is at the end, or 0 on an empty line. The
+ * caret cell always renders (highlighted when visible, plain when hidden) so
+ * the input text NEVER changes width, moves, or gains a fake space.
+ */
+export function caretIndexFor(line: string, column: number): number {
+	if (column < line.length) return column;
+	return line.length > 0 ? line.length - 1 : 0;
 }
 
 /**

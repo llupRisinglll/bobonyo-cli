@@ -12,7 +12,7 @@ import {
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
-import {createMemo, createSignal, For} from 'solid-js';
+import {createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	activeAgents,
 	activeEndpoint,
@@ -670,12 +670,6 @@ export function History(props: {height?: number}) {
 		}
 		return live.join('\n\n');
 	});
-	/** Render blocks = settled (stable identity) + live (last, streaming). */
-	const renderBlocks = createMemo(() => {
-		const settled = settledBlocks();
-		const live = liveBlockText();
-		return live ? [...settled, {kind: 'md' as const, text: live}] : settled;
-	});
 	const lines = createMemo(() => renderText);
 
 	/**
@@ -798,23 +792,20 @@ export function History(props: {height?: number}) {
 				onMouseOut: handleMouseOut,
 			} as any)}
 		>
-			{/* Replies render with the glyph OUTSIDE the container (aligned
-			    with tool glyphs at column 1) and the markdown inside a box
-			    that starts after `✦ `, so every content line and re-wrap
-			    stays at column 3, never column 0. */}
-			<For each={renderBlocks()}>
+			{/* SETTLED blocks: the `each` reference stays IDENTICAL while
+			    streaming (OpenTUI's For re-renders every child when the each
+			    array reference changes, which was the flash cause), so the
+			    settled transcript never repaints. Replies render with the
+			    glyph OUTSIDE the container (aligned with tool glyphs at
+			    column 1) and the markdown inside a box starting after `✦ `. */}
+			<For each={settledBlocks()}>
 				{(block, index) => {
-					const isLast = index() === renderBlocks().length - 1;
 					const setRef = (element: unknown): void => {
-						if (index() < blockRefs.length) {
-							blockRefs[index()]!.ref = element as never;
-						} else {
-							liveBlockRef = element as never;
-						}
+						blockRefs[index()]!.ref = element as never;
 					};
 					const markdownProps = {
 						content: block.text,
-						streaming: running() && isLast,
+						streaming: false,
 						fg: colors().text,
 						syntaxStyle: syntaxStyle(),
 						internalBlockMode: 'top-level' as const,
@@ -826,7 +817,8 @@ export function History(props: {height?: number}) {
 							widthMode: 'content' as const,
 						},
 					};
-					return block.kind === 'reply' ? (
+					if (block.kind === 'reply') {
+						return (
 						<box flexDirection="row">
 							<text
 								fg={colors().secondary}
@@ -841,14 +833,38 @@ export function History(props: {height?: number}) {
 								/>
 							</box>
 						</box>
-					) : (
-							<markdown
-								ref={setRef}
-								{...markdownProps}
-							/>
+						);
+					}
+					return (
+						<markdown
+							ref={setRef}
+							{...markdownProps}
+						/>
 					);
 				}}
 			</For>
+			{/* LIVE block (running thought + streaming reply): its OWN markdown
+			    node streams every frame; it is NOT part of the settled For, so
+			    the ticker can never touch the settled blocks. */}
+			<Show when={liveBlockText()}>
+				<markdown
+					ref={element => {
+						liveBlockRef = element as never;
+					}}
+					content={liveBlockText()}
+					streaming={running()}
+					fg={colors().text}
+					syntaxStyle={syntaxStyle()}
+					internalBlockMode="top-level"
+					renderNode={renderNode}
+					treeSitterClient={treeSitter}
+					tableOptions={{
+						style: 'grid',
+						borders: true,
+						widthMode: 'content',
+					}}
+				/>
+			</Show>
 		</scrollbox>
 	);
 }

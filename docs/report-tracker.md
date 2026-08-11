@@ -23,6 +23,9 @@ is DONE only when verified live (or unit-tested) and committed.
 | 16 | All expand opens a modal (incl. thought); collapsed previews cap at 3 lines | ✅ DONE | thoughts, single tool rows and compact tallies all stash expanded details; clicks open the DetailsModal; `PREVIEW_LINES` = 3 |
 | 17 | Reply `✦` must align with tool glyphs (column 1), NOT indented | ✅ DONE | the reply glyph renders OUTSIDE the markdown container (row: glyph + content box); content + re-wraps start at column 3 |
 | 18 | Replace the caret with a box background (opencode-style) | ✅ DONE | the char under the cursor is highlighted with the active-row bg/fg; text never moves; verified insertions land correctly |
+| 19 | [CRITICAL] Chat history still blinking (regression) | ✅ DONE | deeper root cause: OpenTUI's `<For>` re-renders EVERY child when the `each` array reference changes, and the combined render-blocks array was rebuilt each tick. The LIVE block now renders in its OWN `<Show>` node OUTSIDE the settled `<For>` (whose `each` reference is stable), so the ticker can never touch settled blocks. Verified: settled rows byte-identical across 5 captures 1s apart during streaming |
+| 20 | Invert `/` suggestions: selected at the BOTTOM, navigation goes UP | ✅ DONE | the suggestion window renders REVERSED (first match at the bottom row) and ↑ walks FORWARD (content scrolls up), ↓ back. Verified live |
+| 21 | Cursor blink still moved the text (added a space) | ✅ DONE | the caret cell now ALWAYS renders (the char under the cursor, or the LAST char at end-of-line, or a space on an empty line), highlighted when visible and PLAIN when hidden, so the line width is constant. Verified: input row length identical across 6 blink frames |
 
 ## Implementation notes (committed)
 
