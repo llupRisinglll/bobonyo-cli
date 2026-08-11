@@ -20,6 +20,9 @@
 # The cast is also trimmed right after the app's exit and the goodbye
 # banner re-printed on a cleared screen, so the closing frames are clean
 # (agg otherwise keeps the last alternate-screen frame visible).
+# Before trimming, `compress-demo-cast.py` squeezes out idle: pre-launch
+# pauses, static screens left on display, and long identical repaints are
+# collapsed while the animated streaming/typing cadence is preserved.
 set -euo pipefail
 
 CAST="${1:?usage: render-demo-gif.sh <input.cast> <output.gif>}"
@@ -27,7 +30,9 @@ OUT="${2:?usage: render-demo-gif.sh <input.cast> <output.gif>}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-python3 - "$CAST" "$TMP/clean.cast" <<'PY'
+python3 "$(dirname "$0")/compress-demo-cast.py" "$CAST" "$TMP/compressed.cast"
+
+python3 - "$TMP/compressed.cast" "$TMP/clean.cast" <<'PY'
 import json
 import sys
 
