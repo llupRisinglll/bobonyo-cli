@@ -11,6 +11,11 @@
 #   2. The default emoji font (Noto Color Emoji) renders ⚙/★ as COLOR emoji.
 #      Force a monochrome symbol font (Adwaita Mono covers every UI glyph)
 #      so the GIF stays glyph-based.
+#   3. The app's bottom-right corner label uses NON-BREAKING SPACES
+#      (opaque in OpenTUI so they cover the border dashes). agg renders
+#      U+00A0 as a VISIBLE mark, so the corner looks broken in the GIF —
+#      rewrite them to plain spaces (opaque in agg's emulator) at render
+#      time. The app itself is untouched.
 #
 # The cast is also trimmed right after the app's exit and the goodbye
 # banner re-printed on a cleared screen, so the closing frames are clean
@@ -48,6 +53,12 @@ banner = next(
     None,
 )
 kept = events[: exit_at + 1]
+# agg renders U+00A0 (non-breaking space) as a visible glyph; the corner
+# label's separators must become plain spaces for the GIF (the app's own
+# output stays correct in real terminals).
+for e in kept:
+    if e[1] == "o":
+        e[2] = e[2].replace("\u00a0", " ")
 clean = [[0.05, "o", "\x1b[2J\x1b[H"]]
 if banner is not None:
     clean.append([0.1, "o", banner])
