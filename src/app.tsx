@@ -86,6 +86,7 @@ import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
+import {DetailsModal} from './components/details-modal';
 import {buildStatusRows} from './status-rows';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
@@ -169,6 +170,10 @@ import {
 	setFallbackTarget,
 	agentsOpen,
 	setAgentsOpen,
+	detailsOpen,
+	setDetailsOpen,
+	detailsTitle,
+	detailsContent,
 	resumeOpen,
 	setResumeOpen,
 	settingsTab,
@@ -563,6 +568,7 @@ export function App() {
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
+			detailsOpen() ||
 			resumeOpen()
 		) {
 			// All modal keys (tabs/rows/search/Enter/Esc) are owned by the
@@ -2542,6 +2548,14 @@ export function App() {
 			{/* Built-in agents (Settings → Capabilities → Agents). */}
 			<Show when={agentsOpen()}>
 				<AgentsModal onClose={() => setAgentsOpen(false)} />
+			</Show>
+			{/* Compact-block details (clicking an expandable tool tally). */}
+			<Show when={detailsOpen()}>
+				<DetailsModal
+					title={detailsTitle()}
+					content={detailsContent()}
+					onClose={() => setDetailsOpen(false)}
+				/>
 			</Show>
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
 			<Show when={resumeOpen()}>

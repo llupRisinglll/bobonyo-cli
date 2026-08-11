@@ -565,10 +565,10 @@ export function tokenizeAgentRow(
 }
 
 /**
- * Thought container: `⚙ Thought (Ns)` header + secondary body. The LIVE
- * (`running`) header renders PRIMARY so the animated gear/timer reads as a
- * live indicator, a dim secondary glyph toggling ⚙↔✦ looks like a tool
- * blink. The settled header stays secondary/dim (muted parity).
+ * Thought container: `⚙ Thought (Ns)` header + secondary body. The header is
+ * ALWAYS secondary/dim (thinking is not primary information a normal user
+ * reads); the live state animates ONLY the timer and dots, never the glyph,
+ * so nothing blinks between colors.
  */
 export function tokenizeThought(
 	text: string,
@@ -578,22 +578,16 @@ export function tokenizeThought(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	const headerFg =
-		status === 'running' ? palette.fg.primary : palette.fg.secondary;
 	return emitLines(lines, (line, index, isHeader) => {
 		if (isHeader) {
 			const m = line.match(/^([✦⚙]\s*)(.*)$/);
 			if (m) {
 				return [
-					chunk(m[1] ?? '', headerFg),
-					chunk(
-						m[2] ?? '',
-						headerFg,
-						status === 'running' ? bold() : dim(),
-					),
+					chunk(m[1] ?? '', palette.fg.secondary, dim()),
+					chunk(m[2] ?? '', palette.fg.secondary, dim()),
 				];
 			}
-			return [chunk(line, headerFg, status === 'running' ? bold() : dim())];
+			return [chunk(line, palette.fg.secondary, dim())];
 		}
 		return [chunk(line, palette.fg.secondary, dim())];
 	}, defaultFg);
@@ -910,7 +904,15 @@ export function applyHoverBackground(
 	if (!hovered) return chunks;
 	const palette = themeColors(colors);
 	const bg = palette.fg.secondary;
+	// Hover highlights ONLY the content inside the `└` container (the body),
+	// never the title/header line, so the header stays readable and only the
+	// expandable output is the interactive target.
+	let headerDone = false;
 	return chunks.map(chunkEntry => {
+		if (!headerDone) {
+			if (chunkEntry.text.includes('\n')) headerDone = true;
+			return chunkEntry;
+		}
 		const fg = readableOn(
 			bg,
 			chunkEntry.fg,

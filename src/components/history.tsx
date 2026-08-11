@@ -41,6 +41,10 @@ import {
 	thoughtExpanded,
 	toggleToolBlock,
 	toolsExpanded,
+	setDetailsOpen,
+	setDetailsTitle,
+	setDetailsContent,
+	detailsOpen,
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
@@ -71,6 +75,12 @@ import {buildBannerBox} from '../banner';
 import {historyFillWidth} from '../history-width';
 
 const PREVIEW_LINES = 4;
+/**
+ * Expanded per-call entries of every multi-call compact block, keyed by block
+ * key. Clicking an expandable tally opens the DETAILS MODAL with these
+ * entries (scrollable) instead of toggling in place.
+ */
+const compactDetails = new Map<string, string>();
 
 type RenderToken = {type: string; text?: string; lang?: string};
 
@@ -99,6 +109,35 @@ function buildWelcomeBanner(titleShape: string): string {
 function rowPath(text: string): string {
 	const line = text.split('\n')[0] ?? '';
 	return line.replace(/^[✦⚙]\s*[A-Za-z ]+?\s+/, '').trim();
+}
+
+/**
+ * Indent every continuation line by 2 columns so a wrapped reply aligns on
+ * the first text after the `✦ ` glyph (parity: the original's hanging-indent
+ * icon column). OpenTUI's markdown re-wraps long paragraphs at the container
+ * edge (column 0), so PLAIN paragraph lines are hard-wrapped here at a width
+ * that fits the pane; markdown block constructs (headings, lists, quotes,
+ * tables, fences) are left untouched so the parser still recognizes them.
+ */
+function indentContinuations(text: string): string {
+	const WRAP = 90;
+	const isBlock = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|\||```|~~|\s*[-*_]{3,}\s*$)/;
+	return text
+		.split('\n')
+		.map(line => {
+			if (isBlock.test(line) || line.length <= WRAP) return line;
+			const parts: string[] = [];
+			let rest = line;
+			while (rest.length > WRAP) {
+				let cut = rest.lastIndexOf(' ', WRAP);
+				if (cut <= 0) cut = WRAP;
+				parts.push(rest.slice(0, cut));
+				rest = rest.slice(cut).trimStart();
+			}
+			if (rest) parts.push(rest);
+			return parts.join('\n  ');
+		})
+		.join('\n  ');
 }
 
 /** Tag a fenced row's language with `:hover` so its renderer tints it. */
@@ -455,7 +494,11 @@ export function History(props: {height?: number}) {
 				// Assistant replies carry the `✦` prefix as the left
 				// indication (parity: nanocoder's assistant icon). `~✦~`
 				// renders it DIM (the strikethrough style maps to dim).
-				if (message.content) pushBlock(`~✦~ ${message.content}`);
+				if (message.content) {
+					pushBlock(
+						`~✦~ ${indentContinuations(message.content)}`,
+					);
+				}
 			}
 		}
 
@@ -526,11 +569,11 @@ export function History(props: {height?: number}) {
 					fence(
 						'thought',
 						'running',
-						// LIVE header: animated gear + REAL-TIME seconds timer
-						// + animated dots (parity: the Working indicator),
-						// the header is PRIMARY so the gear reads as an
-						// animation, not a dim tool-glyph blink.
-						`${gearGlyph(frame)} Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
+						// LIVE header: STATIC gear + REAL-TIME timer + animated
+						// dots, all secondary/dim. Thinking is not primary
+						// info, and the glyph must NOT toggle (⚙↔✦ at a dim
+						// color reads as a blink, not an animation).
+						`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
 							`└ ${tailLines(reasoning())}`,
 					),
 				);
@@ -539,7 +582,9 @@ export function History(props: {height?: number}) {
 				// The reply glyph BLINKS while the response is streaming
 				// (`~✦~` = dim via the strikethrough style).
 				const blink = (spinnerFrame() >> 2) % 2 === 0;
-				live.push(`${blink ? '~✦~' : '✦'} ${streaming()}`);
+				live.push(
+					`${blink ? '~✦~' : '✦'} ${indentContinuations(streaming())}`,
+				);
 			}
 			const liveBlock = live.join('\n\n');
 			if (liveBlock) {
@@ -575,6 +620,7 @@ export function History(props: {height?: number}) {
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
+			detailsOpen() ||
 			resumeOpen()
 		)
 			return;
@@ -589,6 +635,16 @@ export function History(props: {height?: number}) {
 			.map(r => blockRanges.find(candidate => r >= candidate.start && r <= candidate.end))
 			.find(candidate => candidate && candidate.key !== 'live');
 		if (range) {
+			// Compact tallies open the DETAILS MODAL (scrollable per-call
+			// entries) instead of toggling in place, so a reader never has to
+			// parse the whole expanded block inline.
+			const details = compactDetails.get(range.key);
+			if (details) {
+				setDetailsTitle(renderText[range.start] ?? 'Tool details');
+				setDetailsContent(details);
+				setDetailsOpen(true);
+				return;
+			}
 			toggleToolBlock(range.key);
 			return;
 		}
@@ -771,6 +827,23 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 		}
 		const key =
 			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+		// Stash the EXPANDED per-call entries for the details modal (plain
+		// text, no outer fences) — clicking the tally opens this content.
+		compactDetails.set(
+			key,
+			block
+				.map(message =>
+					message.tool
+						? formatToolEntry(
+								{...message.tool, output: liveOutput(message)},
+								true,
+								'done',
+								true,
+							)
+						: message.content,
+				)
+				.join('\n\n'),
+		);
 		return [{text: compactToolBlock(block, key), blockKey: key}];
 	});
 }

@@ -466,3 +466,26 @@ Full gate 2026-08-11: `parity-check.sh all` = **90/90 PASS** and
   lazy loading with a spinner; built-in Agents modal (General/Explore).
 
 Gate: `bun test` (100 pass) + `bun run typecheck` clean.
+
+## Latest gap-refinement round, implemented
+
+- **Thought header is secondary/dim**, both live (`⚙ Thinking · (Ns)…` with a
+  STATIC gear, real-time timer and animated dots) and settled; the glyph no
+  longer toggles ⚙↔✦ at a dim color, so nothing blinks between text colors.
+- **Markdown link color**, a dedicated theme `link` color (cyan in both
+  bundled themes) replaces the primary-purple label + warning-yellow URL, so
+  links read clearly instead of clashing with tool names and emphasis.
+- **Compact details modal**, clicking an expandable compact tally now opens a
+  scrollable modal with the individual call entries (↑/↓/PageUp/PageDn, Esc
+  close) instead of toggling in place, so reading the information is not
+  confusing; Ctrl+O still expands inline for the tall view.
+- **Reply hanging indent**, continuation lines of assistant replies align on
+  the first text after the `✦ ` glyph: explicit line breaks are indented 2 and
+  long plain paragraphs are hard-wrapped (markdown block constructs are left
+  untouched so headings/lists/code/tables still parse).
+- **Hover highlights only the `└` body**, the title/header line of an
+  expandable block keeps its normal color/background while the container
+  output gets the hover tint, so the user always knows the header is not the
+  interactive target.
+
+Gate: `bun test` (100 pass) + `bun run typecheck` clean.

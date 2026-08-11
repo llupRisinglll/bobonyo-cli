@@ -144,6 +144,14 @@ export const [fallbackTarget, setFallbackTarget] = createSignal<
 >(null);
 /** Built-in AGENTS modal (Settings → Capabilities → Agents). */
 export const [agentsOpen, setAgentsOpen] = createSignal(false);
+/**
+ * Compact-block DETAILS modal: clicking an expandable compact tally opens a
+ * scrollable modal with the individual call entries (the user reads the
+ * content without the in-place toggle confusing them).
+ */
+export const [detailsOpen, setDetailsOpen] = createSignal(false);
+export const [detailsTitle, setDetailsTitle] = createSignal('');
+export const [detailsContent, setDetailsContent] = createSignal('');
 /** `/resume` opens as a modal (parity: the reference session picker). */
 export const [resumeOpen, setResumeOpen] = createSignal(false);
 export const [settingsTab, setSettingsTab] = createSignal(0);

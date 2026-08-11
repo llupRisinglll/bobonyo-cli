@@ -36,6 +36,7 @@ import {
 	statusOpen,
 	modelOpen,
 	agentsOpen,
+	detailsOpen,
 	resumeOpen,
 	sessionId,
 	spinnerFrame,
@@ -429,6 +430,7 @@ export function InputBox(props: {onSubmit: (value: string) => void}) {
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
+			detailsOpen() ||
 			resumeOpen()
 		)
 			return;

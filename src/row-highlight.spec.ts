@@ -264,11 +264,15 @@ describe('hover contrast (text can never become invisible)', () => {
 			colors(),
 		);
 		const hovered = applyHoverBackground(chunks, true, colors());
-		// Every hovered chunk carries the tint background…
-		expect(hovered.every(c => bg(c))).toBe(true);
-		// …and none of them has the SAME color as the tint (invisible text).
+		// The TITLE line keeps NO tint (hover highlights only the `└` body);
+		// every BODY chunk carries the tint background…
+		const firstNewline = chunks.findIndex(c => c.text.includes('\n'));
+		expect(hovered.slice(0, firstNewline + 1).every(c => !bg(c))).toBe(true);
+		expect(hovered.slice(firstNewline + 1).every(c => bg(c))).toBe(true);
+		// …and none of the BODY chunks has the SAME color as the tint
+		// (invisible text).
 		const tint = RGBA.fromHex(colors().secondary);
-		for (const c of hovered) {
+		for (const c of hovered.slice(firstNewline + 1)) {
 			if (!c.fg) continue;
 			const same =
 				Math.abs(c.fg.r - tint.r) < 0.02 &&

@@ -16,6 +16,8 @@ export interface Colors {
 	error: string;
 	info: string;
 	warning: string;
+	/** Markdown link color, distinct from primary/info so links read clearly. */
+	link: string;
 	diffAdded: string;
 	diffRemoved: string;
 	diffAddedText: string;
@@ -52,6 +54,7 @@ const OMNICODE: Theme = {
 		secondary: '#565f89',
 		info: '#bb9af7',
 		warning: '#e0af68',
+		link: '#7dcfff',
 		diffAdded: '#1f3a28',
 		diffRemoved: '#3a1f28',
 		diffAddedText: '#7AF778',
@@ -80,6 +83,7 @@ const TOKYO_NIGHT: Theme = {
 		secondary: '#565f89',
 		info: '#7dcfff',
 		warning: '#e0af68',
+		link: '#89ddff',
 		diffAdded: '#1f3a28',
 		diffRemoved: '#3a1f28',
 		diffAddedText: '#9ece6a',

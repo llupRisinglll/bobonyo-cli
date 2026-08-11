@@ -39,9 +39,12 @@ export function markdownSyntaxStyleFor(colors: Colors): SyntaxStyle {
 		'markup.strong': {fg: colors.primary, bold: true},
 		'markup.italic': {},
 		'markup.raw': {fg: colors.info},
-		'markup.link': {fg: colors.info, underline: true},
-		'markup.link.label': {fg: colors.info},
-		'markup.link.url': {fg: colors.warning, underline: true},
+		// Links use the dedicated LINK color (cyan in both bundled themes),
+		// not primary/info purple or the warning yellow, so they read as
+		// links instead of clashing with tool names and emphasis.
+		'markup.link': {fg: colors.link, underline: true},
+		'markup.link.label': {fg: colors.link},
+		'markup.link.url': {fg: colors.link, underline: true},
 		'markup.list': {fg: colors.secondary},
 		'markup.quote': {fg: colors.secondary},
 		'markup.strikethrough': {dim: true},
