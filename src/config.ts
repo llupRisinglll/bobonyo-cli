@@ -163,7 +163,13 @@ function normalize(config: AppConfig): AppConfig {
 			// nanocoder configs carry `name` without `id`, use the name as
 			// the provider identity.
 			id: provider.id ?? provider.name ?? 'provider',
-			baseUrl: substituteEnv(provider.baseUrl).replace(/\/+$/, ''),
+			// Normalize the base URL: strip trailing slashes AND a trailing
+			// `/v1` (the client appends `/v1/chat/completions`, so a config
+			// that already ends in `/v1` must not become `/v1/v1/…` — the
+			// Xiaomi token-plan endpoint 404s on the doubled path).
+			baseUrl: substituteEnv(provider.baseUrl)
+				.replace(/\/+$/, '')
+				.replace(/\/v1$/, ''),
 			models: provider.models?.length ? provider.models : ['mock-model-1'],
 			contextWindow: provider.contextWindow,
 			alwaysAllow: provider.alwaysAllow ?? [],

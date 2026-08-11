@@ -63,7 +63,12 @@ import {activeRowPalette} from '../row-highlight';
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
  * messages queue while busy, slash commands act immediately.
  */
-export function InputBox(props: {onSubmit: (value: string) => void}) {
+export function InputBox(props: {
+	onSubmit: (
+		value: string,
+		attachments?: Record<string, string>,
+	) => void;
+}) {
 	const terminalDimensions = useTerminalDimensions();
 	const [draft, setDraft] = createSignal('');
 	// ---- Cursor-aware input editing --------------------------------------
@@ -147,7 +152,10 @@ export function InputBox(props: {onSubmit: (value: string) => void}) {
 	});
 	/** Submit with `[Text #N]` expanded back to the real pasted content. */
 	const submitExpanded = (value: string): void => {
-		props.onSubmit(expandTextPlaceholders(value, pasteAttachments()));
+		props.onSubmit(
+			expandTextPlaceholders(value, pasteAttachments()),
+			pasteAttachments(),
+		);
 	};
 
 	// Some terminals/herdr clients send the DELETE key sequence (`ESC[3~`,
@@ -675,7 +683,7 @@ export function InputBox(props: {onSubmit: (value: string) => void}) {
 			// for editing (and removes it from the queue).
 			const queuedIndex = selectedQueued();
 			if (queuedIndex >= 0 && queuedIndex < pendingQueue().length) {
-				const value = pendingQueue()[queuedIndex] ?? '';
+				const value = pendingQueue()[queuedIndex]?.value ?? '';
 				setInputAt(value);
 				setPendingQueue(prev => prev.filter((_, index) => index !== queuedIndex));
 				setSelectedQueued(-1);
@@ -800,10 +808,10 @@ export function InputBox(props: {onSubmit: (value: string) => void}) {
 										? createTextAttributes({bold: true})
 										: undefined
 								}
-							>
-								{selectedQueued() === index() ? '▸ ' : '  '}
-								(queued) {message}
-							</text>
+								>
+									{selectedQueued() === index() ? '▸ ' : '  '}
+									(queued) {message.value}
+								</text>
 						)}
 					</For>
 				</box>
@@ -1282,7 +1290,11 @@ export function wrapTextDetailed(
 				const wordStart = i + charOffset;
 				if (word.length > safe) {
 					if (current.trim()) {
-						lines.push({text: current.trimEnd(), start: lineStart});
+						// Keep trailing spaces: the CARET must map to the raw
+						// offset after a typed space (trimming snapped it back
+						// before the space, hiding the space under the block
+						// caret).
+						lines.push({text: current, start: lineStart});
 						current = '';
 					}
 					for (let k = 0; k < word.length; k += safe) {
@@ -1295,7 +1307,7 @@ export function wrapTextDetailed(
 				} else {
 					const candidate = current + word;
 					if (current.trim() && candidate.trim().length > safe) {
-						lines.push({text: current.trimEnd(), start: lineStart});
+						lines.push({text: current, start: lineStart});
 						current = word.trimStart();
 						lineStart =
 							wordStart + (word.length - word.trimStart().length);
@@ -1306,7 +1318,7 @@ export function wrapTextDetailed(
 				charOffset += word.length;
 			}
 			if (current.trim()) {
-				lines.push({text: current.trimEnd(), start: lineStart});
+				lines.push({text: current, start: lineStart});
 			}
 		}
 		if (nl === -1) break;
@@ -1345,7 +1357,11 @@ export function cursorPositionFromWrapped(
 	for (let i = 0; i < wrapped.length; i++) {
 		const entry = wrapped[i]!;
 		if (
-			target <= entry.start + entry.text.length ||
+			// STRICT `<` at the line end: a wrapped line that keeps its
+			// trailing space ends at start+len, but the NEXT raw char belongs
+			// to the following line, so the caret must land there instead of
+			// snapping back to the trailing space.
+			target < entry.start + entry.text.length ||
 			i === wrapped.length - 1
 		) {
 			return {

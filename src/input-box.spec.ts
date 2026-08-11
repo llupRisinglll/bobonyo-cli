@@ -14,7 +14,9 @@ import {
 describe('wrapText', () => {
 	test('wraps long lines at the width preserving words', () => {
 		const lines = wrapText('one two three four', 8);
-		expect(lines.join('|')).toBe('one two|three|four');
+		// The wrap keeps the trailing separator space so the caret can map to
+		// a typed space (trailing spaces render as blank cells).
+		expect(lines.join('|')).toBe('one two |three |four');
 	});
 
 	test('splits explicit newlines into separate lines', () => {
@@ -120,7 +122,7 @@ describe('wrapTextDetailed', () => {
 	test('records raw start offsets for wrapped lines', () => {
 		const lines = wrapTextDetailed('one two three', 8);
 		expect(lines.map(entry => entry.text)).toEqual([
-			'one two',
+			'one two ',
 			'three',
 		]);
 		expect(lines.map(entry => entry.start)).toEqual([0, 8]);

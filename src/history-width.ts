@@ -1,13 +1,13 @@
 /**
  * Full-width row fill for transcript code blocks (diff rows, user messages).
  *
- * The markdown container sits inside the root's `paddingX={1}` (2 columns)
- * AND the scrollbox reserves one column for its scrollbar, so a row padded to
- * `terminalWidth - 2` is ONE column too wide and WRAPS, every logical line
- * then paints two screen rows (the second one blank), which looked like a
- * wall of line breaks. The fill must target the renderable's real width:
- * `terminalWidth - 3`.
+ * The markdown container sits inside the root's `paddingX={1}` (2 columns),
+ * the scrollbox's content container adds `paddingRight={2}` (the scrollbar
+ * gap), and the scrollbox reserves one column for its scrollbar, so a row
+ * padded to `terminalWidth - 2` would WRAP (every logical line painting a
+ * second blank row). The fill must target the renderable's real width: the
+ * root padding, the right gap, and the scrollbar column.
  */
 export function historyFillWidth(terminalWidth: number): number {
-	return Math.max(1, terminalWidth - 3);
+	return Math.max(1, terminalWidth - 5);
 }

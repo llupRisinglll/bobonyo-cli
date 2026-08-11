@@ -65,8 +65,14 @@ export const [sessionName, setSessionName] = createSignal('New conversation');
 /** Prompt history for ↑/↓ navigation. */
 export const [promptHistory, setPromptHistory] = createSignal<string[]>([]);
 export const [historyIndex, setHistoryIndex] = createSignal(-1);
-/** Messages queued while a turn is streaming (submitted when it settles). */
-export const [pendingQueue, setPendingQueue] = createSignal<string[]>([]);
+/**
+ * Messages queued while a turn is streaming (submitted when it settles).
+ * Each entry keeps its ATTACHMENTS so `[Image #N]` vision analysis still
+ * works for queued prompts (the image paths would otherwise be lost).
+ */
+export const [pendingQueue, setPendingQueue] = createSignal<
+	Array<{value: string; attachments?: Record<string, string>}>
+>([]);
 /** Per-turn usage snapshots for `/usage`. */
 export const [usageHistory, setUsageHistory] = createSignal<
 	Array<{

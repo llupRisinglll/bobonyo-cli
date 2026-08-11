@@ -29,7 +29,7 @@ export function Status() {
 	});
 	const modeLabel = createMemo(() => {
 		const current = mode();
-		return current === 'yolo' ? 'yolo mode on' : `${current} mode`;
+		return current === 'yolo' ? 'yolo' : `${current} mode`;
 	});
 	// Parity: the tune label shows the RESOLVED profile, and flags its auto
 	// origin with `(auto)` on wide terminals (narrow ones drop the suffix).

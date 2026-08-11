@@ -4,7 +4,6 @@ import {
 	RGBA,
 	getTreeSitterClient,
 	type RenderNodeContext,
-	type MarkdownRenderable,
 	type MouseEvent,
 	type RenderContext,
 	type ScrollBoxRenderable,
@@ -12,7 +11,7 @@ import {
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
-import {createMemo, createSignal} from 'solid-js';
+import {createMemo, createSignal, For} from 'solid-js';
 import {
 	activeAgents,
 	activeEndpoint,
@@ -179,7 +178,6 @@ export function History(props: {height?: number}) {
 	// persistent background highlight and it toggles on click.
 	const [hoveredBlock, setHoveredBlock] = createSignal<string | null>(null);
 	let hoveredBlockRef: string | null = null;
-	let markdownRef: MarkdownRenderable | null = null;
 	let scrollRef: ScrollBoxRenderable | null = null;
 	let lineMap: Array<string | undefined> = [];
 	let renderText: string[] = [];
@@ -433,13 +431,32 @@ export function History(props: {height?: number}) {
 		}
 		return false;
 	});
-	const transcript = createMemo(() => {
+	// Rendered blocks: consecutive non-reply parts share ONE markdown node;
+	// every REPLY gets its OWN padded node so the response content sits in a
+	// container that can never break its left-side gap (the hard requirement:
+	// responses never render at column 0, even when OpenTUI re-wraps text or
+	// normalizes block constructs). Mouse mapping stays global via per-block
+	// row offsets.
+	const blockRefs: Array<{
+		ref: {screenY: number} | null;
+		start: number;
+		rows: number;
+	}> = [];
+	const transcriptBlocks = createMemo(() => {
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
 		// the full-row-bg code blocks instead of keeping the old-width chunks.
 		const fillWidth = historyFillWidth(terminalDimensions().width ?? 80);
-		const parts: Array<{text: string; key?: string}> = [];
-		const pushBlock = (text: string, key?: string) => {
+		const parts: Array<{
+			text: string;
+			key?: string;
+			kind: 'md' | 'reply';
+		}> = [];
+		const pushBlock = (
+			text: string,
+			key?: string,
+			kind: 'md' | 'reply' = 'md',
+		) => {
 			parts.push({
 				// Full-row-bg fences carry the current width in the opener,
 				// a resize changes the marker → the markdown block re-parses →
@@ -452,6 +469,7 @@ export function History(props: {height?: number}) {
 						`${fenceChar}${kind}${status}:w${fillWidth}`,
 				),
 				key,
+				kind,
 			});
 		};
 		const all = messages();
@@ -497,67 +515,30 @@ export function History(props: {height?: number}) {
 				if (message.content) {
 					pushBlock(
 						`~✦~ ${indentContinuations(message.content)}`,
+						undefined,
+						'reply',
 					);
 				}
 			}
 		}
-
-		const docLines: Array<{text: string; key?: string}> = [];
-		// Rendered-row index: fence markers (` ```lang ` openers/closers) are
-		// consumed by the markdown parser and never render as rows, so the
-		// click/hover row → doc line mapping must skip them.
-		const renderIndex: number[] = [];
-		const ranges: Array<{key: string; start: number; end: number}> = [];
-		let block: {key: string; start: number} | null = null;
-		parts.forEach((part, index) => {
-			// A block is EXPANDABLE only when it actually hides content (a
-			// `+N more lines` footer) or is currently expanded. Blocks that
-			// fit fully have NO footer, NO hover tint and are NOT clickable.
-			const hasFooter = /\+(\d+) (more )?lines?/.test(part.text);
-			const expandable =
-				part.key !== undefined &&
-				(hasFooter || Boolean(expandedBlocks()[part.key]));
-			// Hover tint ONLY on COLLAPSED blocks that show the `+N` footer,
-			// an EXPANDED block (even one with a residual long-output footer)
-			// never highlights: the user clicked to reveal content, so a
-			// whole-block tint over it reads as an unnecessary highlight.
-			const highlighted =
-				part.key !== undefined &&
-				expandable &&
-				hasFooter &&
-				!expandedBlocks()[part.key] &&
-				part.key === hoveredBlock();
-			const partText = highlighted ? markHover(part.text) : part.text;
-			// Fenced parts carry their own leading blank (rendered spacing),
-			// so skip the between-part separator before them, otherwise the
-			// doc has TWO blanks where only one renders and the click/hover
-			// row mapping drifts by one.
-			const isFenced = partText.trimStart().startsWith('```');
-			if (index > 0 && !isFenced) {
-				docLines.push({text: ''});
-				renderIndex.push(docLines.length - 1);
-			}
-			if (part.key) block = {key: part.key, start: -1};
-			for (const line of partText.split('\n')) {
-				const isFenceMarker = /^\s*`{3,}/.test(line);
-				docLines.push({text: line, key: part.key});
-				if (!isFenceMarker) {
-					if (block && block.start === -1) block.start = renderIndex.length;
-					renderIndex.push(docLines.length - 1);
-				}
-			}
-			if (block && expandable) {
-				ranges.push({
-					...block,
-					start: Math.max(0, block.start),
-					end: Math.max(0, renderIndex.length - 1),
-				});
-				block = null;
+		// Group consecutive non-reply parts into ONE markdown block; replies
+		// stay separate so each gets its own padded container.
+		const blocks: Array<{
+			kind: 'md' | 'reply';
+			parts: Array<{text: string; key?: string}>;
+		}> = [];
+		for (const part of parts) {
+			const last = blocks[blocks.length - 1];
+			if (part.kind === 'reply' || last?.kind !== 'md') {
+				blocks.push({kind: part.kind, parts: [part]});
 			} else {
-				block = null;
+				last.parts.push(part);
 			}
-		});
-		let doc = docLines.map(line => line.text).join('\n');
+		}
+
+		// Live region (running thought + streaming reply) becomes the LAST
+		// block, so it streams inside its own markdown node.
+		let liveBlock = '';
 		if (running()) {
 			const live: string[] = [];
 			// The Working indicator renders as a FIXED line above the input
@@ -586,35 +567,110 @@ export function History(props: {height?: number}) {
 					`${blink ? '~✦~' : '✦'} ${indentContinuations(streaming())}`,
 				);
 			}
-			const liveBlock = live.join('\n\n');
-			if (liveBlock) {
-				if (doc) doc += `\n\n${liveBlock}`;
-				else doc = liveBlock;
-				docLines.push({text: ''});
-				renderIndex.push(docLines.length - 1);
-				block = {key: 'live', start: renderIndex.length - 1};
-				for (const line of liveBlock.split('\n')) {
-					docLines.push({text: line});
+			liveBlock = live.join('\n\n');
+			if (liveBlock) blocks.push({kind: 'md', parts: [{text: liveBlock}]});
+		}
+
+		const docLines: Array<{text: string; key?: string}> = [];
+		// Rendered-row index: fence markers (` ```lang ` openers/closers) are
+		// consumed by the markdown parser and never render as rows, so the
+		// click/hover row → doc line mapping must skip them.
+		const renderIndex: number[] = [];
+		const ranges: Array<{key: string; start: number; end: number}> = [];
+		let block: {key: string; start: number} | null = null;
+		blockRefs.length = 0;
+		blocks.forEach((group, groupIndex) => {
+			const start = renderIndex.length;
+			group.parts.forEach((part, index) => {
+				// A block is EXPANDABLE only when it actually hides content (a
+				// `+N more lines` footer) or is currently expanded.
+				const hasFooter = /\+(\d+) (more )?lines?/.test(part.text);
+				const expandable =
+					part.key !== undefined &&
+					(hasFooter || Boolean(expandedBlocks()[part.key]));
+				const highlighted =
+					part.key !== undefined &&
+					expandable &&
+					hasFooter &&
+					!expandedBlocks()[part.key] &&
+					part.key === hoveredBlock();
+				const partText = highlighted ? markHover(part.text) : part.text;
+				const isFenced = partText.trimStart().startsWith('```');
+				if (index > 0 && !isFenced) {
+					docLines.push({text: ''});
 					renderIndex.push(docLines.length - 1);
 				}
-				ranges.push({...block, end: renderIndex.length - 1});
-			}
-		}
+				if (part.key) block = {key: part.key, start: -1};
+				for (const line of partText.split('\n')) {
+					const isFenceMarker = /^\s*`{3,}/.test(line);
+					docLines.push({text: line, key: part.key});
+					if (!isFenceMarker) {
+						if (block && block.start === -1) {
+							block.start = renderIndex.length;
+						}
+						renderIndex.push(docLines.length - 1);
+					}
+				}
+				if (block && expandable) {
+					ranges.push({
+						...block,
+						start: Math.max(0, block.start),
+						end: Math.max(0, renderIndex.length - 1),
+					});
+					block = null;
+				} else {
+					block = null;
+				}
+			});
+			blockRefs.push({
+				ref: null,
+				start,
+				rows: renderIndex.length - start,
+			});
+		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
 		renderText = renderIndex.map(index => docLines[index]?.text ?? '');
 		blockRanges = ranges;
 		currentBlock = block;
-	return doc;
+		return {
+			blocks: blocks.map(group => ({
+				kind: group.kind,
+				text: group.parts
+					.map(part =>
+						part.text.replace(
+							/^(```+)(filediff|usermsg)(:[^:\n]+)/,
+							(_m, fenceChar, kind, status) =>
+								`${fenceChar}${kind}${status}:w${fillWidth}`,
+						),
+					)
+					.join('\n\n'),
+			})),
+		};
 	});
 	const lines = createMemo(() => renderText);
 
 	/**
+	 * Map a mouse event to a GLOBAL transcript row. The transcript renders as
+	 * multiple markdown blocks (replies in padded containers), so the row is
+	 * found by walking each block's terminal position and adding its global
+	 * row offset.
+	 */
+	const rowForEvent = (event: MouseEvent): number => {
+		for (const entry of blockRefs) {
+			if (!entry.ref) continue;
+			const top = entry.ref.screenY;
+			if (event.y >= top && event.y < top + entry.rows) {
+				return entry.start + (event.y - top);
+			}
+		}
+		return -1;
+	};
+
+	/**
 	 * Mouse click-to-toggle (parity: nanocoder C16, every expandable toggles
-	 * both ways). The transcript is one markdown node, so the click row is
-	 * mapped back to the doc line via the renderable's screen position.
+	 * both ways).
 	 */
 	const handleMouseDown = (event: MouseEvent) => {
-		if (!markdownRef) return;
 		if (
 			settingsOpen() ||
 			statusOpen() ||
@@ -624,7 +680,7 @@ export function History(props: {height?: number}) {
 			resumeOpen()
 		)
 			return;
-		const row = event.y - markdownRef.screenY;
+		const row = rowForEvent(event);
 		if (row < 0) return;
 		// A click anywhere inside a tool/thought CONTAINER toggles it (the
 		// whole block, header, `└` output, footer, is the hit target).
@@ -652,7 +708,6 @@ export function History(props: {height?: number}) {
 
 	// C13: hover, highlight the row under the cursor (moves + ▸ marker).
 	const handleMouseMove = (event: MouseEvent) => {
-		if (!markdownRef) return;
 		if (
 			settingsOpen() ||
 			statusOpen() ||
@@ -661,7 +716,7 @@ export function History(props: {height?: number}) {
 			resumeOpen()
 		)
 			return;
-		const row = event.y - markdownRef.screenY;
+		const row = rowForEvent(event);
 		if (row < 0) return;
 		if (row !== hoverRow()) setHoverRow(row);
 		// The CONTAINER under the cursor (drift-tolerant) drives the
@@ -696,6 +751,9 @@ export function History(props: {height?: number}) {
 			flexShrink={1}
 			minHeight={0}
 			height={props.height ?? '100%'}
+			// RIGHT gap so the scrollbar never overlaps text (the LEFT gap is
+			// per-REPLY, rendered as a padded container below).
+			paddingRight={2}
 			stickyScroll
 			stickyStart="bottom"
 			{...({
@@ -704,21 +762,45 @@ export function History(props: {height?: number}) {
 				onMouseOut: handleMouseOut,
 			} as any)}
 		>
-			<markdown
-				ref={element => {
-					markdownRef = element;
+			{/* Replies render in their OWN padded container (the hard left gap
+			    that markdown re-wrapping or block normalization can never
+			    break); everything else stays one streaming markdown block. */}
+			<For each={transcriptBlocks().blocks}>
+				{(block, index) => {
+					const isLast = index() === transcriptBlocks().blocks.length - 1;
+					const markdownProps = {
+						content: block.text,
+						streaming: running() && isLast,
+						fg: colors().text,
+						syntaxStyle: syntaxStyle(),
+						internalBlockMode: 'top-level' as const,
+						renderNode,
+						treeSitterClient: treeSitter,
+						tableOptions: {
+							style: 'grid' as const,
+							borders: true,
+							widthMode: 'content' as const,
+						},
+					};
+					return block.kind === 'reply' ? (
+						<box paddingLeft={2}>
+							<markdown
+								ref={element => {
+									blockRefs[index()]!.ref = element as never;
+								}}
+								{...markdownProps}
+							/>
+						</box>
+					) : (
+						<markdown
+							ref={element => {
+								blockRefs[index()]!.ref = element as never;
+							}}
+							{...markdownProps}
+						/>
+					);
 				}}
-				content={transcript()}
-				streaming={running()}
-				fg={colors().text}
-				syntaxStyle={syntaxStyle()}
-				internalBlockMode="top-level"
-				renderNode={renderNode}
-				treeSitterClient={treeSitter}
-				// Markdown tables render as boxed, content-fit tables (parity:
-				// nanocoder's cli-table3 rendering), not plain spaced columns.
-				tableOptions={{style: 'grid', borders: true, widthMode: 'content'}}
-			/>
+			</For>
 		</scrollbox>
 	);
 }

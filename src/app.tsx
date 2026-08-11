@@ -88,6 +88,7 @@ import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {buildStatusRows} from './status-rows';
+import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {trustDecision} from './trust';
@@ -631,7 +632,7 @@ export function App() {
 		if (pendingQueue().length === 0) return;
 		const next = pendingQueue()[0]!;
 		setPendingQueue(prev => prev.slice(1));
-		void submit(next);
+		void submit(next.value, next.attachments);
 	};
 
 	/** B16: one confirmation per call; the input row resolves y/n. */
@@ -1012,14 +1013,122 @@ export function App() {
 		);
 	};
 
-	const submit = async (value: string) => {
+	/** `/codex` — scaffold the Codex (OpenAI) provider smoothly (one key). */
+	const connectCodex = async () => {
+		if (busy()) {
+			appendInfo('Cannot connect while a turn is running.');
+			return;
+		}
+		const existing = listProviders().find(
+			provider => provider.id.toLowerCase() === 'codex',
+		);
+		if (existing) {
+			appendInfo(
+				`Codex is already connected (${existing.baseUrl}). Edit via /setup-providers edit codex.`,
+			);
+			return;
+		}
+		const ask = (question: string) =>
+			new Promise<string>(resolve =>
+				setPendingPrompt({
+					question,
+					resolve,
+					onCancel: () => resolve(''),
+				}),
+			);
+		const apiKey = (await ask(
+			'Codex API key (sk-... or env:VAR)',
+		)).trim();
+		if (!apiKey) {
+			appendInfo('Codex connect cancelled.');
+			return;
+		}
+		const baseUrl = 'https://api.openai.com/v1';
+		const config = loadConfig();
+		config.providers = config.providers.filter(
+			provider => provider.id.toLowerCase() !== 'codex',
+		);
+		config.providers.push({
+			id: 'codex',
+			name: 'Codex',
+			baseUrl,
+			apiKey,
+			// Live model discovery keeps the Codex catalog up to date.
+			modelDiscoveryUrl: `${baseUrl.replace(/\/+$/, '')}/models`,
+			contextWindow: 400_000,
+			models: [
+				'gpt-5.5-codex',
+				'gpt-5.5-codex-high',
+				'gpt-5.4-codex',
+				'gpt-5.4-codex-mini',
+			],
+		});
+		saveConfig(config);
+		showToast('Codex provider connected');
+		appendInfo(
+			'Codex provider saved. Switch to it with /model or /provider codex.',
+		);
+	};
+
+	const submit = async (
+		value: string,
+		attachments?: Record<string, string>,
+	) => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
 
+		// Vision fallback (Settings → Capabilities → Vision model): when the
+		// prompt carries `[Image #N]` attachments and a vision model is
+		// configured, analyze each image through THAT model and hand the
+		// description to the main (possibly text-only) agent, with a chat
+		// indicator mirroring the web-search fallback line.
+		let prompt = trimmed;
+		const imageTokens = [...trimmed.matchAll(/\[Image #(\d+)\]/g)];
+		const visionFallback = resolveVisionFallback();
+		if (imageTokens.length > 0 && visionFallback && attachments) {
+			let replaced = 0;
+			for (const match of imageTokens) {
+				const path = attachments[match[1] ?? ''];
+				if (!path) continue;
+				try {
+					const description = await analyzeImageWithFallback(
+						path,
+						'Describe this image for a text-only assistant that cannot see it. ' +
+							'Be specific about visible text, layout, colors, UI elements, and anything ' +
+							'another agent might need to act on.',
+					);
+					if (description.trim()) {
+						prompt = prompt.replace(
+							match[0],
+							`<image-description>\n${description.trim()}\n</image-description>`,
+						);
+						replaced += 1;
+					}
+				} catch (error) {
+					// Best-effort: keep the [Image #N] token so the main model
+					// still sees the attachment reference, but surface the
+					// failure so a misconfigured fallback is debuggable.
+					appendInfo(
+						`Vision fallback failed: ${
+							error instanceof Error
+								? error.message
+								: String(error)
+						}`,
+					);
+				}
+			}
+			if (replaced > 0) {
+				appendInfo(
+					`  ✦ Vision fallback: ${visionFallback.model} analyzed ${replaced} image${replaced === 1 ? '' : 's'} → ` +
+						`${activeEndpoint().model} responds`,
+				);
+			}
+		}
+
 		// `!command` → user-invoked bash (Executed Bash), never sent to the LLM.
-		if (trimmed.startsWith('!')) {
+		if (prompt.startsWith('!')) {
 			setInput('');
-			const command = trimmed.slice(1).trim();
+			const command = prompt.slice(1).trim();
 			const result = await runBash(command);
 			appendMessage({
 				role: 'tool',
@@ -1035,9 +1144,9 @@ export function App() {
 		}
 
 		// `/command` → slash-command pipeline (display-only output).
-		if (trimmed.startsWith('/')) {
+		if (prompt.startsWith('/')) {
 			setInput('');
-			runCommand(trimmed, {
+			runCommand(prompt, {
 				exit,
 				clear,
 				compact,
@@ -1064,6 +1173,7 @@ export function App() {
 				modeSwitch,
 				settings: settingsSurface,
 				setupProviders,
+				connectCodex,
 				providerSwitch: switchProvider,
 				mcp: mcpSurface,
 				session: sessionCommand,
@@ -1094,7 +1204,10 @@ export function App() {
 
 		// Chat while busy → queued (submitted when the turn settles).
 		if (busy()) {
-			setPendingQueue(prev => [...prev, value]);
+			setPendingQueue(prev => [
+				...prev,
+				{value, attachments},
+			]);
 			// The queued message renders as a persistent block above the
 			// input (parity: nanocoder's queuedBlock), NOT a transcript row
 			// that scrolls away.
@@ -1102,11 +1215,16 @@ export function App() {
 			return;
 		}
 
-		await runTurn(value);
+		// The transcript shows the ORIGINAL user text; the provider sees the
+		// prompt with vision-description blocks substituted for [Image #N].
+		await runTurn(value, prompt);
 		processQueue();
 	};
 
-	const runTurn = async (value: string) => {
+	const runTurn = async (
+		value: string,
+		providerValue: string = value,
+	) => {
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
 			messages: [...messages()],
@@ -1125,7 +1243,7 @@ export function App() {
 		appendMessage({role: 'user', content: value});
 		const userMsg = {
 			role: 'user' as const,
-			content: scrubberRef.scrub(value),
+			content: scrubberRef.scrub(providerValue),
 		};
 		setInput('');
 		setBusy(true);
@@ -2154,7 +2272,7 @@ export function App() {
 				provider: endpoint.id,
 				modelLabel,
 				tune: toolProfile(),
-				mode: mode() === 'yolo' ? 'yolo mode on' : `${mode()} mode`,
+				mode: mode() === 'yolo' ? 'yolo' : `${mode()} mode`,
 				contextTokens: tokens,
 				contextWindow: endpoint.contextWindow,
 				contextPercent: percent,
@@ -2456,7 +2574,11 @@ export function App() {
 			<box height={1} />
 			{/* The input box and status line stay visible while a modal is
 			    open, the modal only overlays the history region above. */}
-			<InputBox onSubmit={value => void submit(value)} />
+			<InputBox
+				onSubmit={(value, attachments) =>
+					void submit(value, attachments)
+				}
+			/>
 			{/* Status Line setting (on/off) toggles the footer. */}
 			<Show when={statusLineEnabled()}>
 				<Status />

@@ -29,6 +29,7 @@ export const BASE_COMMAND_NAMES = [
 	'settings',
 	'setup-providers',
 	'connect',
+	'codex',
 	'provider',
 	'mcp',
 	'session',
@@ -131,6 +132,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	settings: 'Open settings',
 	'setup-providers': 'Add or edit a provider',
 	connect: 'Connect a provider (add or edit)',
+	codex: 'Connect Codex (OpenAI) as a provider',
 	provider: 'Switch provider',
 	mcp: 'MCP servers',
 	session: 'Session details',
@@ -227,6 +229,8 @@ export interface CommandContext {
 	modeSwitch: (args: string) => void;
 	settings: (args: string) => void;
 	setupProviders: (args: string) => void;
+	/** `/codex` — scaffold the Codex (OpenAI) provider with one API key. */
+	connectCodex: () => void;
 	providerSwitch: (args: string) => void;
 	mcp: () => void;
 	session: (args: string) => void;
@@ -385,6 +389,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'connect':
 			ctx.setupProviders(args);
+			return true;
+		case 'codex':
+			ctx.connectCodex();
 			return true;
 		case 'provider':
 			ctx.providerSwitch(args);
