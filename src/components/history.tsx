@@ -77,7 +77,7 @@ import {
 import {colors} from '../theme';
 import {buildBannerBox, hasConversation} from '../banner';
 import {historyFillWidth} from '../history-width';
-import {wrapText} from './input-box';
+import {wrapText} from '../text-wrap';
 
 const PREVIEW_LINES = 3;
 /**

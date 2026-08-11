@@ -245,6 +245,7 @@ export interface CommandContext {
 	/** Show or switch the tool profile (full/minimal/nano/auto). */
 	tune: (args: string) => void;
 	/** F2 catalog breadth: display-only info commands. */
+	help: () => void;
 	/** GAP-21: run a preview-mock scenario through the REAL chat pipeline. */
 	submitPrompt: (prompt: string) => void;
 	commandsList: () => void;
@@ -341,7 +342,7 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 	}
 	switch (name) {
 		case 'help':
-			appendInfo(HELP_TEXT);
+			ctx.help();
 			return true;
 		case 'exit':
 		case 'quit':

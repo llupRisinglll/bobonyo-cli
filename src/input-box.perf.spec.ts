@@ -2,9 +2,11 @@ import {describe, expect, test} from 'bun:test';
 import {
 	cursorPositionFromWrapped,
 	tokenizeInputLine,
+} from './components/input-box';
+import {
 	wrapText,
 	wrapTextDetailed,
-} from './components/input-box';
+} from './text-wrap';
 
 /**
  * Input hot-path benchmarks. The user-input render runs per FRAME while

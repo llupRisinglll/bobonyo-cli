@@ -12,6 +12,8 @@ import {loadCustomCommands, loadSkills} from '../custom';
 import {insertMention, listProjectFiles, mentionToken} from '../mentions';
 import {expandTextPlaceholders, processPaste} from '../attachments';
 import {estimateTokens} from '../tokenize';
+import {wrapDescription} from '../description-wrap';
+import {wrapText, wrapTextDetailed} from '../text-wrap';
 import {
 	activeEndpoint,
 	busy,
@@ -236,8 +238,7 @@ export function InputBox(props: {
 			kind: 'command' | 'skill';
 			description: string;
 			// `[Command]`/`[Skill]` tag, only NON-built-in entries carry one
-			// (the built-ins would be noisy), and it renders beside the
-			// right-side description (parity: the reference tagged rows).
+			// (the built-ins would be noisy); renders BEFORE the description.
 			prefix: string;
 		}> = [];
 		for (const command of commandNames()) {
@@ -926,23 +927,31 @@ export function InputBox(props: {
 			</Show>
 			{/* Command-completion popup (modal-style): a BORDERLESS list
 			    above the input while `/` is being typed. ↑/↓ scroll through
-			    ALL matches via the rendered window; each row is a fixed
-			    command column + a separate description column, with the
-			    `[Command]`/`[Skill]` tag beside the description. */}
+			    ALL matches via the rendered window; each row is a command
+			    column + a wrapped description column (up to 2 lines) with
+			    the `[Command]`/`[Skill]` tag BEFORE the description. */}
 			<Show when={completions().length > 0}>
 				<box
 					flexDirection="column"
-					height={completionWindow().length}
+					height={completionWindow().length * 2}
 				>
 					<For each={completionWindow()}>
 						{(item) => {
 							const active = item.active;
+							const descWidth = Math.max(
+								24,
+								terminalDimensions().width - 42,
+							);
+							const descLines = wrapDescription(
+								item.description,
+								descWidth,
+							);
 							return (
 							// The WHOLE row is the hover/click target (parity:
 							// the settings rows, hover navigates, click picks).
 							<box
-								flexDirection="row"
-								height={1}
+								flexDirection="column"
+								height={descLines.length}
 								backgroundColor={active ? activeRow().bg : undefined}
 								{...({
 									onMouseUp: () => {
@@ -960,45 +969,56 @@ export function InputBox(props: {
 										setSelectedCompletion(item.index),
 								} as any)}
 							>
-								<text
-									width={2}
-									fg={active ? activeRow().fg : colors().secondary}
-									attributes={active ? bold() : undefined}
-								>
-									{active ? '❯ ' : '  '}
-								</text>
-								<text
-									width={30}
-									fg={active ? activeRow().fg : colors().text}
-									attributes={active ? bold() : undefined}
-								>
-									/{item.name}
-								</text>
-								<text
-									fg={
-										active
-											? activeRow().fg
-											: colors().secondary
-									}
-									attributes={active ? bold() : dim()}
-								>
-									{item.description}
-								</text>
-								<box flexGrow={1} />
-								{item.prefix ? (
+								<box flexDirection="row" height={1}>
+									<text
+										width={2}
+										fg={active ? activeRow().fg : colors().secondary}
+										attributes={active ? bold() : undefined}
+									>
+										{active ? '❯ ' : '  '}
+									</text>
+									<text
+										width={30}
+										fg={active ? activeRow().fg : colors().text}
+										attributes={active ? bold() : undefined}
+									>
+										/{item.name}
+									</text>
+									{item.prefix ? (
+										<text
+											width={item.prefix.length + 1}
+											fg={
+												active
+													? activeRow().fg
+													: colors().primary
+											}
+											attributes={active ? bold() : undefined}
+										>
+											{item.prefix}
+										</text>
+									) : (
+										<></>
+									)}
 									<text
 										fg={
 											active
 												? activeRow().fg
-												: colors().primary
+												: colors().secondary
 										}
-										attributes={active ? bold() : undefined}
+										attributes={active ? bold() : dim()}
 									>
-										{` ${item.prefix}`}
+										{descLines[0] ?? ''}
 									</text>
-								) : (
-									<></>
-								)}
+								</box>
+								<Show when={descLines.length > 1}>
+									<text
+										fg={active ? activeRow().fg : colors().secondary}
+										attributes={active ? bold() : dim()}
+									>
+										{'   '}
+										{descLines[1] ?? ''}
+									</text>
+								</Show>
 							</box>
 							);
 						}}
@@ -1240,7 +1260,10 @@ export function computeInputBoxHeight(
  * Command-completion popup height (borders + match rows), the popup renders
  * ABOVE the input box, so the App subtracts it from the history height.
  */
-export function completionPopupHeight(inputText: string): number {
+export function completionPopupHeight(
+	inputText: string,
+	width = 100,
+): number {
 	if (!inputText.startsWith('/') || inputText.includes(' ')) return 0;
 	const name = inputText.slice(1);
 	const all: string[] = [
@@ -1248,15 +1271,30 @@ export function completionPopupHeight(inputText: string): number {
 		...customCommandNames(),
 		...loadSkills().map(skill => `skill:${skill.name}`),
 	];
-	const matches = name
+	const matches: Array<{command: string; score: number}> = name
 		? all
 				.map(command => ({command, score: fuzzyScore(name.toLowerCase(), command)}))
 				.filter(entry => entry.score > 0)
 				.sort((a, b) => b.score - a.score)
 				.slice(0, 50)
-		: all.slice(0, 6);
-	// Borderless + windowed: the popup occupies at most the 6-row window.
-	return matches.length > 0 ? Math.min(6, matches.length) : 0;
+		: all.slice(0, 6).map(command => ({command, score: 1}));
+	if (matches.length === 0) return 0;
+	const windowed = matches.slice(0, 6);
+	// Borderless + windowed: each suggestion renders up to 2 lines (wrapped
+	// description), so the popup height is the SUM of the row line counts.
+	const descWidth = Math.max(24, width - 42);
+	const custom = new Map(
+		loadCustomCommands().map(command => [command.name, command.description]),
+	);
+	return windowed.reduce((sum, entry) => {
+		const description =
+			COMMAND_DESCRIPTIONS[entry.command] ??
+			custom.get(entry.command) ??
+			(entry.command.startsWith('mock:')
+				? 'Preview scenario'
+				: 'Run command');
+		return sum + wrapDescription(description, descWidth).length;
+	}, 0);
 }
 
 /** `@` file-mention popup height (borders + match rows). */
@@ -1402,80 +1440,6 @@ export function tokenStartingAt(value: string, cursor: number): number | null {
 		if (token.start === cursor) return token.end - token.start;
 	}
 	return null;
-}
-
-/** Wrap free text at `width` (words preserved; long words hard-split). */
-export function wrapText(text: string, width: number): string[] {
-	return wrapTextDetailed(text, width).map(entry => entry.text);
-}
-
-/**
- * Wrap like {@link wrapText} but ALSO record each line's raw-input start
- * offset, so a raw-string cursor can be mapped to the rendered (line,
- * column) where the caret should paint.
- */
-export function wrapTextDetailed(
-	text: string,
-	width: number,
-): Array<{text: string; start: number}> {
-	const safe = Math.max(1, width);
-	const lines: Array<{text: string; start: number}> = [];
-	if (text === '') return [{text: '', start: 0}];
-	let i = 0;
-	const n = text.length;
-	while (i < n) {
-		const nl = text.indexOf('\n', i);
-		const segmentEnd = nl === -1 ? n : nl;
-		const segment = text.slice(i, segmentEnd);
-		if (segment === '') {
-			lines.push({text: '', start: i});
-		} else {
-			let lineStart = i;
-			let current = '';
-			let charOffset = 0;
-			for (const word of segment.split(/(\s+)/)) {
-				if (!word) continue;
-				const wordStart = i + charOffset;
-				if (word.length > safe) {
-					if (current.trim()) {
-						// Keep trailing spaces: the CARET must map to the raw
-						// offset after a typed space (trimming snapped it back
-						// before the space, hiding the space under the block
-						// caret).
-						lines.push({text: current, start: lineStart});
-						current = '';
-					}
-					for (let k = 0; k < word.length; k += safe) {
-						lines.push({
-							text: word.slice(k, k + safe),
-							start: wordStart + k,
-						});
-					}
-					lineStart = wordStart + word.length;
-				} else {
-					const candidate = current + word;
-					if (current.trim() && candidate.trim().length > safe) {
-						lines.push({text: current, start: lineStart});
-						current = word.trimStart();
-						lineStart =
-							wordStart + (word.length - word.trimStart().length);
-					} else {
-						current = candidate;
-					}
-				}
-				charOffset += word.length;
-			}
-			if (current.trim()) {
-				lines.push({text: current, start: lineStart});
-			}
-		}
-		if (nl === -1) break;
-		i = segmentEnd + 1;
-	}
-	// A trailing newline keeps an EMPTY final row (the caret's resting spot
-	// right after the Enter, parity: `'a\n'.split('\n')` → `['a', '']`).
-	if (text.endsWith('\n')) lines.push({text: '', start: n});
-	return lines;
 }
 
 /**

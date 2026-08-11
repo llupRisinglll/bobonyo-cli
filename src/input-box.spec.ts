@@ -10,9 +10,11 @@ import {
 	tokenEndingAt,
 	tokenizeInputLine,
 	tokenStartingAt,
+} from './components/input-box';
+import {
 	wrapText,
 	wrapTextDetailed,
-} from './components/input-box';
+} from './text-wrap';
 
 describe('wrapText', () => {
 	test('wraps long lines at the width preserving words', () => {

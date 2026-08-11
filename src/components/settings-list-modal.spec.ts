@@ -1,5 +1,6 @@
 import {describe, expect, test} from 'bun:test';
 import {listScrollStart} from './settings-list-modal';
+import {wrapDescription} from '../description-wrap';
 
 describe('listScrollStart', () => {
 	test('stays at the top while the selection fits', () => {
@@ -14,5 +15,28 @@ describe('listScrollStart', () => {
 
 	test('clamps to the last window for oversized indexes', () => {
 		expect(listScrollStart(99, 20, 10)).toBe(10);
+	});
+});
+
+describe('wrapDescription (2-line wrap parity)', () => {
+	test('short descriptions stay on one line', () => {
+		expect(wrapDescription('Show this help', 40)).toEqual([
+			'Show this help',
+		]);
+	});
+
+	test('long descriptions wrap to exactly 2 lines with an ellipsis', () => {
+		const lines = wrapDescription(
+			'Create a pull request. Handles project-specific rules like changesets and branch targeting automatically. Runs the REVIEW.md lens reviewer before push.',
+			40,
+		);
+		expect(lines.length).toBe(2);
+		expect(lines[1]).toMatch(/…$/);
+	});
+
+	test('empty descriptions stay empty', () => {
+		// wrapText keeps one empty row for the caret; the description
+		// renderer guards with `Show when={row.value}` so it never shows.
+		expect(wrapDescription('', 40).length).toBeLessThanOrEqual(1);
 	});
 });

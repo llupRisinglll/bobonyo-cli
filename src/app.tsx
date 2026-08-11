@@ -46,7 +46,11 @@ import {
 	toolResultTail,
 } from './tools';
 import {activeBgCount, bgTasks, runBash} from './bash';
-import {findCustomCommand, HELP_TEXT, runCommand} from './commands';
+import {
+	COMMAND_DESCRIPTIONS,
+	findCustomCommand,
+	runCommand,
+} from './commands';
 import {loadSettings, saveSettings, type Mode, type ToolProfile} from './settings';
 import {estimateTokens} from './tokenize';
 import {
@@ -209,6 +213,8 @@ import {
 	setDetailsOpen,
 	detailsTitle,
 	detailsContent,
+	setDetailsTitle,
+	setDetailsContent,
 	resumeOpen,
 	setResumeOpen,
 	settingsTab,
@@ -268,6 +274,17 @@ export function App() {
 		title: string;
 		rows: SettingsListRow[];
 	} | null>(null);
+	/** Open the settings LIST modal (also opens the settings surface). */
+	const openSettingsList = (title: string, rows: SettingsListRow[]) => {
+		setSettingsList({title, rows});
+		setSettingsOpen(true);
+	};
+	/** Open a scrollable DETAILS modal for pure-info command output. */
+	const openInfoModal = (title: string, content: string) => {
+		setDetailsTitle(title);
+		setDetailsContent(content);
+		setDetailsOpen(true);
+	};
 
 	// The in-flight turn's abort controller, so `/clear` can cancel a running
 	// stream mid-turn (parity: clear starts a NEW conversation).
@@ -702,6 +719,7 @@ export function App() {
 					...loadCustomCommands().map(command => ({
 						label: `/${command.name}`,
 						value: command.description,
+						insert: `/${command.name} `,
 					})),
 				]);
 				return;
@@ -1473,6 +1491,7 @@ export function App() {
 				checkpoints: checkpointsSurface,
 				restore: restoreCheckpoint,
 				tune: tuneSwitch,
+				help,
 				commandsList,
 				toolsList,
 				skillsList,
@@ -2421,18 +2440,17 @@ export function App() {
 
 	const listSessionsInfo = () => {
 		const sessions = listSessions();
-		if (sessions.length === 0) {
-			appendInfo('No saved sessions yet.');
-			return;
-		}
-		appendInfo(
-			`Saved sessions (${sessions.length}):\n` +
-				sessions
-					.map(
-						(session, index) =>
-							`  └ ${index} · ${session.id} · ${session.firstMessage}`,
-					)
-					.join('\n'),
+		openSettingsList(
+			'Sessions',
+			sessions.map(session => ({
+				label: session.firstMessage || session.id,
+				value: session.id,
+				activateHint: 'resume',
+				onActivate: () => {
+					setSettingsList(null);
+					resumeSession(session.id);
+				},
+			})),
 		);
 	};
 
@@ -2466,18 +2484,19 @@ export function App() {
 
 	const checkpointsSurface = () => {
 		const list = listCheckpoints();
-		if (list.length === 0) {
-			appendInfo('No checkpoints yet. Save one with /checkpoint <name>.');
-			return;
-		}
-		appendInfo(
-			`Checkpoints:\n${list
-				.map(
-					(data, index) =>
-						`  ${index + 1}. ${data.name} · ${data.messages.length} messages · ` +
-						`${new Date(data.createdAt).toLocaleString()}`,
-				)
-				.join('\n')}`,
+		openSettingsList(
+			'Checkpoints',
+			list.map(data => ({
+				label: data.name,
+				value: `${data.messages.length} messages · ${new Date(
+					data.createdAt,
+				).toLocaleString()}`,
+				activateHint: 'restore',
+				onActivate: () => {
+					setSettingsList(null);
+					restoreCheckpoint(data.name);
+				},
+			})),
 		);
 	};
 
@@ -2498,39 +2517,74 @@ export function App() {
 	};
 
 	// F2: catalog breadth, display-only info commands.
-	const commandsList = () => appendInfo(HELP_TEXT);
-	const toolsList = () =>
-		appendInfo(`Tools:\n${listTools().map(tool => `  └ ${tool}`).join('\n')}`);
-	const skillsList = () => {
-		const skills = loadSkills();
-		appendInfo(
-			skills.length === 0
-				? 'No skills loaded.'
-				: `Skills:\n${skills.map(skill => `  └ ${skill.name} (${skill.source})`).join('\n')}`,
-		);
+	// `/commands` opens the SAME list modal the settings row uses: selecting
+	// a command inserts it into the input box and closes the modal (parity:
+	// the reference command palette) instead of printing to the transcript.
+	const commandsList = () => {
+		const rows: SettingsListRow[] = [
+			...Object.keys(COMMAND_DESCRIPTIONS)
+				.filter(name => name !== 'quit')
+				.sort()
+				.map(name => ({
+					label: `/${name}`,
+					value: COMMAND_DESCRIPTIONS[name],
+					insert: `/${name} `,
+				})),
+			...loadCustomCommands().map(command => ({
+				label: `/${command.name}`,
+				value: command.description,
+				insert: `/${command.name} `,
+			})),
+		];
+		openSettingsList('Commands', rows);
 	};
+	// `/help` opens the same command catalog instead of printing into the
+	// conversation transcript.
+	const help = () => commandsList();
+	// Pure-information commands open MODALS (same list/detail surfaces the
+	// settings rows use) instead of printing into the conversation
+	// transcript — `/commands`, `/tools`, `/skills`, `/tasks`, `/sessions`,
+	// `/checkpoints`, `/mcp` are catalog surfaces, not chat events.
+	const toolsList = () =>
+		openSettingsList(
+			'Tools',
+			listTools().map(tool => ({label: tool})),
+		);
+	const skillsList = () =>
+		openSettingsList(
+			'Skills',
+			loadSkills().map(skill => ({
+				label: skill.name,
+				value: skill.description || skill.source,
+			})),
+		);
 	const tasksList = () => {
 		const current = tasks();
-		appendInfo(
+		openSettingsList(
+			'Tasks',
 			current.length === 0
-				? 'No tasks yet. The model sets them with write_tasks.'
-				: `Tasks:\n${current
-						.map(
-							(task, index) =>
-								`  ${index + 1}. ${task.title}${task.done ? ' ✓' : task.running ? ' (running)' : ''}`,
-						)
-						.join('\n')}`,
+				? []
+				: current.map(task => ({
+						label: task.title,
+						value: task.done
+							? 'done'
+							: task.running
+								? 'running'
+								: 'pending',
+					})),
 		);
 	};
 	const versionInfo = () =>
-		appendInfo(`bobonyo ${VERSION} · OpenTUI rewrite`);
+		openInfoModal('Version', `bobonyo ${VERSION} · OpenTUI rewrite`);
 	const credits = () =>
-		appendInfo(
+		openInfoModal(
+			'Credits',
 			'bobonyo, a NanoCollective OpenTUI rewrite of nanocoder.\n' +
 				'Reference: Nano-Collective/nanocoder (MIT).',
 		);
 	const doctor = () =>
-		appendInfo(
+		openInfoModal(
+			'Doctor',
 			`Doctor\n` +
 				`  └ config dir: ${configDir()}\n` +
 				`  └ providers: ${listProviders().length}\n` +
@@ -2541,43 +2595,61 @@ export function App() {
 		);
 	const privacyInfo = () => {
 		const patterns = loadSettings().privacy?.patterns ?? [];
-		appendInfo(
+		openInfoModal(
+			'Privacy',
 			patterns.length === 0
 				? 'Privacy scrubbing is off (no patterns configured).'
 				: `Privacy patterns:\n${patterns.map(p => `  └ ${p.pattern}`).join('\n')}`,
 		);
 	};
 	const statuslineInfo = () =>
-		appendInfo(`Status line: ${mode()} · ${toolProfile()} · ${activeEndpoint().model}`);
+		openInfoModal(
+			'Status line',
+			`Status line: ${mode()} · ${toolProfile()} · ${activeEndpoint().model}`,
+		);
 	const lspInfo = () =>
-		appendInfo(
+		openInfoModal(
+			'LSP',
 			`LSP diagnostics: ${diagnosticsCount()} issue${diagnosticsCount() === 1 ? '' : 's'} (last auto-diagnostics pass).`,
 		);
 	const innerdaemonInfo = () => {
 		const rules = steeringRef.rules.length;
-		appendInfo(
+		openInfoModal(
+			'InnerDaemon',
 			`InnerDaemon steering: ${steeringRef.enabled ? 'enabled' : 'disabled'} · ` +
 				`${rules} rule${rules === 1 ? '' : 's'} loaded`,
 		);
 	};
-	const scheduleInfo = () => appendInfo('Scheduled tasks: none (no scheduler in the rewrite).');
+	const scheduleInfo = () =>
+		openInfoModal(
+			'Scheduled tasks',
+			'Scheduled tasks: none (no scheduler in the rewrite).',
+		);
 	const updateInfo = () =>
-		appendInfo(`bobonyo ${VERSION}, this rewrite is the latest local build.`);
+		openInfoModal(
+			'Update',
+			`bobonyo ${VERSION}, this rewrite is the latest local build.`,
+		);
 	const exportSession = () => {
 		const file = join(process.cwd(), `session-export-${sessionId()}.json`);
 		writeFileSync(file, `${JSON.stringify({id: sessionId(), messages: messages()}, null, 2)}\n`);
 		appendInfo(`Session exported to ${file}`);
 	};
 	const contextMax = () =>
-		appendInfo(
+		openInfoModal(
+			'Context',
 			`Context: ${maxMessages()} messages cap · auto-compact ` +
 				`${autoCompactRef.enabled ? `at ${autoCompactRef.threshold}%` : 'off'}`,
 		);
 	const setupConfigInfo = () =>
-		appendInfo(`Config dir: ${configDir()}\nProject: ${process.cwd()}`);
+		openInfoModal(
+			'Config',
+			`Config dir: ${configDir()}\nProject: ${process.cwd()}`,
+		);
 	const setupMcpInfo = () => {
 		const servers = loadMCPConfig();
-		appendInfo(
+		openInfoModal(
+			'MCP servers',
 			servers.length === 0
 				? 'No MCP servers configured.'
 				: `MCP servers:\n${servers.map(s => `  └ ${s.id ?? s.command}`).join('\n')}`,
@@ -2894,9 +2966,7 @@ export function App() {
 	const mcpSurface = () => {
 		const servers = loadMCPConfig();
 		if (servers.length === 0) {
-			appendInfo(
-				'No MCP servers configured. Add mcp.json or NANOCODER_MCPSERVERS.',
-			);
+			openSettingsList('MCP servers', []);
 			return;
 		}
 		const byServer = new Map<string, string[]>();
@@ -2905,16 +2975,22 @@ export function App() {
 			list.push(tool.name);
 			byServer.set(tool.serverId, list);
 		}
-		appendInfo(
-			`MCP servers (${servers.length}):\n` +
-				servers
-					.map(
-						server =>
-							`  └ ${server.id} · ${server.command} · ` +
-							`${(byServer.get(server.id) ?? []).join(', ') || 'not connected'}`,
-					)
-					.join('\n'),
-		);
+		openSettingsList('MCP servers', [
+			...servers.map(server => ({
+				label: server.id ?? server.command,
+				value: `${server.command ?? ''} · ${
+					(byServer.get(server.id) ?? []).join(', ') || 'not connected'
+				}`,
+			})),
+			...(mcpToolsRef.length === 0
+				? []
+				: [
+						{
+							label: `${mcpToolsRef.length} MCP tools loaded`,
+							value: mcpToolsRef.map(tool => tool.name).join(', '),
+						},
+					]),
+		]);
 	};
 
 	const sessionCommand = (args: string) => {
@@ -2993,7 +3069,7 @@ export function App() {
 				(completionMessage() ? 1 : 0) -
 				(exitConfirm() ? 1 : 0) -
 				(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
-				completionPopupHeight(input()) -
+				completionPopupHeight(input(), terminalDimensions().width) -
 				mentionPopupHeight(input()),
 		),
 	);
@@ -3042,6 +3118,10 @@ export function App() {
 						<SettingsListModal
 							title={list().title}
 							rows={list().rows}
+							onInsert={(text) => {
+								setSettingsList(null);
+								setInput(text);
+							}}
 							onClose={() => setSettingsList(null)}
 						/>
 					)}

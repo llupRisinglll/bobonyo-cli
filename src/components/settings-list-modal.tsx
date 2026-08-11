@@ -4,6 +4,8 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {wrapDescription} from '../description-wrap';
+import {wrapText} from '../text-wrap';
 
 /** Scroll window start for a list index (pure, unit-tested). */
 export function listScrollStart(
@@ -18,12 +20,19 @@ export interface SettingsListRow {
 	label: string;
 	/** Secondary detail line (description, count, path…). */
 	value?: string;
+	/** Insert this text into the user input when the row is activated. */
+	insert?: string;
 	/**
 	 * Optional action on Enter (e.g. resume a session). Without it the row
 	 * is view-only.
 	 */
 	onActivate?: () => void;
 	activateHint?: string;
+}
+
+function rowLineCount(row: SettingsListRow, width: number): number {
+	if (!row.value) return 1;
+	return 1 + Math.min(2, wrapText(row.value, width).length);
 }
 
 /**
@@ -37,6 +46,8 @@ export function SettingsListModal(props: {
 	title: string;
 	rows: SettingsListRow[];
 	onClose: () => void;
+	/** Called when a row with `insert` is activated (type into the input). */
+	onInsert?: (text: string) => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
@@ -46,17 +57,37 @@ export function SettingsListModal(props: {
 	const [index, setIndex] = createSignal(0);
 	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
 	const listVisible = () => Math.max(6, Math.min(20, dims().height - 10));
+	const descWidth = () => Math.max(20, cardWidth() - 8);
 	const cardHeight = () =>
-		Math.min(props.rows.length + 5, listVisible() + 5);
+		Math.min(
+			props.rows.reduce((sum, row) => sum + rowLineCount(row, descWidth()), 0) +
+				5,
+			Math.max(11, dims().height - 4),
+		);
 	const cardY = () =>
 		Math.max(2, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 
 	const scrollStart = () =>
 		listScrollStart(index(), props.rows.length, listVisible());
-	const visible = createMemo(() =>
-		props.rows.slice(scrollStart(), scrollStart() + listVisible()),
-	);
+	const visible = createMemo(() => {
+		const rows = props.rows;
+		const start = scrollStart();
+		let count = 0;
+		let lines = 0;
+		for (let i = start; i < rows.length; i++) {
+			const rowLines = rowLineCount(rows[i]!, descWidth());
+			if (count > 0 && lines + rowLines > listVisible()) break;
+			count += 1;
+			lines += rowLines;
+		}
+		return count > 0
+			? rows.slice(start, start + count)
+			: [rows[start] ?? null].filter((row): row is SettingsListRow => Boolean(row));
+	});
+	/** Pre-wrapped descriptions so the render and the height agree. */
+	const wrapped = (row: SettingsListRow): string[] =>
+		wrapDescription(row.value ?? '', descWidth());
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
@@ -73,6 +104,10 @@ export function SettingsListModal(props: {
 		}
 		if (event.name === 'return') {
 			const row = props.rows[index()];
+			if (row?.insert) {
+				props.onInsert?.(row.insert);
+				return;
+			}
 			if (row?.onActivate) row.onActivate();
 			return;
 		}
@@ -126,8 +161,8 @@ export function SettingsListModal(props: {
 				<For each={visible()}>
 					{(row, i) => (
 						<box
-							flexDirection="row"
-							height={1}
+							flexDirection="column"
+							height={rowLineCount(row, descWidth())}
 							backgroundColor={
 								index() === i() + scrollStart()
 									? activeRow().bg
@@ -136,29 +171,42 @@ export function SettingsListModal(props: {
 							{...({
 								onMouseMove: () => setIndex(i() + scrollStart()),
 								onMouseUp: () => {
+									if (row.insert) {
+										props.onInsert?.(row.insert);
+										return;
+									}
 									if (row.onActivate) row.onActivate();
 								},
 							} as any)}
 						>
-							<text
-								fg={
-									index() === i() + scrollStart()
-										? activeRow().fg
-										: colors().text
-								}
-								attributes={bold()}
-							>
-								{index() === i() + scrollStart() ? '❯ ' : '  '}
-								{row.label}
-							</text>
-							<text fg={colors().secondary}>
-								{row.value ? `  ${row.value}` : ''}
-							</text>
-							<Show when={row.activateHint && index() === i() + scrollStart()}>
-								<box flexGrow={1} />
-								<text fg={colors().primary} attributes={dim()}>
-									{row.activateHint}
+							<box flexDirection="row" height={1}>
+								<text
+									fg={
+										index() === i() + scrollStart()
+											? activeRow().fg
+											: colors().text
+									}
+									attributes={bold()}
+								>
+									{index() === i() + scrollStart() ? '❯ ' : '  '}
+									{row.label}
 								</text>
+								<box flexGrow={1} />
+								<Show when={row.activateHint && index() === i() + scrollStart()}>
+									<text fg={colors().primary} attributes={dim()}>
+										{row.activateHint}
+									</text>
+								</Show>
+							</box>
+							<Show when={row.value}>
+								<For each={wrapped(row)}>
+									{(line) => (
+										<text fg={colors().secondary} attributes={dim()}>
+											{'  '}
+											{line}
+										</text>
+									)}
+								</For>
 							</Show>
 						</box>
 					)}
