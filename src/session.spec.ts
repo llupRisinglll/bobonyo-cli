@@ -1,5 +1,8 @@
 import {describe, expect, test} from 'bun:test';
-import {convertNanocoderSession} from './session';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {convertNanocoderSession, listSessions, newSessionId, saveSession} from './session';
 
 describe('convertNanocoderSession', () => {
 	test('maps title/messages into bobonyo SessionData', () => {
@@ -52,5 +55,34 @@ describe('convertNanocoderSession', () => {
 
 	test('returns null for a missing id', () => {
 		expect(convertNanocoderSession({} as never)).toBeNull();
+	});
+});
+
+describe('session cwd (resume folder filter)', () => {
+	test('saveSession persists the cwd and listSessions returns it', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-sess-'));
+		const prev = process.env.NANOCODER_DATA_DIR;
+		process.env.NANOCODER_DATA_DIR = dir;
+		try {
+			const id = newSessionId();
+			saveSession({
+				id,
+				name: 'work chat',
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				firstMessage: 'fix the bug',
+				cwd: '/mnt/data/KSProjects/Hilinga',
+				messages: [{role: 'user', content: 'fix the bug'}],
+				context: [],
+			});
+			const meta = listSessions().find(session => session.id === id);
+			expect(meta?.cwd).toBe('/mnt/data/KSProjects/Hilinga');
+			// Sessions without a cwd (legacy) surface as undefined, not junk.
+			const legacy = listSessions().find(session => session.id === 'missing-cwd');
+			expect(legacy).toBeUndefined();
+		} finally {
+			process.env.NANOCODER_DATA_DIR = prev;
+			rmSync(dir, {recursive: true, force: true});
+		}
 	});
 });

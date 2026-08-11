@@ -27,6 +27,9 @@ export interface SessionMeta {
 	createdAt: number;
 	updatedAt: number;
 	firstMessage: string;
+	/** Working directory the conversation was created in (for /resume's
+	 *  current-folder filter; legacy sessions may not carry it). */
+	cwd?: string;
 }
 
 export interface SessionData extends SessionMeta {
@@ -163,6 +166,10 @@ export function listSessions(): SessionMeta[] {
 				if (messageCount === 0) return null;
 				const createdAt = toEpoch(data.createdAt);
 				const updatedAt = toEpoch(data.updatedAt) || createdAt;
+				const cwd =
+					typeof data.cwd === 'string' && data.cwd.length > 0
+						? data.cwd
+						: undefined;
 				return {
 					id: data.id,
 					// nanocoder sessions carry `title` instead of `name`.
@@ -170,6 +177,7 @@ export function listSessions(): SessionMeta[] {
 					createdAt,
 					updatedAt,
 					firstMessage: data.firstMessage,
+					...(cwd ? {cwd} : {}),
 				};
 			} catch {
 				return null;

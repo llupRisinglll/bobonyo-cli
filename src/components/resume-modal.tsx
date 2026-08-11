@@ -11,6 +11,8 @@ export interface ResumeSession {
 	createdAt: number;
 	updatedAt: number;
 	firstMessage: string;
+	/** Folder the conversation was created in (legacy sessions may lack it). */
+	cwd?: string;
 }
 
 type Row =
@@ -28,6 +30,21 @@ export function sessionLabel(session: ResumeSession): string {
 	const name = (session.name ?? '').trim();
 	if (!name || name === 'New conversation') return session.id;
 	return `${session.id}: ${name}`;
+}
+
+/**
+ * Whether a session belongs in the /resume list. By default only the
+ * CURRENT folder's conversations show; Ctrl+A toggles to ALL. Legacy
+ * sessions without a recorded cwd are always shown (they predate the
+ * filter and hiding them would silently drop conversations). Pure,
+ * unit-tested.
+ */
+export function sessionInFolder(
+	session: ResumeSession,
+	cwd: string,
+	showAll: boolean,
+): boolean {
+	return showAll || !session.cwd || session.cwd === cwd;
 }
 
 function dateGroup(createdAt: number): string {
@@ -68,6 +85,7 @@ function relativeTime(ts: number): string {
  * resume, Esc closes, rows are mouse-clickable.
  */
 export function ResumeModal(props: {
+	cwd: string;
 	sessions: ResumeSession[];
 	onResume: (id: string) => void;
 	onClose: () => void;
@@ -76,6 +94,9 @@ export function ResumeModal(props: {
 	const dims = () => terminalDimensions();
 	const [rowIndex, setRowIndex] = createSignal(0);
 	const [query, setQuery] = createSignal('');
+	// Ctrl+A toggles between the CURRENT FOLDER's conversations (default)
+	// and ALL saved conversations.
+	const [showAll, setShowAll] = createSignal(false);
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	// Active-row palette: info tint + guaranteed-readable foreground.
@@ -111,7 +132,7 @@ export function ResumeModal(props: {
 					!q ||
 					(session.name ?? '').toLowerCase().includes(q) ||
 					(session.firstMessage ?? '').toLowerCase().includes(q)
-				);
+				) && sessionInFolder(session, props.cwd, showAll());
 			})
 			.slice(0, 500);
 		const groups: Row[] = [];
@@ -195,6 +216,13 @@ export function ResumeModal(props: {
 	useKeyboard(event => {
 		if (event.name === 'escape') {
 			props.onClose();
+			return;
+		}
+		// Ctrl+A toggles the scope: current FOLDER (default) vs ALL saved
+		// conversations. A plain "a" still types into the search box.
+		if (event.name === 'a' && event.ctrl) {
+			setShowAll(prev => !prev);
+			setRowIndex(0);
 			return;
 		}
 		if (event.name === 'up' || event.name === 'down') {
@@ -281,6 +309,21 @@ export function ResumeModal(props: {
 						<text fg={colors().secondary}>Type to filter…</text>
 					</Show>
 				</box>
+				<box height={1} />
+				{/* SCOPE indicator: current folder by default, Ctrl+A toggles
+				    to ALL conversations. */}
+				<Show
+					when={!showAll()}
+					fallback={
+						<text fg={colors().secondary} attributes={dim()}>
+							Showing all conversations · Ctrl+A: this folder
+						</text>
+					}
+				>
+					<text fg={colors().secondary} attributes={dim()}>
+						Showing conversations in {props.cwd} · Ctrl+A: all
+					</text>
+				</Show>
 				<box height={1} />
 				<For each={visibleItems()}>
 					{(item) => {
@@ -387,7 +430,7 @@ export function ResumeModal(props: {
 				</For>
 				<box height={1} />
 				<text fg={colors().secondary} attributes={dim()}>
-					↑/↓ select · Enter resume · Esc close
+					↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} · Esc close
 				</text>
 			</box>
 		</box>

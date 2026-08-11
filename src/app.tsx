@@ -541,6 +541,9 @@ export function App() {
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			firstMessage: '',
+			// Record the folder the conversation was created in so /resume can
+			// filter to the current cwd by default.
+			cwd: process.cwd(),
 			messages: [],
 			context: [],
 		};
@@ -2732,12 +2735,14 @@ export function App() {
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
 			<Show when={resumeOpen()}>
 				<ResumeModal
+					cwd={process.cwd()}
 					sessions={listSessions().map(session => ({
 						id: session.id,
 						name: session.name,
 						createdAt: session.createdAt,
 						updatedAt: session.updatedAt,
 						firstMessage: session.firstMessage,
+						cwd: session.cwd,
 					}))}
 					onResume={id => {
 						setResumeOpen(false);
