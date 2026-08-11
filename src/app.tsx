@@ -91,6 +91,14 @@ import {DetailsModal} from './components/details-modal';
 import {buildStatusRows} from './status-rows';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
+import {
+	cacheStats,
+	formatCacheHitLabel,
+	isDeepSeek,
+	refreshDeepSeekBalance,
+	refreshDeepSeekModels,
+	shouldAlertCacheMiss,
+} from './deepseek';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
@@ -114,6 +122,8 @@ import {
 	context,
 	contextPercent,
 	completionMessage,
+	deepSeekBalance,
+	deepSeekModels,
 	diagnosticsCount,
 	exitConfirm,
 	input,
@@ -135,6 +145,8 @@ import {
 	setContextPercent,
 	setContext,
 	setCompletionMessage,
+	setDeepSeekBalance,
+	setDeepSeekModels,
 	setStartupLoading,
 	setMcpServers,
 	setDiagnosticsCount,
@@ -255,6 +267,22 @@ export function App() {
 	// Animation ticker: advances the spinner/gear frame counter so the busy
 	// spinner, Working dots and gear glyph animate like nanocoder's.
 	setInterval(() => setSpinnerFrame(prev => prev + 1), 100);
+	// DeepSeek balance/model refresh cadence (5 min, mirroring the balance
+	// TTL). The refresh itself reads the disk cache first, so this interval
+	// and the event-triggered refreshes share one request when fresh.
+	setInterval(() => {
+		const endpoint = activeEndpoint();
+		if (!isDeepSeek(endpoint)) return;
+		void refreshDeepSeekBalance(endpoint).then(balance => {
+			if (balance) {
+				setDeepSeekBalance({
+					currency: balance.currency,
+					total: balance.total,
+					isAvailable: balance.isAvailable,
+				});
+			}
+		});
+	}, 5 * 60 * 1000);
 
 	// Provider init (E2): resolve the requested/first provider and publish the
 	// active endpoint; the client reads it for every request.
@@ -296,6 +324,26 @@ export function App() {
 			if (provider.modelDiscoveryUrl) {
 				void discoverModels(provider).then(models => {
 					if (models.length > 0) {
+						setActiveEndpoint(prev => ({...prev, models}));
+					}
+				});
+			}
+			// DeepSeek live integration: balance on the status line + the
+			// fetched model catalog (both TTL-cached on disk, atomic writes,
+			// shared in-flight, stale-safe — see src/deepseek.ts).
+			if (isDeepSeek(provider)) {
+				void refreshDeepSeekBalance(provider).then(balance => {
+					if (balance) {
+						setDeepSeekBalance({
+							currency: balance.currency,
+							total: balance.total,
+							isAvailable: balance.isAvailable,
+						});
+					}
+				});
+				void refreshDeepSeekModels(provider).then(models => {
+					if (models.length > 0) {
+						setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
 						setActiveEndpoint(prev => ({...prev, models}));
 					}
 				});
@@ -1519,6 +1567,7 @@ export function App() {
 							durationSec: thoughtDuration(),
 						});
 						const completionUsage = usageSignal(result.usage);
+						const cacheLabel = formatCacheHitLabel(cacheStats(result.usage));
 						// Static completion line ABOVE the input (diamond glyph,
 						// secondary), not a transcript row. Expires after a
 						// few seconds like the exit confirmation.
@@ -1526,7 +1575,8 @@ export function App() {
 							`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
 								(completionUsage?.total_tokens
 									? ` · ${completionUsage.total_tokens} tokens`
-									: ''),
+									: '') +
+								(cacheLabel ? ` · ${cacheLabel}` : ''),
 						);
 						capturePRs(result.text);
 						// Keep the LOCAL history (what the provider saw) in
@@ -1949,7 +1999,8 @@ export function App() {
 			// already set it; this covers the other path).
 			if (!completionMessage()) {
 				setCompletionMessage(
-					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.`,
+					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+						(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
 				);
 			}
 		} catch (error) {
@@ -2030,6 +2081,17 @@ export function App() {
 				ts: Date.now(),
 			},
 		]);
+		// DeepSeek prompt-cache alert: an unusually cache-miss-heavy turn is
+		// exactly what drives the cost up. Toast (transient) — never a chat
+		// history row, same policy as setting changes.
+		if (isDeepSeek(activeEndpoint())) {
+			const stats = cacheStats(usage);
+			if (shouldAlertCacheMiss(stats)) {
+				showToast(
+					`Cache miss ${Math.round((1 - (stats?.ratio ?? 0)) * 100)}% on this turn · costs more`,
+				);
+			}
+		}
 	};
 
 	/**
@@ -2337,7 +2399,10 @@ export function App() {
 							`  └ call ${index + 1} · ${snapshot.provider}/${snapshot.model}: ` +
 							`prompt ${snapshot.prompt_tokens ?? '?'} · ` +
 							`completion ${snapshot.completion_tokens ?? '?'} · ` +
-							`total ${snapshot.total_tokens ?? '?'}`,
+							`total ${snapshot.total_tokens ?? '?'}` +
+							(snapshot.promptCacheHitTokens !== undefined
+								? ` · cache ${snapshot.promptCacheHitTokens}h/${snapshot.promptCacheMissTokens ?? 0}m`
+								: ''),
 					)
 					.join('\n'),
 		);
@@ -2345,6 +2410,24 @@ export function App() {
 
 	const status = () => {
 		const endpoint = activeEndpoint();
+		// Event-triggered DeepSeek balance refresh: opening /status is a
+		// "terminal opened" moment the user asked to refresh on. The TTL
+		// cache keeps this cheap when a refresh already ran recently.
+		if (isDeepSeek(endpoint)) {
+			void refreshDeepSeekBalance(endpoint).then(balance => {
+				if (balance) {
+					setDeepSeekBalance({
+						currency: balance.currency,
+						total: balance.total,
+						isAvailable: balance.isAvailable,
+					});
+				}
+			});
+		}
+		const cacheLabel =
+			isDeepSeek(endpoint) && cacheStats(lastUsage())
+				? `deepseek · ${formatCacheHitLabel(cacheStats(lastUsage()))}`
+				: 'n/a';
 		// `/status` opens as a MODAL (parity: settings) listing only the
 		// details NOT already visible on the status line (mode, tune, agents,
 		// bg, cwd) or the input corner (model[effort], ctx ~N%).
@@ -2358,6 +2441,7 @@ export function App() {
 				customCommands: loadCustomCommands().length,
 				mcpServers: mcpServers(),
 				mcpConfigured: loadMCPConfig().map(server => server.id),
+				cacheLabel,
 				// B21: auto-diagnostics refresh after EVERY tool turn, code
 				// changes (write/edit) never leave the LSP stale.
 				lspLabel:
@@ -2391,6 +2475,9 @@ export function App() {
 		if (!name) {
 			// `/model` with no args opens the MODEL MODAL (parity: nanocoder's
 			// grouped model selector) listing the real configured providers.
+			// Opening the picker is a refresh trigger for the live DeepSeek
+			// catalogs (the TTL cache makes this cheap when already fresh).
+			refreshDeepSeekCatalogs();
 			setModelModalInherit(false);
 			setModelOpen(true);
 			return;
@@ -2411,6 +2498,33 @@ export function App() {
 		});
 		savePreferences({lastProvider: endpoint.id, lastModel: name});
 		showToast(`Model: ${name} · ${endpoint.id}`);
+	};
+
+	/**
+	 * Provider catalog shown in the model modal: the live DeepSeek discovery
+	 * wins over the static config list, every other provider keeps its
+	 * configured models. Pure read of the signals, so async refresh results
+	 * appear as soon as they land.
+	 */
+	const catalog = () =>
+		listProviders().map(provider => ({
+			id: provider.id,
+			name: provider.name ?? provider.id,
+			models: deepSeekModels()[provider.id] ?? provider.models,
+			modelEfforts: provider.modelEfforts,
+			contextWindow: provider.contextWindow,
+		}));
+
+	/** Refresh every configured DeepSeek catalog (deduped + TTL-cached). */
+	const refreshDeepSeekCatalogs = () => {
+		for (const provider of listProviders()) {
+			if (!isDeepSeek(provider)) continue;
+			void refreshDeepSeekModels(provider).then(models => {
+				if (models.length > 0) {
+					setDeepSeekModels(prev => ({...prev, [provider.id]: models}));
+				}
+			});
+		}
 	};
 
 	/** ModelModal selection: switch provider + model (+ effort override). */
@@ -2452,7 +2566,7 @@ export function App() {
 			baseUrl: provider.baseUrl,
 			apiKey: provider.apiKeyResolved,
 			model,
-			models: provider.models,
+			models: deepSeekModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow ?? 128_000,
 			sdkProvider: provider.sdkProvider,
@@ -2673,6 +2787,7 @@ export function App() {
 						setSettingsOpen(false);
 						setFallbackTarget(target === 'main' ? null : target);
 						setModelModalInherit(true);
+						refreshDeepSeekCatalogs();
 						setModelOpen(true);
 					}}
 				/>
@@ -2688,13 +2803,7 @@ export function App() {
 			{/* `/model` opens as a MODAL (parity: nanocoder's model selector). */}
 			<Show when={modelOpen()}>
 				<ModelModal
-					providers={listProviders().map(provider => ({
-						id: provider.id,
-						name: provider.name ?? provider.id,
-						models: provider.models,
-						modelEfforts: provider.modelEfforts,
-						contextWindow: provider.contextWindow,
-					}))}
+					providers={catalog()}
 					currentProvider={activeEndpoint().id}
 					currentModel={activeEndpoint().model}
 					onSelect={selectModel}
@@ -2826,12 +2935,20 @@ export function App() {
 
 function usageSignal(
 	usage: Record<string, unknown> | undefined,
-): {prompt_tokens?: number; completion_tokens?: number; total_tokens?: number} | undefined {
+): {
+	prompt_tokens?: number;
+	completion_tokens?: number;
+	total_tokens?: number;
+	promptCacheHitTokens?: number;
+	promptCacheMissTokens?: number;
+} | undefined {
 	if (!usage) return undefined;
 	return {
 		prompt_tokens: finiteNumber(usage.prompt_tokens),
 		completion_tokens: finiteNumber(usage.completion_tokens),
 		total_tokens: finiteNumber(usage.total_tokens),
+		promptCacheHitTokens: finiteNumber(usage.prompt_cache_hit_tokens),
+		promptCacheMissTokens: finiteNumber(usage.prompt_cache_miss_tokens),
 	};
 }
 

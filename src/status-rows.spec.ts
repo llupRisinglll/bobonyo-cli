@@ -11,6 +11,7 @@ const BASE: StatusData = {
 	mcpServers: [],
 	mcpConfigured: [],
 	lspLabel: 'typescript-language-server, rust-analyzer, clangd',
+	cacheLabel: 'n/a',
 	rulesFile: '/work/AGENTS.md',
 	steeringLabel: 'disabled',
 	watchdogLabel: 'off',
@@ -31,6 +32,7 @@ describe('buildStatusRows', () => {
 			'Custom commands',
 			'MCP servers',
 			'LSP',
+			'Prompt cache',
 			'AGENTS.md',
 			'Steering',
 			'Watchdog',
@@ -72,6 +74,15 @@ describe('buildStatusRows', () => {
 			lspLabel: 'typescript-language-server · 3 issues',
 		});
 		expect(issues.find(r => r.label === 'LSP')?.valueFg).toBe('warning');
+	});
+
+	test('Prompt cache row is green on a healthy hit share and warns when cold', () => {
+		const healthy = buildStatusRows({...BASE, cacheLabel: 'deepseek · cache hit 87%'});
+		expect(healthy.find(r => r.label === 'Prompt cache')?.valueFg).toBe('success');
+		const cold = buildStatusRows({...BASE, cacheLabel: 'deepseek · cache hit 12%'});
+		expect(cold.find(r => r.label === 'Prompt cache')?.valueFg).toBe('warning');
+		const na = buildStatusRows(BASE);
+		expect(na.find(r => r.label === 'Prompt cache')?.valueFg).toBeUndefined();
 	});
 
 	test('does not duplicate the status line or input corner', () => {

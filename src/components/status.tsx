@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
-import {createMemo} from 'solid-js';
+import {createMemo, Show} from 'solid-js';
 import {useTerminalDimensions} from '@opentui/solid';
 import {
 	activeEndpoint,
 	activeAgents,
+	deepSeekBalance,
 	mode,
 	toolProfile,
 } from '../state';
@@ -39,6 +40,19 @@ export function Status() {
 		const wide = (terminalDimensions().width ?? 80) >= 100;
 		return chosen === 'auto' && wide ? `tune: ${resolved} (auto)` : `tune: ${resolved}`;
 	});
+	// `Cred: $n` (DeepSeek) between tune and the counts; label secondary,
+	// amount primary — mirrors the `tune:` two-tone pair.
+	const credSegment = () => {
+		const balance = deepSeekBalance();
+		if (!balance) return '';
+		const symbol =
+			balance.currency === 'USD'
+				? '$'
+				: balance.currency === 'CNY'
+					? '¥'
+					: `${balance.currency} `;
+		return ` · Cred: ${symbol}${balance.total.toFixed(2)}`;
+	};
 	const cwdLabel = createMemo(() => {
 		const cwd = process.cwd();
 		const user = process.env.USER ?? 'user';
@@ -51,6 +65,7 @@ export function Status() {
 		const left =
 			`⏵⏵⏵ ${modeLabel()} · tune: ` +
 			`${tuneLabel().replace(/^tune:\s*/, '')}` +
+			credSegment() +
 			// agents/bg counts appear mid-line, budget them too or a narrow
 			// pane clips the `bg: 1` digit at the status-line edge.
 			agents() +
@@ -65,6 +80,18 @@ export function Status() {
 			    between `tune:` and the value. */}
 			<text fg={colors().secondary}> · tune:</text>
 			<text fg={colors().primary}> {tuneLabel().replace(/^tune:\s*/, '')}</text>
+			<Show when={deepSeekBalance()}>
+				<text fg={colors().secondary}> · Cred:</text>
+				<text fg={colors().primary}>
+					{' '}
+					{deepSeekBalance()!.currency === 'USD'
+						? '$'
+						: deepSeekBalance()!.currency === 'CNY'
+							? '¥'
+							: `${deepSeekBalance()!.currency} `}
+					{deepSeekBalance()!.total.toFixed(2)}
+				</text>
+			</Show>
 			<text fg={colors().secondary}>{agents()}</text>
 			<text fg={colors().secondary}>{bg()}</text>
 			<box flexGrow={1} />

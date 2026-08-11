@@ -54,7 +54,14 @@ export const [running, setRunning] = createSignal(false);
 export const [reasoning, setReasoning] = createSignal('');
 /** Most recent provider usage snapshot (token accounting footer). */
 export const [lastUsage, setLastUsage] = createSignal<
-	{prompt_tokens?: number; completion_tokens?: number; total_tokens?: number} | undefined
+	{
+		prompt_tokens?: number;
+		completion_tokens?: number;
+		total_tokens?: number;
+		/** DeepSeek prompt-cache fields (kv_cache guide). */
+		promptCacheHitTokens?: number;
+		promptCacheMissTokens?: number;
+	} | undefined
 >();
 /** Ctrl+R: expand/collapse the settled Thought preview. */
 export const [thoughtExpanded, setThoughtExpanded] = createSignal(false);
@@ -89,8 +96,26 @@ export const [usageHistory, setUsageHistory] = createSignal<
 		prompt_tokens?: number;
 		completion_tokens?: number;
 		total_tokens?: number;
+		promptCacheHitTokens?: number;
+		promptCacheMissTokens?: number;
 	}>
 >([]);
+/**
+ * DeepSeek live balance for the status line (`Cred: $n`). Refreshed on app
+ * start, on `/status`/`/model` opens, and on a 5-minute interval, all
+ * through the TTL'd disk cache so concurrent instances never flood the API.
+ */
+export const [deepSeekBalance, setDeepSeekBalance] = createSignal<
+	{currency: string; total: number; isAvailable?: boolean} | undefined
+>();
+/**
+ * DeepSeek model catalogs fetched live from `GET /models`, keyed by
+ * provider id. The model modal + model validation read the merged catalog
+ * (fresh discovery wins over the static config list).
+ */
+export const [deepSeekModels, setDeepSeekModels] = createSignal<
+	Record<string, string[]>
+>({});
 /** B21/C12: issue count from the last auto-diagnostics run (status line). */
 export const [diagnosticsCount, setDiagnosticsCount] = createSignal(0);
 /** A7/C9: task list from `write_tasks`, with live progress flags. */

@@ -11,6 +11,8 @@ export interface StatusData {
 	mcpServers: string[];
 	mcpConfigured: string[];
 	lspLabel: string;
+	/** DeepSeek prompt-cache hit ratio from the last turn (`n/a` elsewhere). */
+	cacheLabel: string;
 	/** Resolved AGENTS.md path actually embedded in the system prompt. */
 	rulesFile: string;
 	steeringLabel: string;
@@ -57,6 +59,13 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 					: 'success',
 		},
 		{
+			label: 'Prompt cache',
+			value: data.cacheLabel,
+			// A low cache-hit share is exactly the cost driver the alert
+			// exists for; surface it in warning yellow here too.
+			valueFg: cacheHitPercent(data.cacheLabel),
+		},
+		{
 			label: 'AGENTS.md',
 			value: data.rulesFile,
 			valueFg: data.rulesFile === 'none' ? 'warning' : undefined,
@@ -66,4 +75,11 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 		{label: 'Stream guard', value: data.streamGuardLabel},
 		{label: 'Version', value: data.version},
 	];
+}
+
+/** 'success' above 30% cache-hit, 'warning' below, undefined for `n/a`. */
+function cacheHitPercent(label: string): 'success' | 'warning' | undefined {
+	const percent = Number(label.match(/(\d+)%/)?.[1]);
+	if (!Number.isFinite(percent)) return undefined;
+	return percent < 30 ? 'warning' : 'success';
 }
