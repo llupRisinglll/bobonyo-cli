@@ -57,6 +57,10 @@ Streaming markdown renders live. Tool calls fold into neat groups you can
 expand. Thoughts stream with a real time timer. The chat history works with
 the mouse, so you can hover and click.
 
+## Demo
+
+![bobonyo in action](demo/demo.gif)
+
 ## Install
 
 You need [Bun](https://bun.sh) version 1.2 or newer.
