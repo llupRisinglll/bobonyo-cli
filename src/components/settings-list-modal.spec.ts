@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test';
-import {listScrollStart} from './settings-list-modal';
+import {
+	filterSettingsRows,
+	listScrollStart,
+	type SettingsListRow,
+} from './settings-list-modal';
 import {wrapDescription} from '../description-wrap';
 
 describe('listScrollStart', () => {
@@ -15,6 +19,24 @@ describe('listScrollStart', () => {
 
 	test('clamps to the last window for oversized indexes', () => {
 		expect(listScrollStart(99, 20, 10)).toBe(10);
+	});
+});
+
+describe('filterSettingsRows (list search)', () => {
+	const rows: SettingsListRow[] = [
+		{label: '/create-pr', value: 'Create a pull request'},
+		{label: '/hilinga-local-dev', value: 'Local dev loop'},
+		{label: '/babysit-pr', value: 'Watch a PR'},
+	];
+
+	test('matches the label and the description, case-insensitive', () => {
+		expect(filterSettingsRows(rows, 'create')).toHaveLength(1);
+		expect(filterSettingsRows(rows, 'pull')).toHaveLength(1);
+		expect(filterSettingsRows(rows, 'PR')).toHaveLength(2);
+	});
+
+	test('empty query keeps every row', () => {
+		expect(filterSettingsRows(rows, '')).toHaveLength(3);
 	});
 });
 

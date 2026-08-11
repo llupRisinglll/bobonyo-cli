@@ -22,12 +22,28 @@ export interface SettingsListRow {
 	value?: string;
 	/** Insert this text into the user input when the row is activated. */
 	insert?: string;
+	/** Edit this provider (opencode-style: change base URL / API key). */
+	providerId?: string;
 	/**
 	 * Optional action on Enter (e.g. resume a session). Without it the row
 	 * is view-only.
 	 */
 	onActivate?: () => void;
 	activateHint?: string;
+}
+
+/** Search filter for the list modal (pure, unit-tested). */
+export function filterSettingsRows(
+	rows: SettingsListRow[],
+	query: string,
+): SettingsListRow[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return rows;
+	return rows.filter(
+		row =>
+			row.label.toLowerCase().includes(q) ||
+			(row.value ?? '').toLowerCase().includes(q),
+	);
 }
 
 function rowLineCount(row: SettingsListRow, width: number): number {
@@ -48,6 +64,8 @@ export function SettingsListModal(props: {
 	onClose: () => void;
 	/** Called when a row with `insert` is activated (type into the input). */
 	onInsert?: (text: string) => void;
+	/** Called when a row with `providerId` is activated (edit wizard). */
+	onEditProvider?: (providerId: string) => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
@@ -55,23 +73,27 @@ export function SettingsListModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
 	const [index, setIndex] = createSignal(0);
+	const [query, setQuery] = createSignal('');
 	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
-	const listVisible = () => Math.max(6, Math.min(20, dims().height - 10));
+	// RESPONSIVE: use as much vertical space as the terminal gives us
+	// (header 1 + search 1 + gaps 2 + footer 1 + padding 2 ≈ 7 rows of
+	// chrome), capped so the card never overflows the screen.
+	const listVisible = () =>
+		Math.max(3, Math.min(30, dims().height - 9));
+	const cardHeight = () => Math.min(listVisible() + 7, dims().height - 2);
 	const descWidth = () => Math.max(20, cardWidth() - 8);
-	const cardHeight = () =>
-		Math.min(
-			props.rows.reduce((sum, row) => sum + rowLineCount(row, descWidth()), 0) +
-				5,
-			Math.max(11, dims().height - 4),
-		);
+	// VERTICALLY CENTERED: (screen height − card height) / 2, never off-screen.
 	const cardY = () =>
-		Math.max(2, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 
+	const filtered = createMemo(() => {
+		return filterSettingsRows(props.rows, query());
+	});
 	const scrollStart = () =>
-		listScrollStart(index(), props.rows.length, listVisible());
+		listScrollStart(index(), filtered().length, listVisible());
 	const visible = createMemo(() => {
-		const rows = props.rows;
+		const rows = filtered();
 		const start = scrollStart();
 		let count = 0;
 		let lines = 0;
@@ -91,25 +113,45 @@ export function SettingsListModal(props: {
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
-			props.onClose();
+			if (query()) setQuery('');
+			else props.onClose();
 			return;
 		}
 		if (event.name === 'up' || event.name === 'down') {
 			setIndex(prev =>
 				event.name === 'down'
-					? Math.min(props.rows.length - 1, prev + 1)
+					? Math.min(Math.max(0, filtered().length - 1), prev + 1)
 					: Math.max(0, prev - 1),
 			);
 			return;
 		}
 		if (event.name === 'return') {
-			const row = props.rows[index()];
+			const row = filtered()[index()];
+			if (row?.providerId) {
+				props.onEditProvider?.(row.providerId);
+				return;
+			}
 			if (row?.insert) {
 				props.onInsert?.(row.insert);
 				return;
 			}
 			if (row?.onActivate) row.onActivate();
 			return;
+		}
+		if (event.name === 'backspace') {
+			setQuery(prev => prev.slice(0, -1));
+			setIndex(0);
+			return;
+		}
+		if (event.name === 'space' && !event.ctrl && !event.meta) {
+			setQuery(prev => prev + ' ');
+			setIndex(0);
+			return;
+		}
+		const char = event.name;
+		if (char && char.length === 1 && !event.ctrl && !event.meta) {
+			setQuery(prev => prev + char);
+			setIndex(0);
 		}
 	});
 
@@ -154,7 +196,13 @@ export function SettingsListModal(props: {
 					</text>
 					<box flexGrow={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						{props.rows.length} item{props.rows.length === 1 ? '' : 's'} · Esc close
+						{filtered().length} item{filtered().length === 1 ? '' : 's'} · Esc close
+					</text>
+				</box>
+				<box height={1} />
+				<box height={1}>
+					<text fg={colors().secondary} attributes={dim()}>
+						⌕ {query() || 'search…'}
 					</text>
 				</box>
 				<box height={1} />
@@ -171,6 +219,10 @@ export function SettingsListModal(props: {
 							{...({
 								onMouseMove: () => setIndex(i() + scrollStart()),
 								onMouseUp: () => {
+									if (row.providerId) {
+										props.onEditProvider?.(row.providerId);
+										return;
+									}
 									if (row.insert) {
 										props.onInsert?.(row.insert);
 										return;
@@ -211,11 +263,11 @@ export function SettingsListModal(props: {
 						</box>
 					)}
 				</For>
-				<Show when={props.rows.length === 0}>
-					<text fg={colors().secondary} attributes={dim()}>
-						Nothing here yet.
-					</text>
-				</Show>
+					<Show when={filtered().length === 0}>
+						<text fg={colors().secondary} attributes={dim()}>
+							No matches.
+						</text>
+					</Show>
 			</box>
 		</box>
 	);

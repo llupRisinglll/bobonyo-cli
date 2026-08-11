@@ -811,6 +811,8 @@ export function App() {
 							.map(provider => ({
 								label: provider.id,
 								value: provider.baseUrl,
+								providerId: provider.id,
+								activateHint: 'edit',
 							})),
 					);
 					return;
@@ -2448,6 +2450,7 @@ export function App() {
 				activateHint: 'resume',
 				onActivate: () => {
 					setSettingsList(null);
+					setSettingsOpen(false);
 					resumeSession(session.id);
 				},
 			})),
@@ -2494,6 +2497,7 @@ export function App() {
 				activateHint: 'restore',
 				onActivate: () => {
 					setSettingsList(null);
+					setSettingsOpen(false);
 					restoreCheckpoint(data.name);
 				},
 			})),
@@ -3118,8 +3122,19 @@ export function App() {
 						<SettingsListModal
 							title={list().title}
 							rows={list().rows}
+							onEditProvider={(providerId) => {
+								// Close EVERYTHING, then open the guided edit
+								// wizard (base URL → API key → models), the
+								// same flow `/setup-providers edit <id>` uses.
+								setSettingsList(null);
+								setSettingsOpen(false);
+								queueMicrotask(() => {
+									void setupProviders(`edit ${providerId}`);
+								});
+							}}
 							onInsert={(text) => {
 								setSettingsList(null);
+								setSettingsOpen(false);
 								setInput(text);
 							}}
 							onClose={() => setSettingsList(null)}

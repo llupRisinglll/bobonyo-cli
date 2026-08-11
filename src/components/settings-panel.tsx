@@ -431,7 +431,11 @@ export function SettingsModal(props: {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const cardWidth = () => Math.min(84, Math.max(56, dims().width - 4));
-	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
+	// Vertically CENTER the card (parity: the reference centers its dialogs);
+	// with a short list the old quarter-height anchor floated it near the
+	// top of the screen.
+	const cardY = () =>
+		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const filtered = createMemo(() =>
 		SETTINGS_TABS.map((_, tab) => filterRows(settingsRows(tab), query())),
