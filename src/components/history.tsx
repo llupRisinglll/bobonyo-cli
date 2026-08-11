@@ -111,35 +111,6 @@ function rowPath(text: string): string {
 	return line.replace(/^[✦⚙]\s*[A-Za-z ]+?\s+/, '').trim();
 }
 
-/**
- * Indent every continuation line by 2 columns so a wrapped reply aligns on
- * the first text after the `✦ ` glyph (parity: the original's hanging-indent
- * icon column). OpenTUI's markdown re-wraps long paragraphs at the container
- * edge (column 0), so PLAIN paragraph lines are hard-wrapped here at a width
- * that fits the pane; markdown block constructs (headings, lists, quotes,
- * tables, fences) are left untouched so the parser still recognizes them.
- */
-function indentContinuations(text: string): string {
-	const WRAP = 90;
-	const isBlock = /^(#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s|\||```|~~|\s*[-*_]{3,}\s*$)/;
-	return text
-		.split('\n')
-		.map(line => {
-			if (isBlock.test(line) || line.length <= WRAP) return line;
-			const parts: string[] = [];
-			let rest = line;
-			while (rest.length > WRAP) {
-				let cut = rest.lastIndexOf(' ', WRAP);
-				if (cut <= 0) cut = WRAP;
-				parts.push(rest.slice(0, cut));
-				rest = rest.slice(cut).trimStart();
-			}
-			if (rest) parts.push(rest);
-			return parts.join('\n  ');
-		})
-		.join('\n  ');
-}
-
 /** Tag a fenced row's language with `:hover` so its renderer tints it. */
 function markHover(text: string): string {
 	return text.replace(/^(```+[^:\n]+:[^:\n]+)/, '$1:hover');
@@ -452,7 +423,10 @@ export function History(props: {height?: number}) {
 	/** Global rendered-row offset of the SETTLED content (live rows follow). */
 	let baseRowCount = 0;
 	/** The live streaming markdown node's ref (last block while running). */
-	let liveBlockRef: {screenY: number} | null = null;
+	let liveThoughtRef: {screenY: number} | null = null;
+	let liveReplyRef: {screenY: number} | null = null;
+	/** Rendered line count of the live THOUGHT (the reply follows it). */
+	let liveThoughtLines = 0;
 	/**
 	 * SETTLED blocks only: consecutive non-reply parts share ONE markdown
 	 * node; every REPLY gets its OWN padded node. The memo reads NO ticker
@@ -644,32 +618,29 @@ export function History(props: {height?: number}) {
 		}));
 	});
 	/**
-	 * LIVE block (running thought + streaming reply), computed on the ticker
-	 * signals ONLY, so its node re-renders every frame while settled content
-	 * stays untouched.
+	 * LIVE region, computed on the ticker signals ONLY so the settled blocks
+	 * stay untouched. The THOUGHT and the STREAMING REPLY are separate nodes:
+	 * the reply renders in the SAME glyph-row container as settled replies,
+	 * so the formatting/indentation is identical while rendering and when
+	 * done (real-time consistency).
 	 */
-	const liveBlockText = createMemo(() => {
-		if (!running()) return '';
+	const liveThoughtText = createMemo(() => {
+		if (!running() || !reasoning()) return '';
 		const frame = spinnerFrame();
-		const live: string[] = [];
-		if (reasoning()) {
-			live.push(
-				fence(
-					'thought',
-					'running',
-					`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
-						`└ ${tailLines(reasoning())}`,
-				),
-			);
-		}
-		if (streaming()) {
-			const blink = (spinnerFrame() >> 2) % 2 === 0;
-			live.push(
-				`${blink ? '~✦~' : '✦'} ${indentContinuations(streaming())}`,
-			);
-		}
-		return live.join('\n\n');
+		return fence(
+			'thought',
+			'running',
+			`⚙ Thinking · (${formatElapsed(turnElapsed())})${workingDots(frame)}\n` +
+				`└ ${tailLines(reasoning())}`,
+		);
 	});
+	const liveReplyText = createMemo(() =>
+		running() && streaming() ? streaming() : '',
+	);
+	// The streaming reply's glyph blinks (`~✦~` = dim via strikethrough).
+	const liveReplyBlink = createMemo(() =>
+		running() && (spinnerFrame() >> 2) % 2 === 0,
+	);
 	const lines = createMemo(() => renderText);
 
 	/**
@@ -686,9 +657,14 @@ export function History(props: {height?: number}) {
 				return entry.start + (event.y - top);
 			}
 		}
-		// The LIVE block is the last one; its rows follow the settled base.
-		if (liveBlockRef) {
-			const top = liveBlockRef.screenY;
+		// LIVE nodes follow the settled base (the reply comes after the
+		// thought, so its rows include the thought's rendered lines).
+		if (liveReplyRef && event.y >= liveReplyRef.screenY) {
+			const top = liveReplyRef.screenY;
+			return baseRowCount + liveThoughtLines + (event.y - top);
+		}
+		if (liveThoughtRef && event.y >= liveThoughtRef.screenY) {
+			const top = liveThoughtRef.screenY;
 			if (event.y >= top) {
 				return baseRowCount + (event.y - top);
 			}
@@ -843,15 +819,18 @@ export function History(props: {height?: number}) {
 					);
 				}}
 			</For>
-			{/* LIVE block (running thought + streaming reply): its OWN markdown
-			    node streams every frame; it is NOT part of the settled For, so
-			    the ticker can never touch the settled blocks. */}
-			<Show when={liveBlockText()}>
+			{/* LIVE THOUGHT: its own node streams every frame; it is NOT part
+			    of the settled For, so the ticker can never touch settled
+			    blocks. */}
+			<Show when={liveThoughtText()}>
 				<markdown
 					ref={element => {
-						liveBlockRef = element as never;
+						liveThoughtRef = element as never;
+						liveThoughtLines = liveThoughtText()
+							.replace(/\s+$/, '')
+							.split('\n').length;
 					}}
-					content={liveBlockText()}
+					content={liveThoughtText()}
 					streaming={running()}
 					fg={colors().text}
 					syntaxStyle={syntaxStyle()}
@@ -864,6 +843,38 @@ export function History(props: {height?: number}) {
 						widthMode: 'content',
 					}}
 				/>
+			</Show>
+			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
+			    settled reply, so the indentation and markdown formatting are
+			    identical while streaming and when done. */}
+			<Show when={liveReplyText()}>
+				<box flexDirection="row">
+					<text
+						fg={colors().secondary}
+						attributes={liveReplyBlink() ? dim() : undefined}
+					>
+						✦{' '}
+					</text>
+					<box flexGrow={1}>
+						<markdown
+							ref={element => {
+								liveReplyRef = element as never;
+							}}
+							content={liveReplyText()}
+							streaming={running()}
+							fg={colors().text}
+							syntaxStyle={syntaxStyle()}
+							internalBlockMode="top-level"
+							renderNode={renderNode}
+							treeSitterClient={treeSitter}
+							tableOptions={{
+								style: 'grid',
+								borders: true,
+								widthMode: 'content',
+							}}
+						/>
+					</box>
+				</box>
 			</Show>
 		</scrollbox>
 	);
