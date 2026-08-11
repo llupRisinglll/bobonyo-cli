@@ -391,15 +391,13 @@ export function App() {
 							? prev
 							: [...prev, server.id],
 					);
-					appendInfo(
-						`MCP server '${server.id}' connected (${tools.length} tools).`,
-					);
+					// Do NOT log MCP lifecycle to the chat history (it would
+					// hide the welcome banner on an empty conversation); the
+					// animated loading indicator above the input + the
+					// /status row surface the state instead.
 				} catch (error) {
-					appendInfo(
-						`MCP server '${server.id}' failed: ${
-							error instanceof Error ? error.message : String(error)
-						}`,
-					);
+					// Best-effort; failures show via the loading indicator
+					// clearing without that server in /status.
 				}
 			}
 		} finally {
