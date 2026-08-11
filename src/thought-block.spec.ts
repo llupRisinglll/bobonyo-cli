@@ -3,6 +3,7 @@ import {RGBA} from '@opentui/core';
 import {themeColors} from './highlight';
 import {settledGlyphColor} from './row-highlight';
 import {colors} from './theme';
+import {thinkingSeconds} from './state';
 import {liveThinkingHeader, wrapThoughtBody} from './components/history';
 
 function rgb(c: RGBA): string {
@@ -48,6 +49,15 @@ describe('liveThinkingHeader (animated gear + dots BEFORE the timer)', () => {
 	test('timer formats real durations (1m 2s, not 62s)', () => {
 		expect(liveThinkingHeader(0, 62)).toContain('(1m 2s)');
 		expect(liveThinkingHeader(0, 3723)).toContain('(1h 2m 3s)');
+	});
+});
+
+describe('thinkingSeconds (settled Thought (Ns) duration)', () => {
+	test('rounds to whole seconds and never reports 0', () => {
+		expect(thinkingSeconds(1000, 5000)).toBe(4);
+		expect(thinkingSeconds(1000, 1999)).toBe(1);
+		expect(thinkingSeconds(1000, 1200)).toBe(1);
+		expect(thinkingSeconds(0, 0)).toBe(1);
 	});
 });
 

@@ -101,6 +101,13 @@ export const [tasks, setTasks] = createSignal<
 export const [activeAgents, setActiveAgents] = createSignal(0);
 /** C12: seconds since the current turn started (Working indicator). */
 export const [turnElapsed, setTurnElapsed] = createSignal(0);
+/**
+ * Seconds the CURRENT THINKING phase has been running. Starts when
+ * reasoning first streams (NOT at message send), so the `⚙ Thinking`
+ * header shows the real thinking time — the same value the settled
+ * `⚙ Thought (Ns)` header reports.
+ */
+export const [thinkingElapsed, setThinkingElapsed] = createSignal(0);
 /** Animation frame counter for spinners/gears (advanced by the app ticker). */
 export const [spinnerFrame, setSpinnerFrame] = createSignal(0);
 /** Braille spinner frames (parity: nanocoder's busy spinner). */
@@ -146,6 +153,14 @@ export function formatElapsed(totalSeconds: number): string {
 	if (m > 0 || h > 0) parts.push(`${m}m`);
 	parts.push(`${sec}s`);
 	return parts.join(' ');
+}
+
+/**
+ * Seconds since a thinking phase started (rounded, minimum 1s) — the value
+ * the settled `⚙ Thought (Ns)` header shows. Pure, unit-tested.
+ */
+export function thinkingSeconds(startedAt: number, now: number): number {
+	return Math.max(1, Math.round((now - startedAt) / 1000));
 }
 /** C13: transcript row under the mouse cursor (-1 = none) for hover. */
 export const [hoverRow, setHoverRow] = createSignal(-1);
@@ -338,6 +353,7 @@ export function clearMessages(): void {
 	setContext([]);
 	setStreaming('');
 	setReasoning('');
+	setThinkingElapsed(0);
 	setRunning(false);
 	setBusy(false);
 	setLastUsage(undefined);

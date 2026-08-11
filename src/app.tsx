@@ -159,10 +159,12 @@ import {
 	setStreaming,
 	setTasks,
 	setTurnElapsed,
+	setThinkingElapsed,
 	setSpinnerFrame,
 	tasks,
 	streaming,
 	startupLoading,
+	thinkingSeconds,
 	mcpServers,
 	settingsOpen,
 	setSettingsOpen,
@@ -245,6 +247,10 @@ export function App() {
 	let watchdogMsRef = 0;
 	let streamGuardRef: {maxOutputChars?: number; maxDurationMs?: number} = {};
 	let scrubberRef: ReturnType<typeof createScrubber> = createScrubber([]);
+	// Anchored when reasoning FIRST streams (not at message send), so the
+	// `⚙ Thinking` timer and the settled `⚙ Thought (Ns)` show the real
+	// thinking time, never the pre-thinking provider latency.
+	let thinkingStartedAt = 0;
 	const mcpToolsRef: MCPTool[] = [];
 	// Animation ticker: advances the spinner/gear frame counter so the busy
 	// spinner, Working dots and gear glyph animate like nanocoder's.
@@ -1328,8 +1334,20 @@ export function App() {
 		setReasoning('');
 		setRunning(true);
 		setTurnElapsed(0);
+		thinkingStartedAt = 0;
+		setThinkingElapsed(0);
 		const turnTimer = setInterval(
-			() => setTurnElapsed(prev => prev + 1),
+			() => {
+				setTurnElapsed(prev => prev + 1);
+				setThinkingElapsed(
+					thinkingStartedAt > 0
+						? Math.max(
+								0,
+								Math.floor((Date.now() - thinkingStartedAt) / 1000),
+							)
+						: 0,
+				);
+			},
 			1000,
 		);
 		const controller = new AbortController();
@@ -1414,11 +1432,26 @@ export function App() {
 				}
 			}
 			for (let round = 0; round < MAX_TURN_ROUNDS; round++) {
+				// Settled `⚙ Thought (Ns)` reports the THINKING phase length
+				// (since reasoning first streamed), not the whole turn.
+				const thoughtDuration = (): number =>
+					thinkingSeconds(
+						thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
+						Date.now(),
+					);
 				let result = await streamChat(
 					history,
 					{
 						onText: delta => setStreaming(prev => prev + delta),
-						onReasoning: delta => setReasoning(prev => prev + delta),
+						onReasoning: delta => {
+							// Anchor the thinking timer on the FIRST reasoning
+							// chunk of this phase (reasoning() is reset at the
+							// end of every round).
+							if (delta && !reasoning()) {
+								thinkingStartedAt = Date.now();
+							}
+							setReasoning(prev => prev + delta);
+						},
 					},
 					controller.signal,
 					listTools().map(name => ({name})),
@@ -1463,10 +1496,7 @@ export function App() {
 						appendAssistantMessage(result.text, {
 							reasoning:
 								result.reasoning.trim() || undefined,
-							durationSec: Math.max(
-								1,
-								Math.round((Date.now() - startedAt) / 1000),
-							),
+							durationSec: thoughtDuration(),
 						});
 						history = [
 							...history,
@@ -1486,10 +1516,7 @@ export function App() {
 					if (result.text.trim()) {
 						appendAssistantMessage(scrubberRef.rehydrate(result.text), {
 							reasoning: result.reasoning.trim() || undefined,
-							durationSec: Math.max(
-								1,
-								Math.round((Date.now() - startedAt) / 1000),
-							),
+							durationSec: thoughtDuration(),
 						});
 						const completionUsage = usageSignal(result.usage);
 						// Static completion line ABOVE the input (diamond glyph,
@@ -1540,10 +1567,7 @@ export function App() {
 					if (result.reasoning.trim()) {
 						appendAssistantMessage('', {
 							reasoning: result.reasoning.trim(),
-							durationSec: Math.max(
-								1,
-								Math.round((Date.now() - startedAt) / 1000),
-							),
+							durationSec: thoughtDuration(),
 						});
 					}
 					appendInfo(
@@ -1581,10 +1605,7 @@ export function App() {
 				if (result.reasoning.trim()) {
 					appendAssistantMessage('', {
 						reasoning: result.reasoning.trim(),
-						durationSec: Math.max(
-							1,
-							Math.round((Date.now() - startedAt) / 1000),
-						),
+						durationSec: thoughtDuration(),
 					});
 				}
 				const toolResults: Array<{
@@ -1913,6 +1934,7 @@ export function App() {
 				}
 				setStreaming('');
 				setReasoning('');
+				thinkingStartedAt = 0;
 				recordUsage(result.usage);
 			}
 			// Session-management parity: the persisted context MUST mirror
@@ -1963,9 +1985,11 @@ export function App() {
 					if (partial.trim() || partialReasoning.trim()) {
 						appendAssistantMessage(partial, {
 							reasoning: partialReasoning.trim() || undefined,
-							durationSec: Math.max(
-								1,
-								Math.round((Date.now() - startedAt) / 1000),
+							durationSec: thinkingSeconds(
+								thinkingStartedAt > 0
+									? thinkingStartedAt
+									: startedAt,
+								Date.now(),
 							),
 						});
 						setContext([
@@ -1987,6 +2011,8 @@ export function App() {
 			setBusy(false);
 			setStreaming('');
 			setReasoning('');
+			thinkingStartedAt = 0;
+			setThinkingElapsed(0);
 			persist();
 		}
 	};

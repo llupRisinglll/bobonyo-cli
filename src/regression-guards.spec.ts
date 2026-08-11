@@ -171,7 +171,27 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The LIVE thinking header must ANIMATE: gear + dots BEFORE the
 		// timer. A regression to the old static `⚙ Thinking · (Ns)...` (dots
 		// AFTER the timer, static gear) fails this.
-		expect(history).toMatch(/liveThinkingHeader\(spinnerFrame\(\), turnElapsed\(\)\)/);
+		expect(history).toMatch(/liveThinkingHeader\(spinnerFrame\(\), thinkingElapsed\(\)\)/);
 		expect(history).not.toMatch(/Thinking · \(\$\{formatElapsed/);
+	});
+
+	test('thinking timer measures the THINKING phase, not the turn', () => {
+		const app = read('./app.tsx');
+		// The timer anchors when reasoning first streams (never at message
+		// send) and the settled Thought duration uses the same anchor.
+		expect(app).toMatch(/thinkingStartedAt = Date\.now\(\)/);
+		expect(app).toMatch(/setThinkingElapsed/);
+		expect(app).toMatch(/thinkingSeconds\(/);
+		const state = read('./state.ts');
+		expect(state).toMatch(/export function thinkingSeconds/);
+	});
+
+	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {
+		const history = read('./components/history.tsx');
+		// The reply content box owns its left padding; the glyph is its own
+		// cell. A regression to `✦{' '}` (trailing space, trimmed by the
+		// renderer) glues the first word to the glyph.
+		expect(history).toMatch(/<box flexGrow=\{1\} paddingLeft=\{2\}>/);
+		expect(history).not.toMatch(/✦\{' '\}/);
 	});
 });

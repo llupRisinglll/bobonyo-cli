@@ -29,7 +29,7 @@ import {
 	setToolsExpanded,
 	spinnerFrame,
 	streaming,
-	turnElapsed,
+	thinkingElapsed,
 	settingsOpen,
 	statusOpen,
 	modelOpen,
@@ -411,7 +411,7 @@ export function History(props: {height?: number}) {
 	/**
 	 * SETTLED blocks only: consecutive non-reply parts share ONE markdown
 	 * node; every REPLY gets its OWN padded node. The memo reads NO ticker
-	 * signals (spinnerFrame/turnElapsed), so during streaming the settled
+	 * signals (spinnerFrame/thinkingElapsed), so during streaming the settled
 	 * blocks keep IDENTITY and OpenTUI never re-renders them, the whole
 	 * chatbox flashing with "christmas lights" was the settled blocks being
 	 * rebuilt every 100ms tick.
@@ -661,7 +661,7 @@ export function History(props: {height?: number}) {
 	 */
 	const liveThoughtHeader = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
-		return liveThinkingHeader(spinnerFrame(), turnElapsed());
+		return liveThinkingHeader(spinnerFrame(), thinkingElapsed());
 	});
 	const liveThoughtTail = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
@@ -933,9 +933,15 @@ export function History(props: {height?: number}) {
 									fg={colors().secondary}
 									attributes={dim()}
 								>
-									✦{' '}
+									✦
 								</text>
-								<box flexGrow={1}>
+								{/* The content box carries its OWN left gap:
+								    the glyph sits at column 1 (aligned with
+								    tool glyphs) and the text starts two cells
+								    later, so a reply NEVER renders glued to
+								    the glyph (`✦The`) and wrapped lines stay
+								    inside the container. */}
+								<box flexGrow={1} paddingLeft={2}>
 									<markdown
 										ref={setRef}
 										content={contentFor()}
@@ -1012,9 +1018,9 @@ export function History(props: {height?: number}) {
 						fg={colors().secondary}
 						attributes={dim()}
 					>
-						✦{' '}
+						✦
 					</text>
-					<box flexGrow={1}>
+					<box flexGrow={1} paddingLeft={2}>
 						<markdown
 							ref={element => {
 								liveReplyRef = element as never;
