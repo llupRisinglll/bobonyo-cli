@@ -42,24 +42,11 @@ bobonyo treats every model as a first class citizen:
 
 ## What it looks like
 
-```text
- ╭─────────────────────────────────────────────────────────────────╮
- │ ★      bobonyo (v0.1.0)                                         │
- │ ╭◕‿◕╮  model:       deepseek-v4-flash[medium]  /model to change │
- │ ╰───╯  directory:   ~/projects/my-app                           │
- │        permissions: YOLO mode                                   │
- ╰─────────────────────────────────────────────────────────────────╯
-
-   Tip: Press ctrl+p for settings & commands · type / for commands · @ to mention files
-```
+![bobonyo in action](docs/demo.gif)
 
 Streaming markdown renders live. Tool calls fold into neat groups you can
 expand. Thoughts stream with a real time timer. The chat history works with
 the mouse, so you can hover and click.
-
-## Demo
-
-![bobonyo in action](demo/demo.gif)
 
 ## Install
 

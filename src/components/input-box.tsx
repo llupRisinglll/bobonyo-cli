@@ -126,6 +126,19 @@ export function InputBox(props: {
 		const len = tokenStartingAt(value, c) ?? 1;
 		setCursorPos(c + len);
 	};
+	/** Ctrl+Left: jump to the start of the previous word (parity: the
+	 *  original nanocoder text-input, readline Alt+B semantics). */
+	const moveCursorPrevWord = (): void => {
+		const value = input();
+		const c = Math.min(cursorPos(), value.length);
+		setCursorPos(snapOutOfAtomicToken(value, moveToPrevWord(value, c), 'left'));
+	};
+	/** Ctrl+Right: jump to just past the next word (readline Alt+F). */
+	const moveCursorNextWord = (): void => {
+		const value = input();
+		const c = Math.min(cursorPos(), value.length);
+		setCursorPos(snapOutOfAtomicToken(value, moveToNextWord(value, c), 'right'));
+	};
 	/**
 	 * Move the caret one VISUAL line up/down inside a multiline input
 	 * (column preserved, clamped to the target line). Returns false when the
@@ -644,11 +657,15 @@ export function InputBox(props: {
 		// (`[Image #N]` / `[Text #N]` / a leading `/command`) so the caret
 		// never lands inside a block; Home/End jump to the ends.
 		if (event.name === 'left') {
-			moveCursorLeft();
+			// Ctrl+Left jumps WORD-WISE (parity: the original nanocoder
+			// text-input); plain ← still walks char-by-char over tokens.
+			if (event.ctrl) moveCursorPrevWord();
+			else moveCursorLeft();
 			return;
 		}
 		if (event.name === 'right') {
-			moveCursorRight();
+			if (event.ctrl) moveCursorNextWord();
+			else moveCursorRight();
 			return;
 		}
 		if (event.name === 'home') {
@@ -1324,6 +1341,51 @@ export function atomicTokens(
 		});
 	}
 	return tokens;
+}
+
+/**
+ * Ctrl+Left WORD-JUMP target (parity: the original nanocoder text-input,
+ * readline Alt+B): skip whitespace (spaces + newlines) backward, then the
+ * word backward. Newlines count as whitespace, so the jump crosses line
+ * boundaries in a multiline input. Pure, unit-tested.
+ */
+export function moveToPrevWord(value: string, offset: number): number {
+	let i = offset;
+	// Skip whitespace (spaces + newlines) backward, then word backward
+	while (i > 0 && (value[i - 1] === ' ' || value[i - 1] === '\n')) i--;
+	while (i > 0 && value[i - 1] !== ' ' && value[i - 1] !== '\n') i--;
+	return i;
+}
+
+/**
+ * Ctrl+Right WORD-JUMP target (readline Alt+F): skip the word forward, then
+ * the following whitespace (spaces + newlines). Pure, unit-tested.
+ */
+export function moveToNextWord(value: string, offset: number): number {
+	let i = offset;
+	// Skip word forward, then whitespace (spaces + newlines) forward
+	while (i < value.length && value[i] !== ' ' && value[i] !== '\n') i++;
+	while (i < value.length && (value[i] === ' ' || value[i] === '\n')) i++;
+	return i;
+}
+
+/**
+ * If a word-jump target lands STRICTLY INSIDE an atomic token, snap it to
+ * the token's start ('left') or end ('right') so the caret never splits a
+ * `[Image #N]` / `[Text #N]` block (parity: the original's
+ * snapOutOfPlaceholder). Pure, unit-tested.
+ */
+export function snapOutOfAtomicToken(
+	value: string,
+	offset: number,
+	direction: 'left' | 'right',
+): number {
+	for (const token of atomicTokens(value)) {
+		if (offset > token.start && offset < token.end) {
+			return direction === 'left' ? token.start : token.end;
+		}
+	}
+	return offset;
 }
 
 /** Length of an atomic token whose END sits exactly at `cursor`, else null. */

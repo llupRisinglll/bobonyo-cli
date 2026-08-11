@@ -3,7 +3,10 @@ import {
 	atomicTokens,
 	computeInputBoxHeight,
 	cursorPosition,
+	moveToNextWord,
+	moveToPrevWord,
 	offsetForLine,
+	snapOutOfAtomicToken,
 	tokenEndingAt,
 	tokenizeInputLine,
 	tokenStartingAt,
@@ -115,6 +118,53 @@ describe('atomic token navigation helpers', () => {
 		const value = 'a[Image #1]';
 		expect(tokenStartingAt(value, 1)).toBe(10);
 		expect(tokenStartingAt(value, 2)).toBeNull();
+	});
+});
+
+describe('word-jump helpers (Ctrl+Left / Ctrl+Right)', () => {
+	// Expectations mirror the ORIGINAL nanocoder text-input specs.
+	test('Ctrl+Left jumps to the start of the previous word', () => {
+		expect(moveToPrevWord('hello world', 11)).toBe(6);
+		expect(moveToPrevWord('hello world', 8)).toBe(6);
+	});
+
+	test('Ctrl+Left at the start stays at the start', () => {
+		expect(moveToPrevWord('hello', 0)).toBe(0);
+	});
+
+	test('Ctrl+Left skips runs of spaces', () => {
+		expect(moveToPrevWord('hello   world', 10)).toBe(8);
+	});
+
+	test('Ctrl+Left crosses newlines (multiline word-jump)', () => {
+		expect(moveToPrevWord('hello world\nfoo bar', 12)).toBe(6);
+	});
+
+	test('Ctrl+Right jumps to just past the next word', () => {
+		expect(moveToNextWord('hello world', 0)).toBe(6);
+		expect(moveToNextWord('hello world', 6)).toBe(11);
+	});
+
+	test('Ctrl+Right at the end stays at the end', () => {
+		expect(moveToNextWord('hello', 5)).toBe(5);
+	});
+
+	test('Ctrl+Right skips spaces before the next word', () => {
+		expect(moveToNextWord('hello   world', 5)).toBe(8);
+	});
+
+	test('snapOutOfAtomicToken never lands the caret inside a token', () => {
+		// "a [Text #1]b": token spans [2, 11); the raw word-jump lands at 8.
+		const value = 'a [Text #1]b';
+		expect(snapOutOfAtomicToken(value, 8, 'left')).toBe(2);
+		expect(snapOutOfAtomicToken(value, 8, 'right')).toBe(11);
+	});
+
+	test('snapOutOfAtomicToken leaves off-token offsets alone', () => {
+		expect(snapOutOfAtomicToken('hello world', 5, 'left')).toBe(5);
+		expect(snapOutOfAtomicToken('hello world', 5, 'right')).toBe(5);
+		expect(snapOutOfAtomicToken('a[Image #1]', 1, 'left')).toBe(1);
+		expect(snapOutOfAtomicToken('a[Image #1]', 11, 'left')).toBe(11);
 	});
 });
 

@@ -144,4 +144,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const spec = read('../src/resume-modal.spec.ts');
 		expect(spec).toMatch(/matches by SESSION ID/);
 	});
+
+	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
+		const input = read('./components/input-box.tsx');
+		// The arrow handler branches on ctrl and goes through the word-jump
+		// helpers — a regression would fall back to plain char movement.
+		expect(input).toMatch(/event\.ctrl\) moveCursorPrevWord\(\)/);
+		expect(input).toMatch(/event\.ctrl\) moveCursorNextWord\(\)/);
+		expect(input).toMatch(/moveToPrevWord/);
+		expect(input).toMatch(/moveToNextWord/);
+	});
 });
