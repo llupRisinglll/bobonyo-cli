@@ -18,6 +18,7 @@ import {
 	activeEndpoint,
 	expandedBlocks,
 	gearGlyph,
+	glyphBlinkOn,
 	hoverRow,
 	liveOutputs,
 	messages,
@@ -48,7 +49,6 @@ import {
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
-import {LiveStreamRows} from './live-stream';
 import {displayToolName, isFileWriteTool, toolFamily} from '../tools';
 import {
 	fence,
@@ -580,20 +580,17 @@ export function History(props: {height?: number}) {
 				const expandable =
 					part.key !== undefined &&
 					(hasFooter || Boolean(expandedBlocks()[part.key]));
-				const highlighted =
-					part.key !== undefined &&
-					expandable &&
-					hasFooter &&
-					!expandedBlocks()[part.key] &&
-					part.key === hoveredBlock();
-				const partText = highlighted ? markHover(part.text) : part.text;
-				const isFenced = partText.trimStart().startsWith('```');
+				// NO hoveredBlock() read here: the hover marker is applied
+				// PER-ITEM in the For render below, so hovering never changes
+				// this array's identity (OpenTUI's For re-renders EVERY child
+				// when the each reference changes — that was the hover flicker).
+				const isFenced = part.text.trimStart().startsWith('```');
 				if (index > 0 && !isFenced) {
 					docLines.push({text: ''});
 					renderIndex.push(docLines.length - 1);
 				}
 				if (part.key) block = {key: part.key, start: -1};
-				for (const line of partText.split('\n')) {
+				for (const line of part.text.split('\n')) {
 					const isFenceMarker = /^\s*`{3,}/.test(line);
 					docLines.push({text: line, key: part.key});
 					if (!isFenceMarker) {
@@ -632,15 +629,10 @@ export function History(props: {height?: number}) {
 		baseRowCount = renderIndex.length;
 		return blocks.map(group => ({
 			kind: group.kind,
-			text: group.parts
-				.map(part =>
-					part.text.replace(
-						/^(```+)(filediff|usermsg)(:[^:\n]+)/,
-						(_m, fenceChar, kind, status) =>
-							`${fenceChar}${kind}${status}:w${fillWidth}`,
-					),
-				)
-				.join('\n\n'),
+			// Keep the PARTS (not a joined string): the For item render
+			// applies the hover marker per part reactively, so a hover change
+			// re-parses only that block instead of rebuilding this array.
+			parts: group.parts,
 		}));
 	});
 	/**
@@ -668,10 +660,17 @@ export function History(props: {height?: number}) {
 	// Throttle the REASONING tail the same way (the thought block must not
 	// re-parse per reasoning word either).
 	const [throttledReasoning, setThrottledReasoning] = createSignal('');
+	// Throttle RUNNING TOOL OUTPUT the same way: tool results stream per
+	// chunk, so without a floor the live row would re-parse every chunk and
+	// flicker. The settled rows read committed output, never this signal.
+	const [throttledToolOutputs, setThrottledToolOutputs] = createSignal<
+		Record<string, string>
+	>({});
 	createEffect(() => {
 		const timer = setInterval(() => {
 			setThrottledStreaming(streaming());
 			setThrottledReasoning(reasoning());
+			setThrottledToolOutputs(liveOutputs());
 		}, 150);
 		return () => clearInterval(timer);
 	});
@@ -682,35 +681,36 @@ export function History(props: {height?: number}) {
 	/**
 	 * RUNNING tool rows, rendered in the live region with their streaming
 	 * output (the settled memo skips them so it never re-runs mid-stream).
-	 * PLAIN text rows (LiveStreamRows) so the block never flickers.
+	 * Each row goes through the SAME `formatToolEntry` + fenced-row pipeline
+	 * as the settled rows (`status: 'running'`), so colors, syntax
+	 * highlighting and spacing are IDENTICAL while streaming and when done;
+	 * the only differences are the blinking glyph and the streaming tail.
 	 */
 	const liveToolRows = createMemo(() => {
 		if (!running()) return [];
-		const rows: Array<{
-			glyph: string;
-			glyphBlink: boolean;
-			name: string;
-			detail: string;
-			lines: string[];
-		}> = [];
+		const outputs = throttledToolOutputs();
+		const rows: Array<{text: string; toolId?: string}> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
-				const outputLines = (liveOutput(message) ?? '')
-					.replace(/\r\n/g, '\n')
-					.replace(/\s+$/, '')
-					.split('\n')
-					.filter(line => line !== '')
-					.slice(-3);
+				const streamed = message.toolId
+					? outputs[message.toolId]
+					: undefined;
+				const output =
+					streamed !== undefined
+						? streamed
+						: (message.tool.output ?? '');
 				rows.push({
-					// LIVE header parity with the SETTLED row: the glyph is
-					// secondary + BLINKS while running (ToolGlyph), the tool
-					// name stays primary bold, the detail secondary — never
-					// the whole line in primary.
-					glyph: '✦',
-					glyphBlink: true,
-					name: displayToolName(message.tool.name),
-					detail: message.tool.detail,
-					lines: outputLines.map(line => `  └   ${line}`),
+					toolId: message.toolId,
+					// `blinkOn` toggles with the ticker: the hidden frame
+					// swaps the glyph for a space (width-stable), the exact
+					// same blink the old ToolGlyph used.
+					text: formatToolEntry(
+						{...message.tool, output},
+						false,
+						'running',
+						false,
+						glyphBlinkOn(spinnerFrame()),
+					),
 				});
 			}
 		}
@@ -854,20 +854,35 @@ export function History(props: {height?: number}) {
 					const setRef = (element: unknown): void => {
 						blockRefs[index()]!.ref = element as never;
 					};
-					const markdownProps = {
-						content: block.text,
-						streaming: false,
-						fg: colors().text,
-						syntaxStyle: syntaxStyle(),
-						internalBlockMode: 'top-level' as const,
-						renderNode,
-						treeSitterClient: treeSitter,
-						tableOptions: {
-							style: 'grid' as const,
-							borders: true,
-							widthMode: 'content' as const,
-						},
-					};
+					// Hover is applied HERE, per part, reactively: only the
+					// hovered block's content string changes, so only that
+					// markdown node re-parses (the MarkdownRenderable content
+					// setter no-ops on unchanged values). The settled array
+					// stays stable and the rest of the transcript never
+					// repaints on a hover change.
+					const contentFor = () =>
+						block.parts
+							.map(part => {
+								const hasFooter =
+									/\+(\d+) (more )?lines?/.test(part.text);
+								const expandable =
+									part.key !== undefined &&
+									(hasFooter ||
+										Boolean(
+											expandedBlocks()[part.key],
+										));
+								if (
+									part.key &&
+									expandable &&
+									hasFooter &&
+									!expandedBlocks()[part.key] &&
+									part.key === hoveredBlock()
+								) {
+									return markHover(part.text);
+								}
+								return part.text;
+							})
+							.join('\n\n');
 					if (block.kind === 'reply') {
 						return (
 						<box flexDirection="column">
@@ -884,7 +899,18 @@ export function History(props: {height?: number}) {
 								<box flexGrow={1}>
 									<markdown
 										ref={setRef}
-										{...markdownProps}
+										content={contentFor()}
+										streaming={false}
+										fg={colors().text}
+										syntaxStyle={syntaxStyle()}
+										internalBlockMode="top-level"
+										renderNode={renderNode}
+										treeSitterClient={treeSitter}
+										tableOptions={{
+											style: 'grid',
+											borders: true,
+											widthMode: 'content',
+										}}
 									/>
 								</box>
 							</box>
@@ -894,7 +920,18 @@ export function History(props: {height?: number}) {
 					return (
 						<markdown
 							ref={setRef}
-							{...markdownProps}
+							content={contentFor()}
+							streaming={false}
+							fg={colors().text}
+							syntaxStyle={syntaxStyle()}
+							internalBlockMode="top-level"
+							renderNode={renderNode}
+							treeSitterClient={treeSitter}
+							tableOptions={{
+								style: 'grid',
+								borders: true,
+								widthMode: 'content',
+							}}
 						/>
 					);
 				}}
@@ -918,10 +955,31 @@ export function History(props: {height?: number}) {
 				</box>
 			</Show>
 			{/* RUNNING tool rows (streaming output) — their own node so the
-			    settled blocks never re-render mid-stream. PLAIN text (no
-			    markdown re-parse) so the block can never flicker. */}
+			    settled blocks never re-render mid-stream. Each row renders
+			    through the SAME fenced-row pipeline as settled rows (syntax
+			    highlighting, spacing, colors), throttled so the re-parse is
+			    ~7/s, never per stream chunk. The glyph blinks via the text
+			    swap in `liveToolRows`; the markdown content setter no-ops on
+			    unchanged values, so idle ticks never repaint. */}
 			<Show when={liveToolRows().length > 0}>
-				<LiveStreamRows rows={liveToolRows()} />
+				<For each={liveToolRows()}>
+					{(row) => (
+						<markdown
+							content={row.text}
+							streaming={running()}
+							fg={colors().text}
+							syntaxStyle={syntaxStyle()}
+							internalBlockMode="top-level"
+							renderNode={renderNode}
+							treeSitterClient={treeSitter}
+							tableOptions={{
+								style: 'grid',
+								borders: true,
+								widthMode: 'content',
+							}}
+						/>
+					)}
+				</For>
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are
