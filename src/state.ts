@@ -235,6 +235,16 @@ export const [pendingPrompt, setPendingPrompt] = createSignal<{
 	 *  cancellation (e.g. the trust gate must NOT continue untrusted). */
 	onCancel?: () => void;
 } | null>(null);
+/**
+ * First-run TRUST dialog (codex-style): a dedicated modal with explicit
+ * Yes/No options, NEVER the free-text prompt row (that read like the chat
+ * input was ready). `resolve(true)` trusts the directory, `false` declines
+ * (the app must not run against an untrusted directory).
+ */
+export const [pendingTrust, setPendingTrust] = createSignal<{
+	directory: string;
+	resolve: (trust: boolean) => void;
+} | null>(null);
 /** Estimated context usage % (E7): tokens / provider context window. */
 export const [contextPercent, setContextPercent] = createSignal(0);
 /** Non-zero while the provider call is retrying (429/stall backoff). */

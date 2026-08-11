@@ -110,4 +110,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(input).not.toMatch(/prompt\(\)!/);
 		expect(input).not.toMatch(/approval\(\)!/);
 	});
+
+	test('the trust gate renders a DIALOG, never the free-text prompt', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(/<TrustModal/);
+		expect(app).toMatch(/pendingTrust/);
+		// The trust question must not appear as a text prompt in the input.
+		const input = read('./components/input-box.tsx');
+		expect(input).not.toMatch(/Trust this directory/);
+		// The codex-style dialog lives in its own component.
+		const modal = read('./components/trust-modal.tsx');
+		expect(modal).toMatch(/Trust this directory/);
+		expect(modal).toMatch(/Yes, trust this directory/);
+		expect(modal).toMatch(/No, do not trust/);
+	});
 });

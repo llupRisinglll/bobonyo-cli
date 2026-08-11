@@ -93,7 +93,7 @@ import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
-import {trustDecision} from './trust';
+import {TrustModal} from './components/trust-modal';
 
 const VERSION = '0.1.0';
 import {
@@ -124,6 +124,7 @@ import {
 	pendingQueue,
 	pendingApproval,
 	pendingPrompt,
+	pendingTrust,
 	prs,
 	reasoning,
 	retrySnapshot,
@@ -148,6 +149,7 @@ import {
 	setPendingQueue,
 	setPendingApproval,
 	setPendingPrompt,
+	setPendingTrust,
 	setPromptHistory,
 	setReasoning,
 	setRetrySnapshot,
@@ -337,10 +339,14 @@ export function App() {
 		const cwd = process.cwd();
 		const trusted = (loadSettings().trustedDirs ?? []).includes(cwd);
 		if (!trusted) {
-			setPendingPrompt({
-				question: `Trust this directory? ${cwd} (y/n)`,
-				resolve: value => {
-					if (trustDecision(value) === 'trust') {
+			// Codex-style TRUST DIALOG (modal with explicit Yes/No), never
+			// the free-text prompt row — that read like the chat input was
+			// ready. Esc / No declines and EXITS: the app must not keep
+			// running against an untrusted directory.
+			setPendingTrust({
+				directory: cwd,
+				resolve: trust => {
+					if (trust) {
 						saveSettings({
 							...loadSettings(),
 							trustedDirs: [
@@ -352,10 +358,6 @@ export function App() {
 						exit();
 					}
 				},
-				// Esc = decline trust: the app must NOT keep running against
-				// an untrusted directory (previously it silently dismissed
-				// the prompt and continued).
-				onCancel: () => exit(),
 			});
 		}
 	}
@@ -2742,6 +2744,23 @@ export function App() {
 						resumeSession(id);
 					}}
 					onClose={() => setResumeOpen(false)}
+				/>
+			</Show>
+			{/* First-run TRUST dialog (codex-style modal): explicit Yes/No,
+			    never the free-text prompt row. */}
+			<Show when={pendingTrust()}>
+				<TrustModal
+					directory={pendingTrust()!.directory}
+					onTrust={() => {
+						pendingTrust()!.resolve(true);
+						setPendingTrust(null);
+					}}
+					onDecline={() => {
+						// Decline = EXIT (the app must not run untrusted);
+						// resolve(false) triggers the exit path.
+						pendingTrust()!.resolve(false);
+						setPendingTrust(null);
+					}}
 				/>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference
