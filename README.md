@@ -176,6 +176,22 @@ prefix stable, the same way codex does:
 - **Append-only history.** Each turn's messages are the previous turn's
   messages plus new ones. Sessions resume with the exact same prefix the
   provider already cached.
+
+### Built-in visualization tools
+
+Agents can turn numbers into something you can read at a glance instead of
+dumping raw output:
+
+- **`visualize`** renders ASCII charts in the transcript — horizontal bar
+  charts (`kind: "bar"`), time-series sparklines (`kind: "line"`), or aligned
+  tables (`kind: "table"`). Data can be a JSON array of numbers,
+  `[{label, value}]` objects, or simple `label,value` lines.
+- **`list_background_tasks`** shows one overview table of every running and
+  completed background task (status, elapsed time, command, output tail), so
+  the agent doesn't poll with repeated `monitor` calls.
+
+Both are read-only and available to the model through the tool catalog, with
+real descriptions telling it when to use them.
 - **Compaction keeps the cache warm.** When the context grows, bobonyo sends
   a separate summary request, then replaces the history with a short
   handoff summary plus the recent user prompts (capped at 20k tokens). The

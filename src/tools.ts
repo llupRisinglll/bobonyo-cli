@@ -16,6 +16,7 @@ import {
 	resolveWebSearchFallback,
 } from './web-search';
 import type {Mode, ToolProfile} from './settings';
+import {renderVisualization} from './visualize';
 
 export interface ToolResult {
 	tool_call_id: string;
@@ -31,6 +32,8 @@ interface ToolDef {
 	execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string> | string;
 	/** Read-only tools never require approval (B16/D4 default). */
 	readOnly?: boolean;
+	/** What the tool does — sent to the model in the tool catalog. */
+	description?: string;
 }
 
 const toolRegistry = new Map<string, ToolDef>();
@@ -41,6 +44,11 @@ export function registerTool(name: string, def: ToolDef): void {
 
 export function listTools(): string[] {
 	return [...toolRegistry.keys()];
+}
+
+/** Description for a registered tool (the model's tool catalog). */
+export function toolDescription(name: string): string {
+	return toolRegistry.get(name)?.description ?? '';
 }
 
 /** Mutation tools require approval in `normal` mode (B16). */
@@ -58,6 +66,8 @@ const READ_ONLY_TOOLS = new Set([
 	'check_skill',
 	'agent',
 	'monitor',
+	'list_background_tasks',
+	'visualize',
 ]);
 
 export function requiresApproval(
@@ -365,6 +375,9 @@ registerTool('execute_bash', {
 });
 
 registerTool('monitor', {
+	description:
+		'Read the current status and recent output of a background task. ' +
+		'Use list_background_tasks to see what is running first.',
 	execute(args) {
 		const taskId = text(args, 'task_id') || text(args, 'id');
 		const task = bgTasks().find(t => t.id === taskId);
@@ -372,6 +385,48 @@ registerTool('monitor', {
 		const status = task.running ? 'running' : `exited ${task.exitCode}`;
 		const tail = task.output.slice(-5).join('\n');
 		return `Task ${task.id}: ${status}\n${tail}`;
+	},
+});
+
+registerTool('list_background_tasks', {
+	description:
+		'List every running/completed background task with its status, ' +
+		'elapsed time, and output tail. Prefer this over blind monitor calls ' +
+		'so the user sees one overview instead of repeated monitor rows.',
+	execute() {
+		const tasks = bgTasks();
+		if (tasks.length === 0) return 'No background tasks.';
+		return renderVisualization(
+			'table',
+			tasks.map(task => ({
+				id: task.id,
+				status: task.running ? 'running' : `exit ${task.exitCode ?? '?'}`,
+				elapsed: `${Math.round((Date.now() - task.startedAt) / 1000)}s`,
+				command: task.command.slice(0, 60),
+				tail: task.output.slice(-1).join('').slice(0, 40),
+			})),
+			'Background tasks',
+		);
+	},
+});
+
+registerTool('visualize', {
+	description:
+		'Render numbers as an ASCII chart the user can read at a glance. ' +
+		"kind: 'bar' | 'line' | 'table'. data: JSON array of numbers, JSON " +
+		"array of {label,value} objects, or CSV lines 'label,value'. " +
+		'Use this instead of dumping raw numbers when summarizing stats, ' +
+		'progress, timings, git counts, or any series.',
+	readOnly: true,
+	execute(args) {
+		const kind = text(args, 'kind') || 'bar';
+		const title = text(args, 'title') || 'Values';
+		return renderVisualization(
+			kind,
+			args.data ?? args.values ?? args.rows,
+			title,
+			args,
+		);
 	},
 });
 

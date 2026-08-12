@@ -72,6 +72,21 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		]);
 	});
 
+	test('the tool catalog carries REAL descriptions from the registry', () => {
+		const body = buildOpenAIRequestBody(
+			[{role: 'user', content: 'hi'}],
+			[{name: 'visualize'}, {name: 'monitor'}],
+			{id: 'x', model: 'm'},
+		);
+		const blocks = body.tools as Array<{
+			function: {name: string; description: string};
+		}>;
+		const visualize = blocks.find(block => block.function.name === 'visualize');
+		const monitor = blocks.find(block => block.function.name === 'monitor');
+		expect(visualize?.function.description).toContain('ASCII chart');
+		expect(monitor?.function.description).toContain('background task');
+	});
+
 	test('message history is append-only: turn N is a strict prefix of turn N+1', () => {
 		const tools = [{name: 'execute_bash'}];
 		const endpoint = {id: 'x', model: 'm'};

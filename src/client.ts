@@ -8,6 +8,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {activeEndpoint, sessionId, setRetryingAttempt} from './state';
 import {resolveRulesFile} from './rules-file';
+import {toolDescription} from './tools';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -172,7 +173,13 @@ export function openAIToolBlocks(
 			type: 'function',
 			function: {
 				name: tool.name,
-				description: tool.description ?? '',
+				// REAL descriptions from the registry so the model knows what
+				// each tool does (the catalog is also the cache head, so the
+				// strings are stable per build — never timestamps/volatile
+				// content).
+				description:
+					tool.description ??
+					toolDescription(tool.name),
 				parameters: {type: 'object', properties: {}},
 			},
 		}));
