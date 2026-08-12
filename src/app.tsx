@@ -3068,7 +3068,6 @@ export function App() {
 			input(),
 			terminalDimensions().width ?? 80,
 			busy(),
-			tasks().length,
 			Boolean(pendingPrompt()),
 			Boolean(pendingApproval()),
 			cancelling(),

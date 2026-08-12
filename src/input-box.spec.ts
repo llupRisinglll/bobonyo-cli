@@ -37,13 +37,11 @@ describe('wrapText', () => {
 describe('computeInputBoxHeight', () => {
 	test('grows with the wrapped input lines (no single-row limit)', () => {
 		const wrapped = wrapText('x'.repeat(200), 40).length;
-		expect(computeInputBoxHeight('x'.repeat(200), 60, false, 0)).toBe(
-			wrapped + 2,
-		);
+		expect(computeInputBoxHeight('x'.repeat(200), 60, false)).toBe(wrapped + 2);
 	});
 
 	test('idle box stays one interior row', () => {
-		expect(computeInputBoxHeight('', 80, false, 0)).toBe(3);
+		expect(computeInputBoxHeight('', 80, false)).toBe(3);
 	});
 });
 

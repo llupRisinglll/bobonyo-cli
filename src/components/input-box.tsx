@@ -55,7 +55,6 @@ import {
 	setMode,
 	setPendingApproval,
 	setPendingPrompt,
-	tasks,
 } from '../state';
 import {CHALK_GREY, colors} from '../theme';
 import {loadSettings, saveSettings} from '../settings';
@@ -365,7 +364,6 @@ export function InputBox(props: {
 			input(),
 			terminalDimensions().width ?? 80,
 			busy(),
-			tasks().length,
 			Boolean(pendingPrompt()),
 			Boolean(pendingApproval()),
 			cancelling(),
@@ -1036,31 +1034,6 @@ export function InputBox(props: {
 				<text fg={colors().secondary}>Press Esc to cancel</text>
 			</Show>
 			<Show when={!approval() && !prompt()}>
-				{/* A7/C9: live task-list overlay. The HEADER is the CURRENT task
-				    (animated spinner), not a hardcoded "tasks:" label; when the
-				    turn settles every item is marked finished. */}
-				<Show when={tasks().length > 0}>
-					<Show when={busy() && tasks().some(task => task.running)}>
-						<text fg={colors().primary}>
-							{SPINNER_FRAMES[spinnerFrame() % SPINNER_FRAMES.length]}{' '}
-							{tasks().find(task => task.running)?.title ??
-								tasks()[0]?.title}
-						</text>
-					</Show>
-					<text fg={colors().secondary} attributes={dim()}>
-						{tasks()
-							.filter(task => !task.running)
-							.slice(0, 4)
-							.map(
-								task =>
-									`${task.done ? '✓' : '○'} ${task.title}`,
-							)
-							.join(' · ')}
-						{tasks().filter(task => !task.running).length > 4
-							? ' …'
-							: ''}
-					</text>
-				</Show>
 				{/* Multi-line input: each WRAPPED line gets its own row (the
 				    box grows with the text, no fixed single-row limit). */}
 				<For each={inputLines()}>
@@ -1221,7 +1194,6 @@ export function computeInputBoxHeight(
 	inputText: string,
 	terminalWidth: number,
 	isBusy: boolean,
-	tasksCount: number,
 	promptActive = false,
 	approvalActive = false,
 	isCancelling = false,
@@ -1234,8 +1206,6 @@ export function computeInputBoxHeight(
 		1,
 		wrapText(inputText, Math.max(10, terminalWidth - 12)).length,
 	);
-	// Task overlay: running header + list while busy, list-only when settled.
-	if (tasksCount > 0) interior += isBusy ? 2 : 1;
 	// Cancelling row (`Press Esc to cancel` while the abort unwinds).
 	if (isCancelling && !isBusy) interior += 1;
 	return interior + 2; // top + bottom borders
