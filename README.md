@@ -40,6 +40,33 @@ bobonyo treats every model as a first class citizen:
 - **Cache friendly.** Session management keeps the LLM prompt cache warm, so
   long conversations stay fast and cheap.
 
+## Caveman mode
+
+Why use many token when few do trick? bobonyo ships with **Caveman mode**
+built in, and it is ON by default.
+
+Caveman mode makes the agent reply in short, direct sentences. It drops
+filler words and pleasantries, but keeps every technical detail exact. Code
+blocks, commands, and error messages never change — only the fluff dies.
+
+A normal reply:
+
+> Your component re-renders because you create a new object reference on
+> each render. I would recommend using useMemo.
+
+becomes:
+
+> New object ref each render. Wrap in `useMemo`.
+
+Same answer, way fewer tokens. The measured saving is around 65% of output
+tokens, and shorter replies mean every turn costs less.
+
+Do not like it? Turn it off in **Settings, Behavior → Caveman mode**, or just
+say "caveman off". You can also pick a level: "caveman lite" for normal
+sentences without the filler, "caveman full" for the classic style,
+"caveman ultra" for the shortest possible, and even classical Chinese with
+"caveman wenyan-full" if you want to show off.
+
 ## What it looks like
 
 ![bobonyo in action](docs/demo.gif)
