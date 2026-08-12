@@ -4,6 +4,7 @@ import {For, Show} from 'solid-js';
 import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {glyphBlinkOn, spinnerFrame} from '../state';
+import {ChartBar, ChartLine, parseChartPoints} from './chart';
 
 /**
  * FOOLPROOF live tool-row renderer — the ONLY way running tool rows render.
@@ -23,16 +24,46 @@ import {glyphBlinkOn, spinnerFrame} from '../state';
  * needs a different live row must change THIS file, and the regression
  * guards in `regression-guards.spec.ts` fail the build if it ever does.
  */
-export function LiveToolRows(props: {rows: LiveRowSegments[]}) {
+export function LiveToolRows(props: {
+	rows: LiveRowSegments[];
+	/** Real-time visualization data (toolId → chart kind + title). */
+	charts?: Array<{toolId?: string; kind: string; title: string}>;
+	/** Raw streamed output for a toolId (charts parse points from it). */
+	getOutput?: (toolId: string) => string;
+}) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	return (
 		<For each={props.rows}>
-			{(row) => (
+			{(row) => {
+				const toolId = (row as LiveRowSegments & {toolId?: string}).toolId;
+				const chart = props.charts?.find(
+					candidate => candidate.toolId === toolId,
+				);
+				const raw = toolId
+					? (props.getOutput?.(toolId) ?? '')
+					: '';
+				return (
 				<box flexDirection="column">
 					{/* Leading breakline: parity with the settled blank rows
 					    between blocks (user msg → blank → tool row). */}
 					<box height={1} />
+					{chart ? (
+						chart.kind === 'line' ? (
+							<ChartLine
+								title={chart.title}
+								points={parseChartPoints(raw)}
+								running
+							/>
+						) : (
+							<ChartBar
+								title={chart.title}
+								points={parseChartPoints(raw)}
+								running
+							/>
+						)
+					) : (
+					<>
 					<box flexDirection="row">
 						{/* Blinking secondary glyph, width-stable (the hidden
 						    frame keeps a space). */}
@@ -65,12 +96,15 @@ export function LiveToolRows(props: {rows: LiveRowSegments[]}) {
 											{c.text}
 										</text>
 									)}
-								</For>
-							</box>
-						)}
+							</For>
+						</box>
+					)}
 					</For>
+					</>
+					)}
 				</box>
-			)}
+				);
+			}}
 		</For>
 	);
 }

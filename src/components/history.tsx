@@ -59,6 +59,8 @@ import {
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
+import {VizCard} from './chart';
+import {vizData} from '../viz-store';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -443,12 +445,14 @@ export function History(props: {height?: number}) {
 		const parts: Array<{
 			text: string;
 			key?: string;
-			kind: 'md' | 'reply';
+			kind: 'md' | 'reply' | 'chart';
+			chart?: {toolId?: string; title: string; kind: string; running?: boolean};
 		}> = [];
 		const pushBlock = (
 			text: string,
 			key?: string,
-			kind: 'md' | 'reply' = 'md',
+			kind: 'md' | 'reply' | 'chart' = 'md',
+			chart?: {toolId?: string; title: string; kind: string; running?: boolean},
 		) => {
 			parts.push({
 				// Full-row-bg fences carry the current width in the opener,
@@ -456,13 +460,17 @@ export function History(props: {height?: number}) {
 				// the CodeRenderable re-highlights and onChunks pads to the
 				// NEW width (without this the old padding lingered until any
 				// other re-render).
-				text: text.replace(
-					/^(```+)(filediff|usermsg)(:[^:\n]+)/,
-					(_match, fenceChar, kind, status) =>
-						`${fenceChar}${kind}${status}:w${fillWidth}`,
-				),
+				text:
+					kind === 'chart'
+						? text
+						: text.replace(
+								/^(```+)(filediff|usermsg)(:[^:\n]+)/,
+								(_match, fenceChar, kind, status) =>
+									`${fenceChar}${kind}${status}:w${fillWidth}`,
+							),
 				key,
 				kind,
+				...(chart ? {chart} : {}),
 			});
 		};
 		const all = messages();
@@ -509,6 +517,55 @@ export function History(props: {height?: number}) {
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
+				// REAL-TIME visualization cards: a `visualize` tool message
+				// renders a dashboard-style chart CARD IMMEDIATELY (running
+				// or settled). The card subscribes to the viz store and
+				// updates IN PLACE as the tool publishes points, like the
+				// todo task list.
+				if (message.tool?.name === 'visualize') {
+					const title =
+						typeof message.tool.args?.title === 'string'
+							? message.tool.args.title
+							: 'Visualization';
+					const kind =
+						typeof message.tool.args?.kind === 'string'
+							? message.tool.args.kind
+							: 'bar';
+					// CHART IDENTITY: a stable `chartId` (or the title) lets
+					// repeated `visualize` calls UPDATE the same card in
+					// place instead of stacking new cards (like the todo
+					// task list — the LLM keeps calling the tool and the card
+					// refreshes).
+					const chartId =
+						(typeof message.tool.args?.chartId === 'string' &&
+							message.tool.args.chartId) ||
+						title;
+					const existing = parts.findIndex(
+						part => part.kind === 'chart' && part.key === `chart:${chartId}`,
+					);
+					if (existing !== -1) {
+						parts[existing] = {
+							...parts[existing]!,
+							key: `chart:${chartId}`,
+							chart: {
+								// The card subscribes to the STABLE chart
+								// identity, so repeated calls update in place.
+								toolId: chartId,
+								title,
+								kind,
+								running: message.running,
+							},
+						};
+					} else {
+					pushBlock('', `chart:${chartId}`, 'chart', {
+						toolId: chartId,
+						title,
+						kind,
+						running: message.running,
+					});
+					}
+					continue;
+				}
 				// RUNNING tool rows render in the LIVE region (their output
 				// streams). Including them here would re-read liveOutputs,
 				// re-run the whole settled memo on every output tick, and
@@ -569,6 +626,11 @@ export function History(props: {height?: number}) {
 			| {kind: 'md'; parts: Array<{text: string; key?: string}>}
 			| {kind: 'reply'; parts: Array<{text: string; key?: string}>}
 			| {
+					kind: 'chart';
+					part: {text: string; key?: string};
+					chart: {toolId?: string; title: string; kind: string; running?: boolean};
+			  }
+			| {
 					kind: 'tool';
 					part: {text: string; key?: string};
 					segments: LiveRowSegments;
@@ -577,6 +639,14 @@ export function History(props: {height?: number}) {
 			  }
 		> = [];
 		for (const part of parts) {
+			if (part.kind === 'chart' && part.chart) {
+				blocks.push({
+					kind: 'chart',
+					part,
+					chart: part.chart,
+				});
+				continue;
+			}
 			if (part.kind === 'reply') {
 				blocks.push({kind: 'reply', parts: [part]});
 				continue;
@@ -628,6 +698,19 @@ export function History(props: {height?: number}) {
 			if (group.kind === 'tool') {
 				docLines.push({text: '', key: group.part.key});
 				renderIndex.push(docLines.length - 1);
+			}
+			// Chart cards are components, not text rows: reserve their
+			// screen space in the mouse mapping with a placeholder row so
+			// rows below keep correct global offsets.
+			if (group.kind === 'chart') {
+				docLines.push({text: '', key: group.part.key});
+				renderIndex.push(docLines.length - 1);
+				blockRefs.push({
+					ref: null,
+					start: renderIndex.length - 1,
+					rows: 1,
+				});
+				return;
 			}
 			const partList =
 				group.kind === 'tool' ? [group.part] : group.parts;
@@ -750,6 +833,9 @@ export function History(props: {height?: number}) {
 		const rows: Array<LiveRowSegments & {toolId?: string}> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
+				// Visualization cards render through their own component
+				// (subscribed to the live store), never as a text row.
+				if (message.tool.name === 'visualize') continue;
 				const streamed = message.toolId
 					? outputs[message.toolId]
 					: undefined;
@@ -996,6 +1082,18 @@ export function History(props: {height?: number}) {
 					// (parity: the settings rows), so there is no overlay
 					// geometry to compute and the hit target never changes
 					// under the cursor — hover sticks.
+					if (block.kind === 'chart') {
+						const chartBlock = block;
+						return (
+							<VizCard
+								toolId={chartBlock.chart.toolId ?? ''}
+								title={chartBlock.chart.title}
+								kind={chartBlock.chart.kind}
+								running={chartBlock.chart.running}
+								getData={(toolId) => vizData()[toolId]}
+							/>
+						);
+					}
 					if (block.kind === 'tool') {
 						return (
 							<SettledToolRow
@@ -1315,6 +1413,9 @@ function wordWrapForBackground(text: string, width: number): string[] {
  * between the compacted header and the individual call entries.
  */
 function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: string}> {
+	// Visualizations render as dedicated chart CARDS (handled in the message
+	// loop), never as text tool rows.
+	if (run.some(message => message.tool?.name === 'visualize')) return [];
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';

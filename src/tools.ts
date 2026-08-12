@@ -16,7 +16,8 @@ import {
 	resolveWebSearchFallback,
 } from './web-search';
 import type {Mode, ToolProfile} from './settings';
-import {renderVisualization} from './visualize';
+import {parseVizData, type VizPoint} from './visualize';
+import {publishViz} from './viz-store';
 
 export interface ToolResult {
 	tool_call_id: string;
@@ -26,6 +27,8 @@ export interface ToolResult {
 export interface ToolContext {
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
+	/** Tool-call id (charts publish under it so the card can subscribe). */
+	toolId?: string;
 }
 
 interface ToolDef {
@@ -396,37 +399,67 @@ registerTool('list_background_tasks', {
 	execute() {
 		const tasks = bgTasks();
 		if (tasks.length === 0) return 'No background tasks.';
-		return renderVisualization(
-			'table',
-			tasks.map(task => ({
-				id: task.id,
-				status: task.running ? 'running' : `exit ${task.exitCode ?? '?'}`,
-				elapsed: `${Math.round((Date.now() - task.startedAt) / 1000)}s`,
-				command: task.command.slice(0, 60),
-				tail: task.output.slice(-1).join('').slice(0, 40),
-			})),
-			'Background tasks',
+		// Markdown table — the built-in markdown formatter renders it (the
+		// dedicated table VISUALIZATION is not needed).
+		const rows = tasks.map(
+			task =>
+				`| ${task.id} | ${task.running ? 'running' : `exit ${task.exitCode ?? '?'}`} | ` +
+				`${Math.round((Date.now() - task.startedAt) / 1000)}s | ` +
+				`${task.command.slice(0, 50)} | ${task.output.slice(-1).join('').slice(0, 30)} |`,
+		);
+		return (
+			`| id | status | elapsed | command | tail |\n` +
+			`|---|---|---|---|---|\n` +
+			rows.join('\n')
 		);
 	},
 });
 
 registerTool('visualize', {
 	description:
-		'Render numbers as an ASCII chart the user can read at a glance. ' +
+		'Render numbers as a REAL-TIME chart UI the user can read at a glance. ' +
 		"kind: 'bar' | 'line' | 'table'. data: JSON array of numbers, JSON " +
 		"array of {label,value} objects, or CSV lines 'label,value'. " +
 		'Use this instead of dumping raw numbers when summarizing stats, ' +
 		'progress, timings, git counts, or any series.',
 	readOnly: true,
-	execute(args) {
+	async execute(args, ctx) {
 		const kind = text(args, 'kind') || 'bar';
 		const title = text(args, 'title') || 'Values';
-		return renderVisualization(
-			kind,
-			args.data ?? args.values ?? args.rows,
-			title,
-			args,
-		);
+		const chartId =
+			(typeof args.chartId === 'string' && args.chartId) || title;
+		const points = parseVizData(args.data ?? args.values ?? args.rows);
+		if (points.length === 0) return 'No data to visualize.';
+		// REAL-TIME: stream the points one by one so the chart GROWS live in
+		// the transcript (each `label:value` line is parsed by the chart
+		// component as it arrives). The settled row renders the full chart
+		// from the final output.
+		let acc = '';
+		for (const point of points) {
+			acc = acc ? `${acc}\n${point.label}:${point.value}` : `${point.label}:${point.value}`;
+			ctx.onProgress?.(acc);
+			// PUBLISH to the real-time store: the chart card in the
+			// transcript reads this signal and grows in place.
+			const published: VizPoint[] = [];
+			for (const line of acc.split('\n')) {
+				const [label, value] = line.split(':');
+				const n = Number(value);
+				if (label && Number.isFinite(n)) {
+					const original = points.find(p => p.label === label);
+					published.push({
+						label,
+						value: n,
+						...(original?.status ? {status: original.status} : {}),
+					});
+				}
+			}
+			// PUBLISH under the STABLE chart identity: repeated `visualize`
+			// calls with the same chartId update the SAME card (the LLM keeps
+			// calling the tool and the card refreshes, like the task list).
+			publishViz(chartId, title, kind, published);
+			await sleep(600);
+		}
+		return acc;
 	},
 });
 

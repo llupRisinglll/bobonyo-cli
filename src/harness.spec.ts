@@ -83,7 +83,7 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		}>;
 		const visualize = blocks.find(block => block.function.name === 'visualize');
 		const monitor = blocks.find(block => block.function.name === 'monitor');
-		expect(visualize?.function.description).toContain('ASCII chart');
+		expect(visualize?.function.description).toContain('REAL-TIME chart');
 		expect(monitor?.function.description).toContain('background task');
 	});
 

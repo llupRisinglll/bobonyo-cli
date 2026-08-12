@@ -754,25 +754,22 @@
     "keyword": "e2e progress",
     "script": [
       {
-        "name": "list_background_tasks",
-        "arguments": {}
-      },
-      {
         "name": "visualize",
         "arguments": {
           "kind": "bar",
-          "title": "E2E suite progress (passed / failed / skipped)",
+          "title": "E2E suite progress",
+          "chartId": "e2e",
           "data": [
             {
               "label": "passed",
-              "value": 87
+              "value": 12
             },
             {
               "label": "failed",
-              "value": 6
+              "value": 2
             },
             {
-              "label": "skipped",
+              "label": "running",
               "value": 3
             }
           ]
@@ -781,27 +778,83 @@
       {
         "name": "visualize",
         "arguments": {
-          "kind": "table",
-          "title": "Failed e2e specs",
+          "kind": "heat",
+          "title": "E2E suite progress",
+          "chartId": "e2e",
           "data": [
             {
-              "spec": "checkout.spec.ts",
-              "error": "timeout waiting for iframe"
+              "label": "auth.spec.ts",
+              "value": 1200,
+              "status": "pass"
             },
             {
-              "spec": "payments.spec.ts",
-              "error": "assertion failed: total mismatch"
+              "label": "checkout.spec.ts",
+              "value": 3400,
+              "status": "run"
             },
             {
-              "spec": "auth.spec.ts",
-              "error": "selector not found: #login-submit"
+              "label": "payments.spec.ts",
+              "value": 2100,
+              "status": "fail"
+            },
+            {
+              "label": "search.spec.ts",
+              "value": 900,
+              "status": "pass"
             }
           ]
         }
       },
       {
-        "text": "E2E run: 87 passed, 6 failed, 3 skipped. The failed specs are checkout, payments and auth \u2014 see the table above for the exact errors."
+        "name": "visualize",
+        "arguments": {
+          "kind": "spark",
+          "title": "E2E pass rate",
+          "chartId": "e2e",
+          "data": [
+            {
+              "label": "t1",
+              "value": 3
+            },
+            {
+              "label": "t2",
+              "value": 4
+            },
+            {
+              "label": "t3",
+              "value": 2
+            },
+            {
+              "label": "t4",
+              "value": 5
+            },
+            {
+              "label": "t5",
+              "value": 6
+            },
+            {
+              "label": "t6",
+              "value": 4
+            },
+            {
+              "label": "t7",
+              "value": 7
+            },
+            {
+              "label": "t8",
+              "value": 8
+            },
+            {
+              "label": "t9",
+              "value": 9
+            }
+          ]
+        }
+      },
+      {
+        "text": "E2E run complete: 87 passed, 6 failed, 3 skipped. Failed specs: checkout and payments \u2014 see the live card above."
       }
-    ]
+    ],
+    "stepDelay": 2500
   }
 ]

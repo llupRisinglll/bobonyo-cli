@@ -8,6 +8,8 @@
 export interface VizPoint {
 	label: string;
 	value: number;
+	/** Optional secondary payload (heat/status views: suite → status). */
+	status?: string;
 }
 
 /** Parse a tool `data` argument: JSON array or simple `label,value` lines. */
@@ -47,6 +49,9 @@ export function parseVizData(
 					return {
 						label,
 						value: Number.isFinite(value) ? value : 0,
+						...(record.status
+							? {status: String(record.status)}
+							: {}),
 					};
 				}
 				return null;

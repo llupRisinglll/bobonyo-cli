@@ -1981,6 +1981,7 @@ export function App() {
 					? await Promise.all(
 							calls.map(call =>
 								executeTool(call, {
+									toolId: call.id,
 									onProgress: content =>
 										setLiveOutputs(prev => ({
 											...prev,
@@ -2144,6 +2145,7 @@ export function App() {
 					}
 					const toolResult = parallelResults?.[index] ??
 						(await executeTool(call, {
+							toolId: call.id,
 							onProgress: content =>
 								setLiveOutputs(prev => ({...prev, [call.id]: content})),
 						}));
