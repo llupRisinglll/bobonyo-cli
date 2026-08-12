@@ -66,6 +66,20 @@ export const [busy, setBusy] = createSignal(false);
 export const [streaming, setStreaming] = createSignal('');
 export const [running, setRunning] = createSignal(false);
 export const [reasoning, setReasoning] = createSignal('');
+/**
+ * Settle the LIVE thinking phase into the transcript.
+ *
+ * The live `⚙ Thinking · (Ns)` block is driven by the `reasoning` signal
+ * (plus the elapsed timer). Once a round's reasoning is committed as a
+ * SETTLED `⚙ Thought (Ns)` block, the live block must stop immediately —
+ * if the signal stayed set, the animated header and its ticking timer would
+ * keep rendering ABOVE the running tool rows for the whole tool turn (the
+ * "still thinking above bash" bug). Pure state helper, unit-tested.
+ */
+export function settleThinkingPhase(): void {
+	setReasoning('');
+	setThinkingElapsed(0);
+}
 /** Most recent provider usage snapshot (token accounting footer). */
 export const [lastUsage, setLastUsage] = createSignal<
 	{

@@ -1,5 +1,13 @@
 import {describe, expect, test} from 'bun:test';
-import {glyphBlinkOn, loadingDots} from './state';
+import {
+	glyphBlinkOn,
+	loadingDots,
+	reasoning,
+	settleThinkingPhase,
+	setReasoning,
+	setThinkingElapsed,
+	thinkingElapsed,
+} from './state';
 
 describe('glyphBlinkOn', () => {
 	test('blinks on a 500ms cadence (4 frames per 100ms tick)', () => {
@@ -23,5 +31,15 @@ describe('loadingDots', () => {
 		expect(loadingDots(4)).toBe('...');
 		expect(loadingDots(5)).toBe('...');
 		expect(loadingDots(6)).toBe('.');
+	});
+});
+
+describe('settleThinkingPhase (the live Thinking block must not hang above tools)', () => {
+	test('clears the live reasoning signal and the ticking timer', () => {
+		setReasoning('a streamed thought in progress');
+		setThinkingElapsed(7);
+		settleThinkingPhase();
+		expect(reasoning()).toBe('');
+		expect(thinkingElapsed()).toBe(0);
 	});
 });

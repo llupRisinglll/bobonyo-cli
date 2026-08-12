@@ -59,7 +59,7 @@ import {
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
-import {VizCard} from './chart';
+import {BgTasksCard, VizCard} from './chart';
 import {vizData} from '../viz-store';
 import {
 	tokenizeAgentRow,
@@ -570,6 +570,35 @@ export function History(props: {height?: number}) {
 					}
 					continue;
 				}
+				// `list_background_tasks` renders as a BACKGROUND-TASK
+				// DASHBOARD CARD (diamond glyph + progress bars), NOT a tool
+				// row with the `  └   ` indent / tool coloring. One stable
+				// card identity, so repeated calls UPDATE the same card in
+				// place (like the visualize chartId and the todo task list).
+				if (message.tool?.name === 'list_background_tasks') {
+					const chartKey = 'chart:bgtasks:overview';
+					const existing = parts.findIndex(
+						part => part.kind === 'chart' && part.key === chartKey,
+					);
+					if (existing !== -1) {
+						parts[existing] = {
+							...parts[existing]!,
+							key: chartKey,
+							chart: {
+								kind: 'bgtasks',
+								title: 'Background tasks',
+								running: message.running,
+							},
+						};
+					} else {
+						pushBlock('', chartKey, 'chart', {
+							kind: 'bgtasks',
+							title: 'Background tasks',
+							running: message.running,
+						});
+					}
+					continue;
+				}
 				// RUNNING tool rows render in the LIVE region (their output
 				// streams). Including them here would re-read liveOutputs,
 				// re-run the whole settled memo on every output tick, and
@@ -837,9 +866,15 @@ export function History(props: {height?: number}) {
 		const rows: Array<LiveRowSegments & {toolId?: string}> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
-				// Visualization cards render through their own component
-				// (subscribed to the live store), never as a text row.
-				if (message.tool.name === 'visualize') continue;
+				// Visualization / background-task cards render through their
+				// own components (subscribed to the live stores), never as
+				// text rows.
+				if (
+					message.tool.name === 'visualize' ||
+					message.tool.name === 'list_background_tasks'
+				) {
+					continue;
+				}
 				const streamed = message.toolId
 					? outputs[message.toolId]
 					: undefined;
@@ -1088,6 +1123,13 @@ export function History(props: {height?: number}) {
 					// under the cursor — hover sticks.
 					if (block.kind === 'chart') {
 						const chartBlock = block;
+						if (chartBlock.chart.kind === 'bgtasks') {
+							return (
+								<BgTasksCard
+									running={chartBlock.chart.running}
+								/>
+							);
+						}
 						return (
 							<VizCard
 								toolId={chartBlock.chart.toolId ?? ''}
@@ -1418,7 +1460,15 @@ function wordWrapForBackground(text: string, width: number): string[] {
 function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: string}> {
 	// Visualizations render as dedicated chart CARDS (handled in the message
 	// loop), never as text tool rows.
-	if (run.some(message => message.tool?.name === 'visualize')) return [];
+	if (
+		run.some(
+			message =>
+				message.tool?.name === 'visualize' ||
+				message.tool?.name === 'list_background_tasks',
+		)
+	) {
+		return [];
+	}
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';

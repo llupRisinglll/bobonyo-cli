@@ -18,6 +18,38 @@ export interface BackgroundTask {
 	exitCode: number | null;
 	startedAt: number;
 	completedAt?: number;
+	/**
+	 * Recognized milestone markers in the output (worktree builds, e2e runs,
+	 * CI). Used to render a progress CHART instead of raw log lines.
+	 */
+	progress: Array<{step: string; at: number}>;
+}
+
+/** Step markers recognized in command output (in canonical order). */
+export const PROGRESS_STEP_MARKERS: Array<{
+	label: string;
+	pattern: RegExp;
+}> = [
+	{label: 'cloned repos', pattern: /worktree '.*' off origin\//},
+	{label: 'node_modules', pattern: /node_modules farm complete/},
+	{label: 'env written', pattern: /wrote per-plugin \.env/},
+	{label: 'db restore', pattern: /restoring DB/},
+	{label: 'kernel build', pattern: /building kernel dist/},
+	{label: 'plugin UIs', pattern: /building \d+ plugin UIs/},
+	{label: 'tests', pattern: /playwright|test run|passed|failed/},
+];
+
+/** Progress steps seen in a task's output (deduped, order-preserving). */
+export function taskProgressSteps(output: string[]): string[] {
+	const seen: string[] = [];
+	for (const line of output) {
+		for (const marker of PROGRESS_STEP_MARKERS) {
+			if (marker.pattern.test(line) && !seen.includes(marker.label)) {
+				seen.push(marker.label);
+			}
+		}
+	}
+	return seen;
 }
 
 /** nanocoder's foreground budget (source/utils/streaming-bash-tool.tsx). */
@@ -51,6 +83,7 @@ export async function runBash(
 		running: true,
 		exitCode: null,
 		startedAt: Date.now(),
+		progress: [],
 	};
 
 	const proc = Bun.spawn(['bash', '-c', command], {
@@ -67,7 +100,11 @@ export async function runBash(
 			if (done) break;
 			const chunk = decoder.decode(value, {stream: true});
 			for (const line of chunk.split('\n')) {
-				if (line) task.output.push(line);
+				if (line) {
+					task.output.push(line);
+					const steps = taskProgressSteps(task.output);
+					task.progress = steps.map((step, at) => ({step, at}));
+				}
 			}
 			onProgress?.(task.output.join('\n'));
 		}
@@ -124,7 +161,7 @@ export async function runBash(
 			content:
 				`Command exceeded the ${AUTO_BACKGROUND_MS / 1000}-second foreground budget ` +
 				`and is still running as background task ${task.id}. ` +
-				'Use monitor to read output, check status, or stop it.',
+				'Use list_background_tasks for the overview, then visualize for progress.',
 			task,
 		};
 	}

@@ -84,7 +84,7 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		const visualize = blocks.find(block => block.function.name === 'visualize');
 		const monitor = blocks.find(block => block.function.name === 'monitor');
 		expect(visualize?.function.description).toContain('REAL-TIME chart');
-		expect(monitor?.function.description).toContain('background task');
+		expect(monitor?.function.description).toContain('DEPRECATED');
 	});
 
 	test('message history is append-only: turn N is a strict prefix of turn N+1', () => {

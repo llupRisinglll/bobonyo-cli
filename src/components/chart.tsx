@@ -4,6 +4,129 @@ import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import type {VizPoint} from '../viz-store';
 import {vizData} from '../viz-store';
+import {bgTasks, PROGRESS_STEP_MARKERS, type BackgroundTask} from '../bash';
+
+/**
+ * Card TITLE row: `✦` diamond glyph + primary title + optional `● live`
+ * marker. A visualization is a DASHBOARD CARD, NOT a tool row: the glyph is
+ * secondary/dim (never the status green) and the body below carries NO
+ * `  └   ` tool indent — the card is its own visual language.
+ */
+export function ChartTitle(props: {title: string; running?: boolean}) {
+	const bold = () => createTextAttributes({bold: true});
+	const dim = () => createTextAttributes({dim: true});
+	return (
+		<box flexDirection="row">
+			<text fg={colors().secondary} attributes={dim()}>{'✦'}</text>
+			<text fg={colors().primary} attributes={bold()}>
+				{` ${props.title}`}
+			</text>
+			{/* Conditional expression, NOT <Show>: OpenTUI's strict (server)
+			    renderer treats Show's false slot as an orphan empty text node
+			    inside a ROW box. The ternary renders nothing instead. */}
+			{props.running ? (
+				<text fg={colors().secondary} attributes={dim()}>
+					{'  ● live'}
+				</text>
+			) : null}
+		</box>
+	);
+}
+
+/**
+ * BACKGROUND-TASK dashboard card (the `list_background_tasks` tool): the
+ * diamond-glyph card title + per-task progress bars and status rows. It is
+ * a CARD, never a tool row — no `  └   ` body indent, no tool coloring.
+ * Reads the `bgTasks` signal directly in the render body so the card
+ * updates IN PLACE while a task runs (like the todo task list).
+ */
+export function BgTasksCard(props: {running?: boolean}) {
+	const bold = () => createTextAttributes({bold: true});
+	const dim = () => createTextAttributes({dim: true});
+	const tasks = bgTasks();
+	const anyRunning = props.running || tasks.some(task => task.running);
+	const total = PROGRESS_STEP_MARKERS.length;
+	const statusFg = (task: BackgroundTask): string => {
+		if (task.running) return colors().warning;
+		return (task.exitCode ?? 0) === 0
+			? colors().success
+			: colors().error;
+	};
+	return (
+		<box flexDirection="column" paddingX={1} paddingY={1}>
+			<ChartTitle title="Background tasks" running={anyRunning} />
+			<Show
+				when={tasks.length > 0}
+				fallback={
+					<text fg={colors().secondary} attributes={dim()}>
+						no background tasks
+					</text>
+				}
+			>
+				<For each={tasks}>
+					{(task) => {
+						const done = Math.min(total, task.progress.length);
+						const filled = Math.round(
+							(done / Math.max(1, total)) * 20,
+						);
+						const bar =
+							'█'.repeat(filled) +
+							'░'.repeat(Math.max(0, 20 - filled));
+						const steps = task.progress
+							.map(step => step.step)
+							.join(', ');
+						const elapsed = Math.max(
+							0,
+							Math.round((Date.now() - task.startedAt) / 1000),
+						);
+						return (
+							<box flexDirection="column">
+								<box flexDirection="row" height={1}>
+									<text
+										width={24}
+										fg={colors().text}
+										attributes={bold()}
+									>
+										{task.id}
+									</text>
+									<text fg={colors().primary}>{bar}</text>
+									<text
+										fg={colors().secondary}
+										attributes={dim()}
+									>
+										{` ${done}/${total}`}
+									</text>
+									<text
+										fg={statusFg(task)}
+										attributes={bold()}
+									>
+										{task.running
+											? ' running'
+											: ` exit ${task.exitCode ?? '?'}`}
+									</text>
+								</box>
+								<Show when={steps}>
+									<text
+										fg={colors().secondary}
+										attributes={dim()}
+									>
+										{'  '}{steps}
+									</text>
+								</Show>
+								<text
+									fg={colors().secondary}
+									attributes={dim()}
+								>
+									{`  ${elapsed}s · ${task.command}`}
+								</text>
+							</box>
+						);
+					}}
+				</For>
+			</Show>
+		</box>
+	);
+}
 
 /**
  * Parse streamed chart lines into points. Accepts:
@@ -54,16 +177,7 @@ export function ChartBar(props: {
 	const barWidth = 34;
 	return (
 		<box flexDirection="column">
-			<box flexDirection="row">
-				<text fg={colors().primary} attributes={bold()}>
-					{props.title}
-				</text>
-				<Show when={props.running}>
-					<text fg={colors().secondary} attributes={dim()}>
-						{'  '}● live
-					</text>
-				</Show>
-			</box>
+			<ChartTitle title={props.title} running={props.running} />
 			<Show when={props.points.length > 0} fallback={
 				<text fg={colors().secondary} attributes={dim()}>
 					waiting for data…
@@ -103,7 +217,7 @@ export function ChartBar(props: {
 			</For>
 			</Show>
 			<text fg={colors().secondary} attributes={dim()}>
-				{' '.repeat(23)}└ scale: 0 … {Math.round(max)}
+				{' '.repeat(23)}scale 0 … {Math.round(max)}
 			</text>
 		</box>
 	);
@@ -138,16 +252,7 @@ export function ChartLine(props: {
 		String(Math.round(max - (row / (rows - 1)) * span)).padStart(4);
 	return (
 		<box flexDirection="column">
-			<box flexDirection="row">
-				<text fg={colors().primary} attributes={bold()}>
-					{props.title}
-				</text>
-				<Show when={props.running}>
-					<text fg={colors().secondary} attributes={dim()}>
-						{' '}… live
-					</text>
-				</Show>
-			</box>
+			<ChartTitle title={props.title} running={props.running} />
 			<For each={grid}>
 				{(row, index) => (
 					<box flexDirection="row" height={1}>
@@ -159,7 +264,7 @@ export function ChartLine(props: {
 				)}
 			</For>
 			<text fg={colors().secondary} attributes={dim()}>
-				{'      └ '}
+				{'      '}
 				{visible.map(point => point.label).join('  ')}
 			</text>
 		</box>
@@ -180,16 +285,7 @@ export function ChartSpark(props: {
 	const max = Math.max(1, ...props.points.map(point => Math.abs(point.value)));
 	return (
 		<box flexDirection="column">
-			<box flexDirection="row">
-				<text fg={colors().primary} attributes={bold()}>
-					{props.title}
-				</text>
-				<Show when={props.running}>
-					<text fg={colors().secondary} attributes={dim()}>
-						{'  '}● live
-					</text>
-				</Show>
-			</box>
+			<ChartTitle title={props.title} running={props.running} />
 			<box flexDirection="row">
 				<For each={props.points.slice(-40)}>
 					{(point) => (
@@ -246,16 +342,7 @@ export function ChartHeat(props: {
 	const running = props.points.filter(p => p.status === 'run' || p.status === 'running').length;
 	return (
 		<box flexDirection="column">
-			<box flexDirection="row">
-				<text fg={colors().primary} attributes={bold()}>
-					{props.title}
-				</text>
-				<Show when={props.running}>
-					<text fg={colors().secondary} attributes={dim()}>
-						{'  '}● live
-					</text>
-				</Show>
-			</box>
+			<ChartTitle title={props.title} running={props.running} />
 			<For each={props.points}>
 				{(point) => (
 					<box flexDirection="row" height={1}>

@@ -7,7 +7,7 @@
 
 import {readFileSync} from 'node:fs';
 import {streamChat, type ChatMessageLike, type MockToolCall} from './client';
-import {bgTasks, runBash} from './bash';
+import {bgTasks, PROGRESS_STEP_MARKERS, runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
@@ -68,7 +68,6 @@ const READ_ONLY_TOOLS = new Set([
 	'skill',
 	'check_skill',
 	'agent',
-	'monitor',
 	'list_background_tasks',
 	'visualize',
 ]);
@@ -100,7 +99,6 @@ const PLAN_EXCLUDED = new Set([
 	'diff_edit',
 	'file_op',
 	'execute_bash',
-	'monitor',
 	'write_tasks',
 	'git_add',
 	'git_commit',
@@ -137,7 +135,6 @@ const NANO_TOOLS = new Set([
 	'diff_edit',
 	'write_file',
 	'execute_bash',
-	'monitor',
 	'web_search',
 	'search_file_contents',
 ]);
@@ -148,7 +145,6 @@ const MINIMAL_TOOLS = new Set([
 	'write_file',
 	'string_replace',
 	'diff_edit',
-	'monitor',
 	'search_file_contents',
 	'find_files',
 	'web_search',
@@ -377,44 +373,73 @@ registerTool('execute_bash', {
 	},
 });
 
-registerTool('monitor', {
-	description:
-		'Read the current status and recent output of ONE background task ' +
-		'(task_id required). Prefer list_background_tasks for an overview and ' +
-		'visualize for progress; NEVER call this repeatedly to poll a task — ' +
-		'check once after a reasonable wait instead.',
-	execute(args) {
-		const taskId = text(args, 'task_id') || text(args, 'id');
-		const task = bgTasks().find(t => t.id === taskId);
-		if (!task) return `No background task with ID ${taskId}.`;
-		const status = task.running ? 'running' : `exited ${task.exitCode}`;
-		const tail = task.output.slice(-5).join('\n');
-		return `Task ${task.id}: ${status}\n${tail}`;
-	},
-});
-
 registerTool('list_background_tasks', {
 	description:
 		'List every running/completed background task with its status, ' +
-		'elapsed time, and output tail as a TABLE. Prefer this over blind ' +
-		'monitor calls so the user sees one overview instead of repeated ' +
-		'monitor rows. After long-running work (worktrees, e2e suites, CI), ' +
-		'call this or visualize to summarize progress.',
+		'elapsed time, and output tail as a TABLE. Call this ONCE per check, ' +
+		'NOT in a loop. If a task is still running, report the progress and ' +
+		'stop; you may use visualize to show the progress chart. NEVER use ' +
+		'monitor for polling.',
 	execute() {
 		const tasks = bgTasks();
 		if (tasks.length === 0) return 'No background tasks.';
+		// Progress chart: each task's recognized milestone as a bar, so a
+		// worktree/e2e build reads as a progress card instead of raw lines.
+		const progressLines = tasks
+			.map(task => {
+				const steps = task.progress.map(p => p.step);
+				const label = `${task.id} (${task.running ? 'running' : `exit ${task.exitCode ?? '?'}`})`;
+				if (steps.length === 0) {
+					return `${label}:0:${PROGRESS_STEP_MARKERS.length}`;
+				}
+				const total = PROGRESS_STEP_MARKERS.length;
+				return `${label}:${steps.length}:${total}`;
+			})
+			.join('\n');
+		// ASCII progress bars per task: `[█████░░░░░] 4/7 steps`.
+		const bars = tasks
+			.map(task => {
+				const total = PROGRESS_STEP_MARKERS.length;
+				const done = Math.min(total, task.progress.length);
+				const filled = Math.round((done / Math.max(1, total)) * 20);
+				const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, 20 - filled));
+				const status = task.running
+					? 'running'
+					: `exit ${task.exitCode ?? '?'}`;
+				const steps = task.progress.map(p => p.step).join(', ');
+				return `  ${task.id} [${bar}] ${done}/${total} ${status}${steps ? ` — ${steps}` : ''}`;
+			})
+			.join('\n');
 		// Markdown table — the built-in markdown formatter renders it (the
 		// dedicated table VISUALIZATION is not needed).
 		const rows = tasks.map(
 			task =>
 				`| ${task.id} | ${task.running ? 'running' : `exit ${task.exitCode ?? '?'}`} | ` +
 				`${Math.round((Date.now() - task.startedAt) / 1000)}s | ` +
-				`${task.command.slice(0, 50)} | ${task.output.slice(-1).join('').slice(0, 30)} |`,
+				`${task.command.slice(0, 50)} | ${task.output.slice(-1).join('').slice(0, 30)} | ` +
+				`${task.progress.length}/${PROGRESS_STEP_MARKERS.length} steps |`,
 		);
 		return (
-			`| id | status | elapsed | command | tail |\n` +
-			`|---|---|---|---|---|\n` +
+			`Progress:\n${bars || '  (no progress markers yet)'}\n\n` +
+			`Steps: ${progressLines}\n\n` +
+			`| id | status | elapsed | command | tail | steps |\n` +
+			`|---|---|---|---|---|---|\n` +
 			rows.join('\n')
+		);
+	},
+});
+
+// `monitor` stays registered ONLY so legacy calls (mock worktree scenarios)
+// resolve; it returns a redirect instead of task output, so the agent is
+// forced toward list_background_tasks / visualize.
+registerTool('monitor', {
+	description:
+		'DEPRECATED. Use list_background_tasks (overview table) and visualize ' +
+		'(chart) for progress. This tool returns no task output.',
+	execute() {
+		return (
+			'[monitor deprecated] Call list_background_tasks for the overview ' +
+			'table, then visualize for charts. No output returned.'
 		);
 	},
 });
@@ -430,7 +455,9 @@ registerTool('visualize', {
 		'✓ pass / ✗ fail / ◐ run rows. Use this INSTEAD of dumping raw ' +
 		'numbers when summarizing stats, progress, timings, git counts, ' +
 		'test runs, or any series. Use chartId to update the SAME card ' +
-		'across repeated calls.',
+		'across repeated calls. IMPORTANT: the chart IS your final answer — ' +
+		'after calling visualize, do NOT also write the same numbers as a ' +
+		'table, list, or text recap. One short sentence of insight maximum.',
 	readOnly: true,
 	async execute(args, ctx) {
 		const kind = text(args, 'kind') || 'bar';

@@ -161,6 +161,7 @@ import {
 	reasoning,
 	retrySnapshot,
 	running,
+	settleThinkingPhase,
 	setBusy,
 	setCancelling,
 	setActiveEndpoint,
@@ -1807,6 +1808,11 @@ export function App() {
 								result.reasoning.trim() || undefined,
 							durationSec: thoughtDuration(),
 						});
+						// Same settle rule: the committed thought leaves the
+						// live block, so the retry round's reasoning starts
+						// fresh instead of appending to the old live tail.
+						settleThinkingPhase();
+						thinkingStartedAt = 0;
 						history = [
 							...history,
 							{role: 'assistant', content: result.text},
@@ -1880,6 +1886,8 @@ export function App() {
 							reasoning: result.reasoning.trim(),
 							durationSec: thoughtDuration(),
 						});
+						settleThinkingPhase();
+						thinkingStartedAt = 0;
 					}
 					appendInfo(
 						`Empty response, retry ${emptyTurnCount}/${MAX_EMPTY_TURNS + 1}: "${nudge}"`,
@@ -1918,6 +1926,14 @@ export function App() {
 						reasoning: result.reasoning.trim(),
 						durationSec: thoughtDuration(),
 					});
+					// The LIVE `⚙ Thinking` block must settle the moment the
+					// thought is committed: if the reasoning signal stayed
+					// set, the animated header + ticking timer would keep
+					// rendering ABOVE the running tool rows for the whole
+					// tool turn ("still thinking above bash" bug). The
+					// settled `⚙ Thought (Ns)` block carries the text.
+					settleThinkingPhase();
+					thinkingStartedAt = 0;
 				}
 				const toolResults: Array<{
 					tool_call_id: string;
