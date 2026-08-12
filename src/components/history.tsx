@@ -31,6 +31,7 @@ import {
 	streaming,
 	thinkingElapsed,
 	settingsOpen,
+	commandsOpen,
 	statusOpen,
 	modelOpen,
 	agentsOpen,
@@ -96,6 +97,7 @@ const COMPONENT_ROW_LANGS = new Set([
 	'grouprow',
 	'thought',
 	'taskrow',
+	'commandrow',
 ]);
 /**
  * Expanded per-call entries of every multi-call compact block, keyed by block
@@ -382,13 +384,21 @@ export function History(props: {height?: number}) {
 	useKeyboard(event => {
 		if (
 			settingsOpen() ||
+			commandsOpen() ||
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
 			detailsOpen() ||
 			resumeOpen()
-		)
+		) {
+			// FOOLPROOF MODAL ISOLATION: global key listeners run BEFORE the
+			// renderable handlers (the history scrollbox's native arrow-key
+			// scrolling). preventDefault stops the key from reaching the
+			// scrollbox, so arrow keys used to navigate a modal NEVER scroll
+			// the chat behind it.
+			event.preventDefault();
 			return false;
+		}
 		if (event.name === 'pageup') {
 			scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
 			return true;
@@ -796,6 +806,7 @@ export function History(props: {height?: number}) {
 	const handleMouseDown = (event: MouseEvent) => {
 		if (
 			settingsOpen() ||
+			commandsOpen() ||
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||

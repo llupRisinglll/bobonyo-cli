@@ -91,6 +91,7 @@ import {
 	SettingsListModal,
 	type SettingsListRow,
 } from './components/settings-list-modal';
+import {CommandsModal} from './components/commands-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
@@ -139,6 +140,8 @@ import {
 	context,
 	contextPercent,
 	completionMessage,
+	commandsOpen,
+	setCommandsOpen,
 	deepSeekBalance,
 	diagnosticsCount,
 	discoveredModels,
@@ -845,6 +848,7 @@ export function App() {
 		// GAP-19: the interactive settings panel owns the keys while open.
 		if (
 			settingsOpen() ||
+			commandsOpen() ||
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
@@ -853,6 +857,10 @@ export function App() {
 		) {
 			// All modal keys (tabs/rows/search/Enter/Esc) are owned by the
 			// modal's own useKeyboard, nothing may leak to the app outside.
+			// preventDefault also stops the history scrollbox's native
+			// arrow-key scrolling (global listeners run before renderable
+			// handlers).
+			event.preventDefault();
 			return;
 		}
 		if (event.name === 'escape') {
@@ -2550,22 +2558,7 @@ export function App() {
 	// a command inserts it into the input box and closes the modal (parity:
 	// the reference command palette) instead of printing to the transcript.
 	const commandsList = () => {
-		const rows: SettingsListRow[] = [
-			...Object.keys(COMMAND_DESCRIPTIONS)
-				.filter(name => name !== 'quit')
-				.sort()
-				.map(name => ({
-					label: `/${name}`,
-					value: COMMAND_DESCRIPTIONS[name],
-					insert: `/${name} `,
-				})),
-			...loadCustomCommands().map(command => ({
-				label: `/${command.name}`,
-				value: command.description,
-				insert: `/${command.name} `,
-			})),
-		];
-		openSettingsList('Commands', rows);
+		setCommandsOpen(true);
 	};
 	// `/help` opens the same command catalog instead of printing into the
 	// conversation transcript.
@@ -3243,6 +3236,16 @@ export function App() {
 				/>
 			</Show>
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
+			{/* `/commands` / `/help`: grouped 2-column catalog modal. */}
+			<Show when={commandsOpen()}>
+				<CommandsModal
+					onInsert={(text) => {
+						setCommandsOpen(false);
+						setInput(text);
+					}}
+					onClose={() => setCommandsOpen(false)}
+				/>
+			</Show>
 			<Show when={resumeOpen()}>
 				<ResumeModal
 					cwd={process.cwd()}

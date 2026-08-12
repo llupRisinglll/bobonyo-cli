@@ -4,6 +4,7 @@ import type {Colors} from './theme';
 import {
 	tokenizeAgentRow,
 	tokenizeBashRow,
+	tokenizeCommandRow,
 	tokenizeDiffRow,
 	tokenizeFileDiff,
 	tokenizeFileRow,
@@ -100,6 +101,9 @@ export function liveRowSegments(
 				break;
 			case 'thought':
 				chunks = tokenizeThought(trimmed, status, colors);
+				break;
+			case 'commandrow':
+				chunks = tokenizeCommandRow(trimmed, status, colors);
 				break;
 			case 'filerow':
 				chunks = tokenizeFileRow(

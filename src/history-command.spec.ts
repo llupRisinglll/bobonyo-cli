@@ -1,8 +1,25 @@
 import {describe, expect, test} from 'bun:test';
+import type {TextChunk} from '@opentui/core';
 import {renderCommandBlock, renderUserBlock} from './components/history';
 import type {ChatMessage} from './state';
+import {tokenizeCommandRow} from './row-highlight';
+import {colors} from './theme';
 
 const longBody = Array.from({length: 25}, (_, i) => `line ${i + 1}`).join('\n');
+
+function rgb(chunk: TextChunk | undefined): string {
+	const fg = chunk?.fg as {r: number; g: number; b: number} | undefined;
+	return fg
+		? `rgb(${Math.round(fg.r * 255)},${Math.round(fg.g * 255)},${Math.round(fg.b * 255)})`
+		: '';
+}
+
+function themeRgb(hex: string): string {
+	return `rgb(${parseInt(hex.slice(1, 3), 16)},${parseInt(
+		hex.slice(3, 5),
+		16,
+	)},${parseInt(hex.slice(5, 7), 16)})`;
+}
 
 describe('renderCommandBlock (triggered command rows)', () => {
 	test('caps the body preview at 10 lines with a +N more lines footer', () => {
@@ -57,5 +74,38 @@ describe('renderUserBlock (multi-line user messages)', () => {
 		expect(text).toContain('❯ hello world');
 		expect(text).toContain('second line');
 		expect(text).not.toMatch(/more lines/);
+	});
+});
+
+describe('tokenizeCommandRow (header colors)', () => {
+	test('Triggered a + (name) are WHITE, Command is primary bold', () => {
+		const chunks = tokenizeCommandRow(
+			'✦ Triggered a Command(worktree)\n  └   body',
+			'done',
+			colors(),
+		);
+		const joined = chunks.map(c => c.text).join('');
+		expect(joined).toContain('Triggered a Command(worktree)');
+		const triggered = chunks.find(c => c.text === 'Triggered a ');
+		const command = chunks.find(c => c.text === 'Command');
+		const paren = chunks.find(c => c.text === '(worktree)');
+		expect(rgb(triggered)).toBe(themeRgb(colors().text));
+		expect(rgb(command)).toBe(themeRgb(colors().primary));
+		expect(rgb(paren)).toBe(themeRgb(colors().text));
+	});
+
+	test('glyph-less header (live row strips the glyph) still matches', () => {
+		// liveRowSegments strips the leading ✦ before tokenizing, so the
+		// header arrives WITHOUT the glyph — the regex must be optional.
+		const chunks = tokenizeCommandRow(
+			'Triggered a Command(worktree)\n  └   body',
+			'done',
+			colors(),
+		);
+		const command = chunks.find(c => c.text === 'Command');
+		const triggered = chunks.find(c => c.text === 'Triggered a ');
+		expect(command).toBeDefined();
+		expect(rgb(command)).toBe(themeRgb(colors().primary));
+		expect(rgb(triggered)).toBe(themeRgb(colors().text));
 	});
 });

@@ -217,6 +217,8 @@ export function thinkingSeconds(startedAt: number, now: number): number {
 export const [hoverRow, setHoverRow] = createSignal(-1);
 /** GAP-19: interactive settings panel state (open / tab / selected row). */
 export const [settingsOpen, setSettingsOpen] = createSignal(false);
+/** `/commands` / `/help` catalog modal (2-column, grouped). */
+export const [commandsOpen, setCommandsOpen] = createSignal(false);
 /** `/status` opens as a modal (parity: settings modal surface). */
 export const [statusOpen, setStatusOpen] = createSignal(false);
 /** `/model` opens as a modal (parity: nanocoder's model selector). */

@@ -79,7 +79,7 @@ export function SettingsListModal(props: {
 	// (header 1 + search 1 + gaps 2 + footer 1 + padding 2 ≈ 7 rows of
 	// chrome), capped so the card never overflows the screen.
 	const listVisible = () =>
-		Math.max(3, Math.min(30, dims().height - 9));
+		Math.max(3, Math.min(60, dims().height - 9));
 	const cardHeight = () => Math.min(listVisible() + 7, dims().height - 2);
 	const descWidth = () => Math.max(20, cardWidth() - 8);
 	// VERTICALLY CENTERED: (screen height − card height) / 2, never off-screen.

@@ -34,6 +34,7 @@ import {
 	setPendingQueue,
 	setExitConfirm,
 	settingsOpen,
+	commandsOpen,
 	statusOpen,
 	modelOpen,
 	agentsOpen,
@@ -472,13 +473,16 @@ export function InputBox(props: {
 		// keystrokes, so prompts/approvals are handled above this gate).
 		if (
 			settingsOpen() ||
+			commandsOpen() ||
 			statusOpen() ||
 			modelOpen() ||
 			agentsOpen() ||
 			detailsOpen() ||
 			resumeOpen()
-		)
+		) {
+			event.preventDefault();
 			return;
+		}
 		// A6: Shift+Enter / Ctrl+J / a literal LF insert a newline AT THE
 		// CURSOR, handled BEFORE the suggestion popups so a popup never
 		// swallows the key (plain Enter still selects/completes/submits).

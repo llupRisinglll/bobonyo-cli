@@ -230,14 +230,19 @@ export function tokenizeCommandRow(
 	return emitLines(lines, (line, _index, isHeader) => {
 		if (isHeader) {
 			const m = line.match(
-				/^([✦⚙]\s*)(.*?\s)(Command|Skill)(\s*\(.*)$/,
+				/^([✦⚙]\s*)?(.*?\s)(Command|Skill)(\s*\(.*)$/,
 			);
 			if (m) {
 				return [
-					chunk(m[1] ?? '', glyphColor(status, palette)),
-					chunk(m[2] ?? '', palette.fg.secondary),
+					...(m[1]
+						? [chunk(m[1], glyphColor(status, palette))]
+						: []),
+					// `Triggered a ` and `(name)` are WHITE (default text),
+					// only the word Command/Skill is primary (parity: the
+					// tool-name convention where Ran/details stay white).
+					chunk(m[2] ?? '', defaultFg),
 					chunk(m[3] ?? '', palette.fg.primary, bold()),
-					chunk(m[4] ?? '', palette.fg.secondary),
+					chunk(m[4] ?? '', defaultFg),
 				];
 			}
 			return headerChunks(line, status, palette, defaultFg);
