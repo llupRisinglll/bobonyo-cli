@@ -42,7 +42,13 @@ export interface ChatMessage {
 	 * injected body as a plain user message (parity: nanocoder's
 	 * `[Executing custom command: …]` marker + UserMessage collapse).
 	 */
-	command?: {kind: 'command' | 'skill'; name: string; body: string};
+	command?: {
+		kind: 'command' | 'skill';
+		name: string;
+		/** The command as the user TYPED it (e.g. `/worktree purpose: x`). */
+		original?: string;
+		body: string;
+	};
 }
 
 // Messages only ever APPEND (rows mount once with their final content). The

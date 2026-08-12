@@ -983,6 +983,10 @@ export function App() {
 		void submit(prompt, undefined, {
 			kind: 'command',
 			name: command.name,
+			// The ORIGINAL typed command (e.g. `/worktree purpose: hello
+			// world`) is what the transcript shows as the user row; the body
+			// above is what the provider actually sees.
+			original: args ? `/${command.name} ${args}` : `/${command.name}`,
 			body: prompt,
 		});
 	};
@@ -1396,7 +1400,12 @@ export function App() {
 	const submit = async (
 		value: string,
 		attachments?: Record<string, string>,
-		command?: {kind: 'command' | 'skill'; name: string; body: string},
+		command?: {
+			kind: 'command' | 'skill';
+			name: string;
+			original?: string;
+			body: string;
+		},
 	) => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
@@ -1550,9 +1559,16 @@ export function App() {
 			return;
 		}
 
-		// The transcript shows the ORIGINAL user text; the provider sees the
-		// prompt with vision-description blocks substituted for [Image #N].
-		await runTurn(value, prompt, attachments, command);
+		// The transcript shows the ORIGINAL user text (for a triggered
+		// command that is the typed `/command args`, NOT the injected body);
+		// the provider sees the prompt with vision-description blocks
+		// substituted for [Image #N].
+		await runTurn(
+			command?.original ?? value,
+			prompt,
+			attachments,
+			command,
+		);
 		processQueue();
 	};
 
@@ -1560,7 +1576,12 @@ export function App() {
 		value: string,
 		providerValue: string = value,
 		attachments?: Record<string, string>,
-		command?: {kind: 'command' | 'skill'; name: string; body: string},
+		command?: {
+			kind: 'command' | 'skill';
+			name: string;
+			original?: string;
+			body: string;
+		},
 	) => {
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
@@ -1631,10 +1652,11 @@ export function App() {
 				];
 				appendMessage({
 					role: 'user',
-					content: `/${command.name} (auto-triggered)`,
+					content: `${value} (auto-triggered /${command.name})`,
 					command: {
 						kind: 'command',
 						name: command.name,
+						original: `${value} (auto-triggered /${command.name})`,
 						body: command.body.trim(),
 					},
 				});
@@ -1653,10 +1675,11 @@ export function App() {
 				history = [...history, {role: 'user', content: skill.body.trim()}];
 				appendMessage({
 					role: 'user',
-					content: `/skill:${skill.name} (auto-triggered)`,
+					content: `${value} (auto-triggered skill:${skill.name})`,
 					command: {
 						kind: 'skill',
 						name: skill.name,
+						original: `${value} (auto-triggered skill:${skill.name})`,
 						body: skill.body.trim(),
 					},
 				});

@@ -480,12 +480,23 @@ export function History(props: {height?: number}) {
 		for (let i = 0; i < all.length; i++) {
 			const message = all[i]!;
 			if (message.role === 'user') {
-				// Triggered commands/skills render as TOOL-STYLE blocks
+				// Triggered commands/skills render TWO rows: the ORIGINAL
+				// typed command as a normal user message (`/worktree purpose:
+				// hello world`), then the tool-style block
 				// (`✦ Triggered a Command(name)` + body preview + `+N more
-				// lines`) instead of echoing the injected body as a plain
-				// multi-line user message.
+				// lines`) so the user sees what they typed AND what was
+				// injected.
 				if (message.command) {
 					const key = `command-${i}`;
+					if (message.command.original) {
+						pushBlock(
+							fence(
+								'usermsg',
+								'done',
+								`❯ ${message.command.original}`,
+							),
+						);
+					}
 					const rendered = renderCommandBlock(message.command, key);
 					pushBlock(rendered.text, rendered.blockKey);
 					continue;
