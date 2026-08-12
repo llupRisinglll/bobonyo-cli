@@ -82,7 +82,7 @@ export function renderBarChart(
 			`${'█'.repeat(bars).padEnd(barWidth)} ${point.value}`
 		);
 	});
-	return `✦ ${title}\n${rows.join('\n')}\nscale: 0 … ${max}`;
+	return `${title}\n${rows.join('\n')}\nscale: 0 … ${max}`;
 }
 
 /**
@@ -116,7 +116,7 @@ export function renderLineChart(
 		.map(point => point.label.slice(0, Math.max(3, Math.floor(40 / points.length))))
 		.map(label => label.padEnd(40 / points.length))
 		.join('');
-	return `✦ ${title}\n${lines}\n       └ ${labels}`;
+	return `${title}\n${lines}\n       └ ${labels}`;
 }
 
 /**
@@ -154,7 +154,7 @@ export function renderTable(
 	const rows = records.map(record =>
 		columns.map((column, index) => (record[column] ?? '').padEnd(widths[index]!)).join(' | '),
 	);
-	return `✦ ${title}\n${header}\n${separator}\n${rows.join('\n')}`;
+	return `${title}\n${header}\n${separator}\n${rows.join('\n')}`;
 }
 
 /**

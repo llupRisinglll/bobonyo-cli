@@ -57,7 +57,7 @@ describe('renderBarChart', () => {
 			],
 			'Tool calls',
 		);
-		expect(chart).toContain('✦ Tool calls');
+		expect(chart).toContain('Tool calls');
 		expect(chart).toContain('bash');
 		expect(chart).toContain('10');
 		expect(chart).toContain('scale: 0 … 10');
@@ -74,7 +74,7 @@ describe('renderLineChart', () => {
 			[1, 2, 3, 2, 4].map((value, index) => ({label: `t${index}`, value})),
 			'Progress',
 		);
-		expect(chart).toContain('✦ Progress');
+		expect(chart).toContain('Progress');
 		expect(chart.split('\n').length).toBeGreaterThanOrEqual(7);
 		expect(chart).toContain('t0');
 		expect(chart).toContain('●');
@@ -90,7 +90,7 @@ describe('renderTable', () => {
 			],
 			'Background tasks',
 		);
-		expect(table).toContain('✦ Background tasks');
+		expect(table).toContain('Background tasks');
 		expect(table).toContain('bg_1');
 		expect(table).toContain('running');
 		expect(table).toContain('exit 0');
@@ -99,10 +99,10 @@ describe('renderTable', () => {
 
 describe('renderVisualization dispatcher', () => {
 	test('kind bar/line/table route correctly', () => {
-		expect(renderVisualization('bar', [1, 2], 'A')).toContain('✦ A');
-		expect(renderVisualization('line', [1, 2, 3], 'B')).toContain('✦ B');
+		expect(renderVisualization('bar', [1, 2], 'A')).toContain('A');
+		expect(renderVisualization('line', [1, 2, 3], 'B')).toContain('B');
 		expect(
 			renderVisualization('table', [{k: 'v'}], 'C'),
-		).toContain('✦ C');
+		).toContain('C');
 	});
 });

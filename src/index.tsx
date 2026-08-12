@@ -146,9 +146,18 @@ if (PREVIEW_TUI) {
 	// log into the running node executable, writeFileSync throws ETXTBSY,
 	// the request handler dies and every provider call hangs.
 	const mockLog = '/tmp/bobonyo-mock-requests.jsonl';
+	// Custom rules file: the mock server's `--rules` REPLACES its built-in
+	// defaults, so the file mirrors the nanocoder default scenarios PLUS the
+	// rewrite's visualization scenarios (/mock:visualize*, /mock:e2e).
+	const mockRules = join(
+		import.meta.dir,
+		'..',
+		'tools',
+		'mock-provider-rules.json',
+	);
 	const mock = spawn(
 		'node',
-		[mockServer, '--port', '4123', '--log', mockLog],
+		[mockServer, '--port', '4123', '--rules', mockRules, '--log', mockLog],
 		{
 		stdio: 'ignore',
 		},

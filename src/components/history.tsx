@@ -1321,7 +1321,15 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 		// File-write tools and AGENTS keep their own rows (nanocoder:
 		// subagents render one compact entry per delegated agent, never a
 		// single `×N` tally).
-		if (isFileWriteTool(name) || name === 'agent') {
+		// File-write tools, AGENTS and VISUALIZATIONS keep their own rows:
+		// a chart/table must render as-is (compacting two `visualize` calls
+		// would bury the chart behind a `+N lines` footer).
+		if (
+			isFileWriteTool(name) ||
+			name === 'agent' ||
+			name === 'visualize' ||
+			name === 'list_background_tasks'
+		) {
 			blocks.push([message]);
 			continue;
 		}
@@ -1333,7 +1341,9 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 			last &&
 			lastFamily === family &&
 			!isFileWriteTool(last[0]?.tool?.name ?? '') &&
-			last[0]?.tool?.name !== 'agent'
+			last[0]?.tool?.name !== 'agent' &&
+			last[0]?.tool?.name !== 'visualize' &&
+			last[0]?.tool?.name !== 'list_background_tasks'
 		) {
 			last.push(message);
 		} else {
