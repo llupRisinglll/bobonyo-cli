@@ -108,17 +108,15 @@ export async function runBash(
 				.split('\n')
 				.map(line => line.trimEnd())
 				.filter(line => line !== '');
-			const scriptBlock = scriptLines
-				.map(line => `  └ ${line}`)
-				.join('\n');
 			appendMessage({
 				role: 'assistant',
-				// C8: expandable completion row, the script preview collapses
-				// to the first lines with a `+N lines (ctrl + t …)` footer;
-				// history.tsx expands it with the same toggle as tool rows.
+				// Tool-style completion row (parity: nanocoder's
+				// BackgroundTaskCompleted): `✦ Background task completed ·
+				// exit N` header, the script under a `  └   ` container with
+				// the SAME wrap/expand +N footer the tool rows use.
 				content:
 					`Background task completed · exit ${task.exitCode ?? '?'}\n` +
-					scriptBlock,
+					scriptLines.join('\n'),
 				kind: 'info',
 			});
 		}).catch(() => {});

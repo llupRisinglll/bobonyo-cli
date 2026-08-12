@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import type {TextChunk} from '@opentui/core';
 import {renderCommandBlock, renderUserBlock} from './components/history';
+import {renderInfoRow} from './components/history';
 import type {ChatMessage} from './state';
 import {tokenizeCommandRow} from './row-highlight';
 import {colors} from './theme';
@@ -107,5 +108,32 @@ describe('tokenizeCommandRow (header colors)', () => {
 		expect(command).toBeDefined();
 		expect(rgb(command)).toBe(themeRgb(colors().primary));
 		expect(rgb(triggered)).toBe(themeRgb(colors().text));
+	});
+});
+
+describe('renderInfoRow (background task completion)', () => {
+	test('renders a tool-style row with the └ container and +N footer', () => {
+		const text = renderInfoRow(
+			'Background task completed · exit 0\n' +
+				'cd /mnt/data/KSProjects/Hilinga && ./worktree-create.sh hello-wo',
+			'info-0',
+		);
+		expect(text).toContain('✦ Background task completed · exit 0');
+		expect(text).toContain('  └   cd /mnt/data/KSProjects/Hilinga');
+		expect(text).toContain('worktree-create.sh hello-wo');
+	});
+
+	test('long scripts hard-wrap inside the container', () => {
+		const long = 'x'.repeat(200);
+		const text = renderInfoRow(
+			`Background task completed · exit 1\n${long}`,
+			'info-1',
+		);
+		const lines = text.split('\n');
+		// Fence opener + blank + header, then the wrapped body lines.
+		const body = lines.slice(3, lines.length - 1);
+		expect(body.length).toBeGreaterThan(2);
+		expect(body[0]!.startsWith('  └   ')).toBe(true);
+		for (const line of body.slice(1)) expect(line.startsWith('      ')).toBe(true);
 	});
 });

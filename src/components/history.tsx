@@ -811,9 +811,25 @@ export function History(props: {height?: number}) {
 	};
 
 	/**
-	 * Mouse click-to-toggle (parity: nanocoder C16, every expandable toggles
-	 * both ways).
+	 * Mouse click-to-toggle with a DRAG GUARD (parity: nanocoder C16, every
+	 * expandable toggles both ways). The modal/expand only fires on MOUSE-UP
+	 * after a short delay — a fast click still opens instantly, but a
+	 * DRAG (text selection) cancels it, so selecting text never pops the
+	 * details modal.
 	 */
+	let clickStartX = 0;
+	let clickStartY = 0;
+	let clickTimer: ReturnType<typeof setTimeout> | null = null;
+	let clickRange: {key: string; start: number; end: number} | null = null;
+
+	const cancelPendingClick = () => {
+		if (clickTimer) {
+			clearTimeout(clickTimer);
+			clickTimer = null;
+		}
+		clickRange = null;
+	};
+
 	const handleMouseDown = (event: MouseEvent) => {
 		if (
 			settingsOpen() ||
@@ -836,6 +852,30 @@ export function History(props: {height?: number}) {
 			.map(r => blockRanges.find(candidate => r >= candidate.start && r <= candidate.end))
 			.find(candidate => candidate && candidate.key !== 'live');
 		if (range) {
+			// Record the press and WAIT for mouse-up (with a delay) before
+			// opening/toggling: if the pointer moves (drag/selection), the
+			// pending click is cancelled.
+			clickStartX = event.x ?? 0;
+			clickStartY = event.y ?? 0;
+			clickRange = range;
+			if (clickTimer) clearTimeout(clickTimer);
+			clickTimer = setTimeout(() => {
+				clickTimer = null;
+				clickRange = null;
+			}, 500);
+		}
+	};
+
+	/** Fires the pending click ONLY if it was a click, not a drag. */
+	const handleMouseUp = (event: MouseEvent) => {
+		if (!clickRange) return;
+		const moved =
+			Math.abs((event.x ?? 0) - clickStartX) > 3 ||
+			Math.abs((event.y ?? 0) - clickStartY) > 3;
+		const range = clickRange;
+		cancelPendingClick();
+		if (moved) return;
+		{
 			// Compact tallies open the DETAILS MODAL (scrollable per-call
 			// entries) instead of toggling in place, so a reader never has to
 			// parse the whole expanded block inline. Clear the hover state so
@@ -862,6 +902,16 @@ export function History(props: {height?: number}) {
 
 	// C13: hover, highlight the row under the cursor (moves + ▸ marker).
 	const handleMouseMove = (event: MouseEvent) => {
+		// DRAG GUARD: any pointer movement beyond a tiny threshold while a
+		// click is pending means the user is dragging/selecting — cancel the
+		// pending click so the modal never opens mid-drag.
+		if (
+			clickTimer &&
+			(Math.abs((event.x ?? 0) - clickStartX) > 3 ||
+				Math.abs((event.y ?? 0) - clickStartY) > 3)
+		) {
+			cancelPendingClick();
+		}
 		if (
 			settingsOpen() ||
 			statusOpen() ||
@@ -925,6 +975,7 @@ export function History(props: {height?: number}) {
 			stickyStart="bottom"
 			{...({
 				onMouseDown: handleMouseDown,
+				onMouseUp: handleMouseUp,
 				onMouseMove: handleMouseMove,
 				onMouseOut: handleMouseOut,
 			} as any)}
@@ -1171,8 +1222,11 @@ function settledThought(
  * transcript)` footer; expanded (Ctrl+O / footer click) they show the full
  * script. Every other info row renders verbatim.
  */
-function renderInfoRow(content: string, key: string): string {
-	if (!content.startsWith('Background task completed') && !content.startsWith('Session:   ')) {
+export function renderInfoRow(content: string, key: string): string {
+	if (content.startsWith('Background task completed')) {
+		return renderBackgroundTaskRow(content, key);
+	}
+	if (!content.startsWith('Session:   ')) {
 		return content;
 	}
 	// `/status` block (codex-like): render through a custom fenced row so the
@@ -1193,6 +1247,65 @@ function renderInfoRow(content: string, key: string): string {
 		`${header}\n${preview}\n` +
 		`  … +${script.length - 2} more lines`
 	);
+}
+
+/**
+ * Background task completion, tool-row format (parity: nanocoder's
+ * BackgroundTaskCompleted component): `✦ Background task completed · exit N`
+ * header, the script under a `  └   ` container (pre-wrapped so long
+ * commands can never escape the indent), and a `… +N more lines` footer when
+ * collapsed. Ctrl+O / click expands the full script.
+ */
+function renderBackgroundTaskRow(content: string, key: string): string {
+	const lines = content.replace(/\n+$/, '').split('\n');
+	const header = lines[0] ?? 'Background task completed';
+	const script = lines.slice(1);
+	const wrapWidth = 84;
+	const wrapped: string[] = [];
+	for (const line of script) {
+		for (const piece of wordWrapForBackground(line, wrapWidth)) {
+			wrapped.push(piece);
+		}
+	}
+	const expanded = expandedBlocks()[key] ?? toolsExpanded();
+	const visible = expanded ? wrapped : wrapped.slice(0, 3);
+	const hidden = wrapped.length - visible.length;
+	const body = visible
+		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
+		.join('\n');
+	const footer = hidden > 0 ? `\n     … +${hidden} more lines` : '';
+	// The header keeps the tool-row language so the tokenizer colors the
+	// glyph green + the name white (only the tool name is primary).
+	return fence('toolrow', 'done', `✦ ${header}\n${body}${footer}`);
+}
+
+/** Word wrap with hard-split for long words (URLs/paths/log lines). */
+function wordWrapForBackground(text: string, width: number): string[] {
+	const words = text.split(/\s+/).filter(Boolean);
+	const lines: string[] = [];
+	let current = '';
+	for (const word of words) {
+		if (word.length > width) {
+			if (current) {
+				lines.push(current);
+				current = '';
+			}
+			for (let i = 0; i < word.length; i += width) {
+				lines.push(word.slice(i, i + width));
+			}
+			continue;
+		}
+		if (!current) {
+			current = word;
+		} else if (current.length + 1 + word.length <= width) {
+			current += ` ${word}`;
+		} else {
+			lines.push(current);
+			current = word;
+		}
+	}
+	if (current) lines.push(current);
+	return lines;
 }
 
 /**
