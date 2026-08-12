@@ -141,14 +141,11 @@ export function recordProviderUsage(
 	return updated;
 }
 
-/** `1.24M` / `482K` / `9` — compact human-readable token totals. */
+import {formatCount} from './format';
+
+/** `1.24M` / `482K` / `7.9K` / `9` — compact human-readable token totals. */
 export function formatTokens(total: number): string {
-	if (total >= 1_000_000) {
-		const value = total / 1_000_000;
-		return `${value >= 10 ? value.toFixed(0) : value.toFixed(2)}M`;
-	}
-	if (total >= 1_000) return `${(total / 1_000).toFixed(0)}K`;
-	return String(total);
+	return formatCount(total);
 }
 
 /**

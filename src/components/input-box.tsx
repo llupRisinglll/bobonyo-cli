@@ -18,10 +18,12 @@ import {
 	busy,
 	cancelling,
 	completionMessage,
+	completionTone,
 	context,
 	contextPercent,
 	exitConfirm,
 	gearGlyph,
+	hideThinking,
 	historyIndex,
 	input,
 	mode,
@@ -44,6 +46,7 @@ import {
 	spinnerFrame,
 	SPINNER_FRAMES,
 	streaming,
+	thinkingActive,
 	turnElapsed,
 	workingDots,
 	loadingDots,
@@ -59,6 +62,14 @@ import {
 import {CHALK_GREY, colors} from '../theme';
 import {loadSettings, saveSettings} from '../settings';
 import {activeRowPalette} from '../row-highlight';
+
+/**
+ * Hide-thinking indicator label: "Thinking…" ONLY while the model is in the
+ * reasoning phase (reply text rendering ⇒ Working again). Pure, unit-tested.
+ */
+export function workingLabel(hideThinking: boolean, thinking: boolean): string {
+	return hideThinking && thinking ? 'Thinking' : 'Working';
+}
 
 /**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
@@ -789,7 +800,9 @@ export function InputBox(props: {
 								: colors().primary
 						}
 					>
-						{gearGlyph(spinnerFrame())} Working{workingDots(spinnerFrame())} ·{' '}
+						{gearGlyph(spinnerFrame())}{' '}
+						{workingLabel(hideThinking(), thinkingActive())}
+						{workingDots(spinnerFrame())} ·{' '}
 						({formatElapsed(turnElapsed())})
 						{retryingAttempt() > 0
 							? ` · retrying (${retryingAttempt()})`
@@ -833,8 +846,20 @@ export function InputBox(props: {
 			{/* Static completion line above the input (parity: the Working
 			    indicator slot, diamond glyph + secondary). */}
 			<Show when={completionMessage()}>
+				<Show when={completionTone() === 'success'}>
+					{/* Resume notice: a breakline separates it from the chat. */}
+					<box height={1} />
+				</Show>
 				<box height={1}>
-					<text fg={colors().secondary}>{completionMessage()}</text>
+					<text
+						fg={
+							completionTone() === 'success'
+								? colors().success
+								: colors().secondary
+						}
+					>
+						{completionMessage()}
+					</text>
 				</box>
 			</Show>
 			{/* modal-style exit confirmation: the first Ctrl+C/Esc with an

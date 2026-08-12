@@ -24,6 +24,7 @@ import {
 	resolveProvider,
 	saveConfig,
 	savePreferences,
+	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
 import {
@@ -41,6 +42,7 @@ import {
 	listTools,
 	registerTool,
 	requiresApproval,
+	toolCatalog,
 	toolDisplayDetail,
 	toolAvailability,
 	toolArgsSummary,
@@ -66,6 +68,7 @@ import {connectMCPServer, loadMCPConfig, type MCPTool} from './mcp';
 import {
 	deleteSession,
 	firstMessagePreview,
+	healResumedContext,
 	listCheckpoints,
 	loadCheckpoint,
 	listSessions,
@@ -152,6 +155,7 @@ import {
 	maxMessages,
 	messages,
 	mode,
+	modelWindows,
 	pendingQueue,
 	pendingApproval,
 	pendingPrompt,
@@ -169,12 +173,17 @@ import {
 	setCompletionMessage,
 	setDeepSeekBalance,
 	setDiscoveredModels,
+	setModelWindows,
+	setCompletionTone,
+	setHideThinking,
+	setCavemanMode,
 	setStartupLoading,
 	setMcpServers,
 	setDiagnosticsCount,
 	setExitConfirm,
 	setHistoryIndex,
 	setInput,
+	setThinkingActive,
 	setLastUsage,
 	setLiveOutputs,
 	setMaxMessages,
@@ -278,6 +287,8 @@ export function App() {
 		title: string;
 		rows: SettingsListRow[];
 	} | null>(null);
+	/** Measured rendered height of the chat history (banner + transcript). */
+	const [historyContentHeight, setHistoryContentHeight] = createSignal(0);
 	/** Open the settings LIST modal (also opens the settings surface). */
 	const openSettingsList = (title: string, rows: SettingsListRow[]) => {
 		setSettingsList({title, rows});
@@ -294,6 +305,7 @@ export function App() {
 	// stream mid-turn (parity: clear starts a NEW conversation).
 	let abortRef: AbortController | null = null;
 	let exitConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+	let resumeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 	let currentSession: SessionData | null = null;
 	let interruptedRef = false;
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
@@ -385,6 +397,10 @@ export function App() {
 					alwaysAllow: provider.alwaysAllow,
 				});
 				savePreferences({lastProvider: provider.id, lastModel: preferredModel});
+				// Per-model context windows for the modal (models.dev, cached):
+				// resolve the seeded catalog NOW, then again when the live
+				// discovery lands with the real ids.
+				void refreshModelWindows(provider, catalog);
 				// Seed the monthly usage indicator from the DISK ledger so
 				// the status line shows `used N.NM` immediately on a warm
 				// ledger (even before the first turn of this session).
@@ -394,7 +410,11 @@ export function App() {
 				// E6: no declared context window → resolve from models.dev
 				// (cached, async; the ctx% indicator updates when it lands).
 				if (!provider.contextWindow) {
-					void resolveContextWindow(preferredModel).then(window => {
+					void resolveContextWindow(
+						preferredModel,
+						undefined,
+						provider.id,
+					).then(window => {
 						if (window && window > 0) {
 							setActiveEndpoint(prev => ({...prev, contextWindow: window}));
 						}
@@ -404,6 +424,7 @@ export function App() {
 					void discoverModels(provider).then(models => {
 						if (models.length > 0) {
 							setActiveEndpoint(prev => ({...prev, models}));
+							void refreshModelWindows(provider, models);
 						}
 					});
 				}
@@ -426,6 +447,7 @@ export function App() {
 						if (models.length > 0) {
 							setDiscoveredModels(prev => ({...prev, [provider.id]: models}));
 							setActiveEndpoint(prev => ({...prev, models}));
+							void refreshModelWindows(provider, models);
 						}
 					});
 				}
@@ -462,6 +484,8 @@ export function App() {
 		}
 		setTitleShape(settings.titleShape ?? 'powerline-angled');
 		setStatusLineEnabled(settings.statusLine !== false);
+		setHideThinking(settings.hideThinking === true);
+		setCavemanMode(settings.cavemanMode === true);
 		autoCompactRef.enabled = settings.autoCompact.enabled;
 		autoCompactRef.threshold = settings.autoCompact.threshold;
 		watchdogMsRef = settings.watchdogMs ?? 0;
@@ -666,12 +690,27 @@ export function App() {
 				return;
 			}
 			setMessages(resumed.messages);
-			setContext(resumed.context);
+			// Heal pre-fix sessions whose provider context lagged the
+			// transcript (interrupted turns never committed their user
+			// messages) — otherwise a resumed conversation looks empty to
+			// the model even though the transcript shows everything.
+			setContext(healResumedContext(resumed.context, resumed.messages));
 			setSessionId(resumed.id);
 			setSessionName(resumed.name);
 			setUsageHistory([]);
 			currentSession = {...resumed};
-			appendInfo(`Resumed session ${resumed.id} (${resumed.name}).`);
+			// Temporary success-green notice above the input (parity: the
+			// completion line) — cleared on the next prompt and after a few
+			// seconds, never a persistent history row.
+			if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+			setCompletionTone('success');
+			setCompletionMessage(
+				`✔ Resumed session ${resumed.id} (${resumed.name}).`,
+			);
+			resumeNoticeTimer = setTimeout(() => {
+				setCompletionMessage('');
+				setCompletionTone('default');
+			}, 6000);
 			return;
 		}
 		const id = newSessionId();
@@ -1219,9 +1258,33 @@ export function App() {
 				saveSettings({...settings, statusLine: on});
 				return;
 			}
+			case 'hideThinking': {
+				const next = value.trim().toLowerCase();
+				const on = next === 'on' || next === 'true' || next === '1';
+				const off = next === 'off' || next === 'false' || next === '0';
+				if (!on && !off) {
+					appendInfo(`Invalid hide thinking '${value}'. Use on/off.`);
+					return;
+				}
+				setHideThinking(on);
+				saveSettings({...settings, hideThinking: on});
+				return;
+			}
+			case 'cavemanMode': {
+				const next = value.trim().toLowerCase();
+				const on = next === 'on' || next === 'true' || next === '1';
+				const off = next === 'off' || next === 'false' || next === '0';
+				if (!on && !off) {
+					appendInfo(`Invalid caveman mode '${value}'. Use on/off.`);
+					return;
+				}
+				setCavemanMode(on);
+				saveSettings({...settings, cavemanMode: on});
+				return;
+			}
 			default:
 				appendInfo(
-					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine`,
+					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, hideThinking, cavemanMode`,
 				);
 		}
 	};
@@ -1620,6 +1683,7 @@ export function App() {
 		setBusy(true);
 		setStreaming('');
 		setCompletionMessage('');
+		setCompletionTone('default');
 		setReasoning('');
 		setRunning(true);
 		setTurnElapsed(0);
@@ -1751,8 +1815,13 @@ export function App() {
 				let result = await streamChat(
 					history,
 					{
-						onText: delta => setStreaming(prev => prev + delta),
+						onText: delta => {
+							// Reply text streaming ⇒ the thinking phase is over.
+							if (delta) setThinkingActive(false);
+							setStreaming(prev => prev + delta);
+						},
 						onReasoning: delta => {
+							if (delta) setThinkingActive(true);
 							// Anchor the thinking timer on the FIRST reasoning
 							// chunk of this phase (reasoning() is reset at the
 							// end of every round).
@@ -1763,10 +1832,27 @@ export function App() {
 						},
 					},
 					controller.signal,
-					listTools().map(name => ({name})),
+					toolCatalog(),
 					streamGuardRef,
 					toolProfile(),
+					// The primary provider failed and a FALLBACK answered —
+					// surface it, or the user thinks the active model lost
+					// its memory (it was never the one that replied).
+					fallback => {
+						setCompletionTone('default');
+						setCompletionMessage(
+							`⚠ ${fallback.id} answered · ${fallback.model} (primary failed)`,
+						);
+						if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+						resumeNoticeTimer = setTimeout(() => {
+							setCompletionMessage('');
+							setCompletionTone('default');
+						}, 8000);
+					},
 				);
+				// The round's stream ended — if the model only reasoned and
+				// called tools, the tool phase is WORKING, not thinking.
+				setThinkingActive(false);
 
 				// Tool-call recovery (parity: nanocoder's self-correction
 				// loop): when the model emitted tool-call-SHAPED text but no
@@ -1834,9 +1920,9 @@ export function App() {
 						// few seconds like the exit confirmation.
 						setCompletionMessage(
 							`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-								(completionUsage?.total_tokens
-									? ` · ${completionUsage.total_tokens} tokens`
-									: '') +
+							(completionUsage?.total_tokens
+								? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
+								: '') +
 								(cacheLabel ? ` · ${cacheLabel}` : ''),
 						);
 						capturePRs(result.text);
@@ -2176,7 +2262,7 @@ export function App() {
 										toolStats: {
 											durationSec: Math.max(
 												0,
-												Math.round((Date.now() - callStartedAt) / 1000),
+												(Date.now() - callStartedAt) / 1000,
 											),
 											toolCalls: calls.length,
 										},
@@ -2266,8 +2352,9 @@ export function App() {
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
-				// ESC interrupt: commit the partial stream (B20). `/clear`
-				// aborts without the flag and leaves the wiped state.
+				// ESC interrupt: commit the partial stream AND the turn's
+				// history to the provider context (B20). `/clear` aborts
+				// without the flag and leaves the wiped state.
 				if (watchdogRef) {
 					// B5: the within-turn watchdog aborted, surface the
 					// InnerDaemon audit row and commit the partial.
@@ -2275,11 +2362,8 @@ export function App() {
 					const partial = streaming();
 					if (partial.trim()) {
 						appendAssistantMessage(partial);
-						setContext([
-							...context(),
-							{role: 'assistant', content: partial},
-						]);
 					}
+					setContext(interruptedContext(history, partial));
 					appendInfo('Interrupted by watchdog.');
 					appendInfo(
 						formatInnerDaemonRow('watchdog', 'timeout', {
@@ -2304,12 +2388,12 @@ export function App() {
 								Date.now(),
 							),
 						});
-						setContext([
-							...context(),
-							{role: 'assistant', content: partial},
-						]);
 						refreshContextPercent();
 					}
+					// Mid-tool-loop or reasoning-only interrupts stream no
+					// text — the USER MESSAGE still belongs in context, or
+					// the next request loses the turn entirely.
+					setContext(interruptedContext(history, partial));
 					appendError('Interrupted by user.');
 				}
 				return;
@@ -2323,6 +2407,7 @@ export function App() {
 			setBusy(false);
 			setStreaming('');
 			setReasoning('');
+			setThinkingActive(false);
 			thinkingStartedAt = 0;
 			setThinkingElapsed(0);
 			persist();
@@ -2735,11 +2820,11 @@ export function App() {
 					.map(
 						(snapshot, index) =>
 							`  └ call ${index + 1} · ${snapshot.provider}/${snapshot.model}: ` +
-							`prompt ${snapshot.prompt_tokens ?? '?'} · ` +
-							`completion ${snapshot.completion_tokens ?? '?'} · ` +
-							`total ${snapshot.total_tokens ?? '?'}` +
+							`prompt ${snapshot.prompt_tokens != null ? formatTokens(snapshot.prompt_tokens) : '?'} · ` +
+							`completion ${snapshot.completion_tokens != null ? formatTokens(snapshot.completion_tokens) : '?'} · ` +
+							`total ${snapshot.total_tokens != null ? formatTokens(snapshot.total_tokens) : '?'}` +
 							(snapshot.promptCacheHitTokens !== undefined
-								? ` · cache ${snapshot.promptCacheHitTokens}h/${snapshot.promptCacheMissTokens ?? 0}m`
+								? ` · cache ${formatTokens(snapshot.promptCacheHitTokens)}h/${formatTokens(snapshot.promptCacheMissTokens ?? 0)}m`
 								: ''),
 					)
 					.join('\n'),
@@ -2849,7 +2934,39 @@ export function App() {
 			effort: (endpoint.modelEfforts ?? {})[name],
 		});
 		savePreferences({lastProvider: endpoint.id, lastModel: name});
+		loadProviderFeatures(endpoint);
 		showToast(`Model: ${name} · ${endpoint.id}`);
+	};
+
+	/**
+	 * Provider-specific statusline/history features load when the ACTIVE
+	 * provider switches, not only at startup or on /status: DeepSeek balance
+	 * (`Cred:` — TTL-cached + deduped, cheap on re-switch) and the Xiaomi
+	 * MiMo monthly usage ledger (`used N.NM`). Leaving MiMo clears the
+	 * ledger seed so a stale total never lingers.
+	 */
+	const loadProviderFeatures = (provider: {
+		id?: string;
+		name?: string;
+		baseUrl: string;
+		apiKey?: string;
+	}) => {
+		if (isDeepSeek(provider)) {
+			void refreshDeepSeekBalance(provider).then(balance => {
+				if (balance) {
+					setDeepSeekBalance({
+						currency: balance.currency,
+						total: balance.total,
+						isAvailable: balance.isAvailable,
+					});
+				}
+			});
+		}
+		if (isXiaomiMiMo(provider)) {
+			setProviderUsage(currentMonthUsage(provider.baseUrl));
+		} else {
+			setProviderUsage(undefined);
+		}
 	};
 
 	/**
@@ -2865,6 +2982,7 @@ export function App() {
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow,
+			modelContextWindows: modelWindows()[provider.id],
 		}));
 
 	/**
@@ -2882,6 +3000,7 @@ export function App() {
 			void refresh.then(models => {
 				if (models.length > 0) {
 					setDiscoveredModels(prev => ({...prev, [provider.id]: models}));
+					void refreshModelWindows(provider, models);
 				}
 			});
 		}
@@ -2928,7 +3047,10 @@ export function App() {
 			model,
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
-			contextWindow: provider.contextWindow ?? 128_000,
+			contextWindow:
+				modelWindows()[providerId]?.[model] ??
+				provider.contextWindow ??
+				128_000,
 			sdkProvider: provider.sdkProvider,
 			providerOptions: provider.providerOptions,
 			// The modal's ←/→ effort override wins; otherwise the model's
@@ -2938,11 +3060,7 @@ export function App() {
 			alwaysAllow: provider.alwaysAllow,
 		});
 		savePreferences({lastProvider: provider.id, lastModel: model});
-		// The status-line `used` segment follows the ACTIVE provider: seed it
-		// from the MiMo ledger on switch (or clear it when leaving MiMo).
-		setProviderUsage(
-			isXiaomiMiMo(provider) ? currentMonthUsage(provider.baseUrl) : undefined,
-		);
+		loadProviderFeatures(provider);
 		showToast(
 			`Model: ${model}${effort ? ` [${effort}]` : ''} · ${provider.id}`,
 		);
@@ -3003,7 +3121,10 @@ export function App() {
 			model,
 			models: provider.models,
 			modelEfforts: provider.modelEfforts,
-			contextWindow: provider.contextWindow ?? 128_000,
+			contextWindow:
+				modelWindows()[provider.id]?.[model] ??
+				provider.contextWindow ??
+				128_000,
 			sdkProvider: provider.sdkProvider,
 			providerOptions: provider.providerOptions,
 			effort: (provider.modelEfforts ?? {})[model],
@@ -3011,6 +3132,7 @@ export function App() {
 			alwaysAllow: provider.alwaysAllow,
 		});
 		savePreferences({lastProvider: provider.id, lastModel: model});
+		loadProviderFeatures(provider);
 		showToast(`Provider: ${provider.id} · ${model}`);
 	};
 
@@ -3106,21 +3228,29 @@ export function App() {
 	// height at mount and a growing history/panel would push the input box
 	// and status line off the visible pane. The memo re-derives on every
 	// signal read below (terminal resize, busy, settings panel, …).
+	// TERMINAL-LIKE INPUT PLACEMENT: the history is min(measured content,
+	// cap) — on first load the banner is short, so the input sits right
+	// below it; as the conversation grows the input slides down; once the
+	// content reaches the cap the input sticks at the bottom (current
+	// position) and the history scrolls.
 	const historyHeight = createMemo(() =>
-		// The input box and status line stay visible even while a modal is
-		// open (the modal overlays ONLY the history region).
 		Math.max(
 			4,
+			Math.min(
+				historyContentHeight(),
+				// The input box and status line stay visible even while a
+				// modal is open (the modal overlays ONLY the history region).
 				terminalHeight() -
-				inputBoxRows() -
-				2 -
-				(running() ? 1 : 0) -
-				startupLoading().length -
-				(completionMessage() ? 1 : 0) -
-				(exitConfirm() ? 1 : 0) -
-				(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
-				completionPopupHeight(input(), terminalDimensions().width) -
-				mentionPopupHeight(input()),
+					inputBoxRows() -
+					2 -
+					(running() ? 1 : 0) -
+					startupLoading().length -
+					(completionMessage() ? 1 : 0) -
+					(exitConfirm() ? 1 : 0) -
+					(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
+					completionPopupHeight(input(), terminalDimensions().width) -
+					mentionPopupHeight(input()),
+			),
 		),
 	);
 	return (
@@ -3129,7 +3259,10 @@ export function App() {
 		// Parity: root carries one column of padding; the omnicode text color
 		// (#c0caf5) is the default for the whole transcript.
 		<box flexDirection="column" flexGrow={1} flexShrink={1} height="100%" paddingX={1}>
-			<History height={historyHeight()} />
+			<History
+				height={historyHeight()}
+				onContentHeight={setHistoryContentHeight}
+			/>
 			{/* Bottom gap: the last response never sticks to the Working
 			    indicator above the input. */}
 			<box height={1} />
@@ -3140,6 +3273,11 @@ export function App() {
 					void submit(value, attachments)
 				}
 			/>
+			{/* Terminal-like layout: this spacer absorbs the empty rows below
+			    the input while the conversation is short, so the status line
+			    stays pinned at the bottom; it shrinks to zero once the
+			    history fills the cap and the input reaches the bottom. */}
+			<box flexGrow={1} />
 			{/* Status Line setting (on/off) toggles the footer. */}
 			<Show when={statusLineEnabled()}>
 				<Status />
@@ -3157,7 +3295,12 @@ export function App() {
 							onModelSelect={(target) => {
 								setSettingsOpen(false);
 								setFallbackTarget(target === 'main' ? null : target);
-								setModelModalInherit(true);
+								// "Inherit main agent model" only applies to
+								// the capability fallbacks (vision/web-search),
+								// never to the MAIN model picker — `/model`
+								// and the settings Model row open the same
+								// surface, so the inherit row must match.
+								setModelModalInherit(target !== 'main');
 								refreshModelCatalogs();
 								setModelOpen(true);
 							}}
@@ -3400,6 +3543,46 @@ function openUrl(url: string): void {
  * tool-call/result pair (a leading tool result without its assistant call is
  * dropped). The system block is prepended client-side and never counted.
  */
+/**
+ * Resolve models.dev context windows for a provider's catalog (async,
+ * catalog-cached; NEVER throws — entries models.dev doesn't know stay
+ * unknown). The model modal's size column reads this map per model.
+ */
+async function refreshModelWindows(
+	provider: ResolvedProvider,
+	models: string[],
+): Promise<void> {
+	const windows: Record<string, number> = {};
+	await Promise.all(
+		models.map(async model => {
+			const window = await resolveContextWindow(
+				model,
+				undefined,
+				provider.id,
+			);
+			if (window && window > 0) windows[model] = window;
+		}),
+	);
+	setModelWindows(prev => ({...prev, [provider.id]: windows}));
+}
+
+/**
+ * Context committed when a turn is INTERRUPTED (Esc / watchdog). The turn's
+ * FULL history — including the user message that started it — must reach the
+ * provider, or every interrupted turn silently vanishes from the next
+ * request: after a few Esc'd turns the context is empty and the model (or a
+ * freshly switched one) reports "no previous context". A partial assistant
+ * reply rides on top when one streamed. Pure, unit-tested.
+ */
+export function interruptedContext(
+	history: ChatMessageLike[],
+	partial: string,
+): ChatMessageLike[] {
+	return partial.trim()
+		? [...history, {role: 'assistant' as const, content: partial}]
+		: [...history];
+}
+
 function capMessages(
 	history: ChatMessageLike[],
 	cap: number,

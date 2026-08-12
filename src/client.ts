@@ -6,8 +6,9 @@
 
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {activeEndpoint, sessionId, setRetryingAttempt} from './state';
+import {activeEndpoint, cavemanMode, sessionId, setRetryingAttempt} from './state';
 import {resolveRulesFile} from './rules-file';
+import {builtinCavemanSkill, loadSkills} from './custom';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -77,10 +78,25 @@ function buildVolatileSystemInfo(): string {
 	} catch {
 		// unreadable AGENTS.md, omit it
 	}
+	// F6: the model must know skills EXIST and how to invoke them — the
+	// `skill`/`check_skill` tool descriptions cover the calling convention,
+	// this block lists the loadable names. Same per-session stability class
+	// as AGENTS.md (skills rarely change mid-session).
+	const skills = loadSkills();
+	const skillsBlock =
+		skills.length > 0
+			? `\n\n## AVAILABLE SKILLS\n` +
+				skills
+					.map(skill =>
+						`- ${skill.name}${skill.description ? `: ${skill.description}` : ''}`,
+					)
+					.join('\n') +
+				`\nUse the skill tool to load a skill's instructions before acting on its domain.`
+			: '';
 	return (
 		`## SYSTEM INFORMATION\n` +
 		`Current Working Directory: ${cwd}\n` +
-		`Current Date: ${dateStr}${agents}`
+		`Current Date: ${dateStr}${agents}${skillsBlock}`
 	);
 }
 
@@ -99,8 +115,16 @@ export function buildSystemParts(toolProfile?: string): {
 	stable: string;
 	volatile: string;
 } {
-	const stable =
+	const base =
 		toolProfile === 'nano' ? NANO_SYSTEM_PROMPT : SYSTEM_PROMPT;
+	// Built-in caveman mode (Settings → Behavior → Caveman mode). The
+	// instructions are part of the STABLE block so the cache head stays
+	// byte-identical per session; toggling the setting is a legitimate head
+	// change (same class as switching tool profile), never a per-turn one.
+	const caveman = cavemanMode() ? builtinCavemanSkill() : null;
+	const stable = caveman
+		? `${base}\n\n## CAVEMAN MODE\n${caveman.body.trim()}`
+		: base;
 	return {stable, volatile: buildVolatileSystemInfo()};
 }
 
@@ -148,6 +172,8 @@ export interface StreamHandlers {
 export interface ToolCatalogEntry {
 	name: string;
 	description?: string;
+	/** OpenAI function schema; `{type: 'object', properties: {}}` by default. */
+	parameters?: Record<string, unknown>;
 }
 
 /**
@@ -173,7 +199,7 @@ export function openAIToolBlocks(
 			function: {
 				name: tool.name,
 				description: tool.description ?? '',
-				parameters: {type: 'object', properties: {}},
+				parameters: tool.parameters ?? {type: 'object', properties: {}},
 			},
 		}));
 }
@@ -249,6 +275,27 @@ export interface EndpointOverride {
 	promptCacheKey?: boolean;
 }
 
+/**
+ * Anthropic tool blocks. HARD protocol rule: at most FOUR `cache_control`
+ * breakpoints per request (invalidation order tools → system → latest
+ * user). A breakpoint on the LAST tool caches the entire tool list, so
+ * per-tool breakpoints (~27 with the full catalog) make real
+ * Anthropic-compatible endpoints reject the request and bobonyo silently
+ * falls back to a different model. Pure, unit-tested.
+ */
+export function anthropicToolBlocks(
+	tools: ToolCatalogEntry[],
+): Array<Record<string, unknown>> {
+	return tools.map((tool, index) => ({
+		name: tool.name,
+		description: tool.description ?? '',
+		input_schema: tool.parameters ?? {type: 'object', properties: {}},
+		...(index === tools.length - 1
+			? {cache_control: {type: 'ephemeral' as const}}
+			: {}),
+	}));
+}
+
 /** E2: fallback providers tried in order when the active one fails. */
 let fallbackEndpoints: EndpointOverride[] = [];
 
@@ -263,15 +310,18 @@ export async function streamChat(
 	tools: ToolCatalogEntry[] = [],
 	streamGuard?: StreamGuard,
 	toolProfile?: string,
+	/** Called when the ACTIVE provider failed and a fallback answered. */
+	onFallback?: (endpoint: EndpointOverride) => void,
 ): Promise<TurnResult> {
 	const candidates: Array<EndpointOverride | undefined> = [
 		undefined,
 		...fallbackEndpoints,
 	];
 	let lastError: unknown;
-	for (const candidate of candidates) {
+	for (let index = 0; index < candidates.length; index++) {
+		const candidate = candidates[index];
 		try {
-			return await streamOnceWithRetries(
+			const result = await streamOnceWithRetries(
 				messages,
 				handlers,
 				signal,
@@ -280,6 +330,10 @@ export async function streamChat(
 				streamGuard,
 				toolProfile,
 			);
+			if (index > 0 && onFallback && candidate) {
+				onFallback(candidate);
+			}
+			return result;
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') throw error;
 			// B23: the runaway guard aborts the TURN, never retry another
@@ -753,12 +807,7 @@ async function anthropicStreamOnce(
 		messages,
 		toolProfile,
 	);
-	const toolBlocks = tools.map(tool => ({
-		name: tool.name,
-		description: tool.description ?? '',
-		input_schema: {type: 'object', properties: {}},
-		cache_control: {type: 'ephemeral' as const},
-	}));
+	const toolBlocks = anthropicToolBlocks(tools);
 	const response = await fetch(`${endpoint.baseUrl}/v1/messages`, {
 		method: 'POST',
 		headers: {
@@ -899,7 +948,7 @@ async function anthropicStreamOnce(
  * Convert the app's OpenAI-shaped history to Anthropic message blocks, with
  * cache_control breakpoints on system + the latest user message (B24).
  */
-function buildAnthropicMessages(
+export function buildAnthropicMessages(
 	messages: ChatMessageLike[],
 	toolProfile?: string,
 ): {

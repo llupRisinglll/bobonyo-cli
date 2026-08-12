@@ -66,6 +66,13 @@ export const [busy, setBusy] = createSignal(false);
 export const [streaming, setStreaming] = createSignal('');
 export const [running, setRunning] = createSignal(false);
 export const [reasoning, setReasoning] = createSignal('');
+/**
+ * True while the model is in the THINKING phase of the current round
+ * (reasoning deltas are streaming, no reply text yet). The hide-thinking
+ * indicator reads this, NOT the cumulative `reasoning()` buffer — the
+ * buffer stays populated while the reply renders.
+ */
+export const [thinkingActive, setThinkingActive] = createSignal(false);
 /** Most recent provider usage snapshot (token accounting footer). */
 export const [lastUsage, setLastUsage] = createSignal<
 	{
@@ -148,6 +155,15 @@ export const [providerUsage, setProviderUsage] = createSignal<
 export const [discoveredModels, setDiscoveredModels] = createSignal<
 	Record<string, string[]>
 >({});
+/**
+ * Per-model context windows resolved from models.dev (provider id → model
+ * id → window). Auto-discovered catalogs (DeepSeek / MiMo) are bare ids, so
+ * the model modal shows the size from this map; a config-declared
+ * `contextWindow` stays the provider-level fallback.
+ */
+export const [modelWindows, setModelWindows] = createSignal<
+	Record<string, Record<string, number>>
+>({});
 /** B21/C12: issue count from the last auto-diagnostics run (status line). */
 export const [diagnosticsCount, setDiagnosticsCount] = createSignal(0);
 /** A7/C9: task list from `write_tasks`, with live progress flags. */
@@ -213,11 +229,12 @@ export function formatElapsed(totalSeconds: number): string {
 }
 
 /**
- * Seconds since a thinking phase started (rounded, minimum 1s) — the value
- * the settled `⚙ Thought (Ns)` header shows. Pure, unit-tested.
+ * Fractional seconds since a thinking phase started — the value the settled
+ * `⚙ Thought (Ns)` header shows (sub-second thoughts render as `200ms`).
+ * Pure, unit-tested.
  */
 export function thinkingSeconds(startedAt: number, now: number): number {
-	return Math.max(1, Math.round((now - startedAt) / 1000));
+	return Math.max(0, (now - startedAt) / 1000);
 }
 /** C13: transcript row under the mouse cursor (-1 = none) for hover. */
 export const [hoverRow, setHoverRow] = createSignal(-1);
@@ -336,6 +353,13 @@ export const [exitConfirm, setExitConfirm] = createSignal(false);
 /** Static completion line above the input (`✦ Worked for a snappy 16s. …`). */
 export const [completionMessage, setCompletionMessage] = createSignal('');
 /**
+ * Completion-line tone: the resume notice renders SUCCESS-green with a
+ * leading breakline; the "Worked for …" line stays secondary.
+ */
+export const [completionTone, setCompletionTone] = createSignal<
+	'default' | 'success'
+>('default');
+/**
  * Transient top-of-screen TOAST (parity: the reference "copied to clipboard"
  * toast). Used for setting changes (model/fallback/mode switches) so they
  * NEVER pollute the chat history, the toast auto-dismisses after ~2.5s.
@@ -363,6 +387,18 @@ export const [startupLoading, setStartupLoading] = createSignal<StartupLoad[]>([
 export const [mcpServers, setMcpServers] = createSignal<string[]>([]);
 /** Status-line footer visibility (Settings → Appearance → Status Line). */
 export const [statusLineEnabled, setStatusLineEnabled] = createSignal(true);
+/**
+ * Hide thinking: live Thinking + settled Thought blocks are skipped in the
+ * history, and the Working indicator reads "Thinking…" while the model
+ * reasons (settings.json `hideThinking`).
+ */
+export const [hideThinking, setHideThinking] = createSignal(false);
+/**
+ * Built-in caveman communication mode: when ON, the bundled caveman skill
+ * body is injected into the stable system prompt (settings.json
+ * `cavemanMode`). Defaults ON; the Settings → Behavior toggle turns it off.
+ */
+export const [cavemanMode, setCavemanMode] = createSignal(true);
 /** Welcome-banner shapes (Settings → Appearance). */
 export const [titleShape, setTitleShape] = createSignal('powerline-angled');
 /** Snapshot taken when the last user prompt was submitted (`/retry`). */

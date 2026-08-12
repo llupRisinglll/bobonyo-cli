@@ -1,9 +1,17 @@
-import {describe, expect, test} from 'bun:test';
+import {afterEach, describe, expect, test} from 'bun:test';
+import {toolCatalog} from './tools';
+import {setCavemanMode} from './state';
 import {
+	anthropicToolBlocks,
+	buildAnthropicMessages,
 	buildOpenAIRequestBody,
 	buildSystemPrompt,
 	type ChatMessageLike,
 } from './client';
+
+afterEach(() => {
+	setCavemanMode(true);
+});
 
 /**
  * Harness recon, the cache invariants that keep OpenAI-compatible providers
@@ -20,6 +28,20 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		const a = buildSystemPrompt('full');
 		const b = buildSystemPrompt('full');
 		expect(b).toBe(a);
+	});
+
+	test('caveman instructions are injected into the stable prompt when enabled', () => {
+		setCavemanMode(true);
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).toContain('## CAVEMAN MODE');
+		expect(prompt).toContain('respond terse like smart caveman');
+	});
+
+	test('caveman instructions are omitted when the mode is disabled', () => {
+		setCavemanMode(false);
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).not.toContain('CAVEMAN MODE');
+		expect(prompt).not.toContain('respond terse like smart caveman');
 	});
 
 	test('the request body always carries the tool catalog', () => {
@@ -157,5 +179,52 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			deepseek: {prompt_cache_key: 'sess_abc'},
 			temperature: 0.2,
 		});
+	});
+
+	test('the skill tools carry descriptions + argument schemas (model can call them)', () => {
+		const body = buildOpenAIRequestBody(
+			[{role: 'user', content: 'hi'}],
+			toolCatalog(),
+			{id: 'x', model: 'm'},
+		);
+		const tools = (body.tools as Array<{
+			function: {
+				name: string;
+				description: string;
+				parameters: {properties?: Record<string, unknown>};
+			};
+		}>);
+		const skill = tools.find(tool => tool.function.name === 'skill');
+		const check = tools.find(tool => tool.function.name === 'check_skill');
+		expect(skill?.function.description.length).toBeGreaterThan(0);
+		expect(skill?.function.parameters.properties?.name).toBeDefined();
+		expect(check?.function.description.length).toBeGreaterThan(0);
+		expect(check?.function.parameters.properties?.name).toBeDefined();
+	});
+
+	test('Anthropic tools carry ONE cache_control breakpoint (the 4-cap)', () => {
+		const tools = toolCatalog();
+		const blocks = anthropicToolBlocks(tools);
+		expect(blocks).toHaveLength(tools.length);
+		const withBreakpoint = blocks.filter(
+			block =>
+				(block.cache_control as {type?: string} | undefined)?.type ===
+				'ephemeral',
+		);
+		// A breakpoint on the LAST tool caches the whole tool list.
+		expect(withBreakpoint).toHaveLength(1);
+		expect(withBreakpoint[0]?.name).toBe(blocks[blocks.length - 1]?.name);
+		// Total breakpoints across tools + system + latest user ≤ 4.
+		const {system, anthropicMessages} = buildAnthropicMessages(
+			[{role: 'user', content: 'hi'}],
+			'full',
+		);
+		const total =
+			withBreakpoint.length +
+			JSON.stringify(system).split('cache_control').length -
+			1 +
+			JSON.stringify(anthropicMessages).split('cache_control').length -
+			1;
+		expect(total).toBeLessThanOrEqual(4);
 	});
 });

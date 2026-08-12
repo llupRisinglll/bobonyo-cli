@@ -50,6 +50,22 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(src).toMatch(/<box height=\{1\} \/>/);
 	});
 
+	test('the live streaming reply keeps the settled leading breakline', () => {
+		const history = read('./components/history.tsx');
+		// The settled reply renders a blank row before the response; the LIVE
+		// reply must too, or the streaming text glues to the user message and
+		// visibly shifts down by one row when it settles.
+		const start = history.indexOf('<Show when={liveReplyText()}>');
+		const section = history.slice(
+			start,
+			history.indexOf('</Show>', start),
+		);
+		expect(section).toMatch(/<box height=\{1\} \/>/);
+		expect(section.indexOf('<box height={1} />')).toBeLessThan(
+			section.indexOf('<box flexDirection="row">'),
+		);
+	});
+
 	test('settled tool rows render as components; overlay/buffer-tint gone', () => {
 		const history = read('./components/history.tsx');
 		expect(history).toMatch(/<SettledToolRow/);
@@ -184,6 +200,46 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/thinkingSeconds\(/);
 		const state = read('./state.ts');
 		expect(state).toMatch(/export function thinkingSeconds/);
+	});
+
+	test('DeepSeek/MiMo features load on provider switch, not just /status', () => {
+		const app = read('./app.tsx');
+		// Switching the active provider/model must trigger the provider-
+		// specific loads immediately: DeepSeek balance (statusline `Cred:`)
+		// and the MiMo monthly usage ledger (`used N.NM`).
+		expect(app).toMatch(/const loadProviderFeatures/);
+		expect(app).toMatch(/refreshDeepSeekBalance\(provider\)/);
+		expect(app).toMatch(/currentMonthUsage\(provider\.baseUrl\)/);
+		// Every switch path must call it: modal select + /provider (provider
+		// arg) and /model (endpoint arg).
+		const providerCalls = app.match(/loadProviderFeatures\(provider\);/g) ?? [];
+		const endpointCalls = app.match(/loadProviderFeatures\(endpoint\);/g) ?? [];
+		expect(providerCalls.length).toBeGreaterThanOrEqual(2);
+		expect(endpointCalls.length).toBe(1);
+		// The statusline Cred segment is provider-scoped like the MiMo used
+		// segment (a stale balance must not linger on other providers).
+		const status = read('./components/status.tsx');
+		expect(status).toMatch(/isDeepSeek\(activeEndpoint\(\)\) && deepSeekBalance\(\)/);
+	});
+
+	test('input sits below the banner and slides down like a terminal prompt', () => {
+		const app = read('./app.tsx');
+		const history = read('./components/history.tsx');
+		// The history height is min(MEASURED content, terminal cap): on an
+		// empty conversation the banner is short so the input rides directly
+		// below it, then slides down as rows are added, and sticks at the
+		// bottom once the content fills the cap.
+		expect(app).toMatch(/Math\.min\(\s*historyContentHeight\(\)/);
+		expect(app).toMatch(/onContentHeight=\{setHistoryContentHeight\}/);
+		expect(history).toMatch(/onContentHeight/);
+		expect(history).toMatch(/getChildren\(\)/);
+		// flexGrow on the scrollbox would stretch it and pin the input at
+		// the bottom again — the terminal-like placement depends on it NOT
+		// growing.
+		expect(history).toMatch(/flexGrow=\{0\}/);
+		// The spacer keeps the status line pinned at the bottom while the
+		// conversation is short.
+		expect(app).toMatch(/<box flexGrow=\{1\} \/>/);
 	});
 
 	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {

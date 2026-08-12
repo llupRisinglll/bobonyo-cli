@@ -10,6 +10,7 @@ import {
 	tokenEndingAt,
 	tokenizeInputLine,
 	tokenStartingAt,
+	workingLabel,
 } from './components/input-box';
 import {
 	wrapText,
@@ -31,6 +32,15 @@ describe('wrapText', () => {
 	test('hard-splits a single over-long word', () => {
 		const lines = wrapText('abcdefghij', 4);
 		expect(lines).toEqual(['abcd', 'efgh', 'ij']);
+	});
+});
+
+describe('workingLabel (hide-thinking indicator phase)', () => {
+	test('says Thinking only while reasoning AND hide-thinking is on', () => {
+		expect(workingLabel(true, true)).toBe('Thinking');
+		expect(workingLabel(true, false)).toBe('Working');
+		expect(workingLabel(false, true)).toBe('Working');
+		expect(workingLabel(false, false)).toBe('Working');
 	});
 });
 

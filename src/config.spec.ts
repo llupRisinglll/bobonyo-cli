@@ -1,6 +1,12 @@
 import {afterEach, describe, expect, test} from 'bun:test';
 import {mkdirSync, writeFileSync} from 'node:fs';
-import {discoverModels, listProviders, normalizeModels} from './config';
+import {
+	discoverModels,
+	listProviders,
+	modelsDevContextWindow,
+	normalizeModels,
+	type ModelsDevCatalog,
+} from './config';
 import {nanocoderConfigDir, nanocoderDataDir} from './nanocoder-paths';
 
 const ORIGINAL_PROVIDERS = process.env.NANOCODER_PROVIDERS;
@@ -36,6 +42,61 @@ describe('normalizeModels', () => {
 	test('empty catalog falls back to the mock model', () => {
 		const {names} = normalizeModels([]);
 		expect(names).toEqual(['mock-model-1']);
+	});
+});
+
+describe('modelsDevContextWindow (models.dev size lookup)', () => {
+	test('reads the CURRENT schema: provider → model → limit.context', () => {
+		const catalog: ModelsDevCatalog = {
+			deepseek: {
+				models: {
+					'deepseek-chat': {limit: {context: 1_000_000}},
+					'deepseek-reasoner': {limit: {context: 1_000_000}},
+				},
+			},
+		};
+		expect(modelsDevContextWindow(catalog, 'deepseek', 'deepseek-chat')).toBe(
+			1_000_000,
+		);
+	});
+
+	test('falls back to the legacy context_window field', () => {
+		const catalog: ModelsDevCatalog = {
+			'deepseek-chat': {context_window: 65_536},
+		};
+		expect(modelsDevContextWindow(catalog, 'deepseek', 'deepseek-chat')).toBe(
+			65_536,
+		);
+	});
+
+	test('finds a model across the WHOLE catalog when the provider id differs', () => {
+		// Auto-discovery ids (deepseek-chat, mimo-v2.5-pro) can live under a
+		// different provider key than the configured proxy id.
+		const catalog: ModelsDevCatalog = {
+			'my-deepseek-proxy': {models: {}},
+			deepseek: {
+				models: {'deepseek-chat': {limit: {context: 1_000_000}}},
+			},
+		};
+		expect(
+			modelsDevContextWindow(catalog, 'my-deepseek-proxy', 'deepseek-chat'),
+		).toBe(1_000_000);
+	});
+
+	test('unknown models and zero limits resolve to undefined', () => {
+		const catalog: ModelsDevCatalog = {
+			deepseek: {
+				models: {
+					'deepseek-chat': {limit: {context: 0}},
+				},
+			},
+		};
+		expect(modelsDevContextWindow(catalog, 'deepseek', 'deepseek-chat')).toBe(
+			undefined,
+		);
+		expect(modelsDevContextWindow(catalog, 'deepseek', 'gpt-5')).toBe(
+			undefined,
+		);
 	});
 });
 

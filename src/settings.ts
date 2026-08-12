@@ -23,6 +23,16 @@ export interface Settings {
 	titleShape?: string;
 	/** Show the status line footer (on/off). */
 	statusLine?: boolean;
+	/**
+	 * Hide live Thinking + settled Thought blocks; the Working indicator
+	 * says "Thinking…" while the model reasons instead.
+	 */
+	hideThinking?: boolean;
+	/**
+	 * Built-in caveman communication mode (bundled skill). ON by default;
+	 * the toggle removes the caveman instructions from the system prompt.
+	 */
+	cavemanMode?: boolean;
 	autoCompact: {enabled: boolean; threshold: number};
 	watchdogMs?: number;
 	streamGuard?: {maxOutputChars?: number; maxDurationMs?: number};
@@ -35,6 +45,8 @@ const DEFAULTS: Settings = {
 	mode: 'yolo',
 	toolProfile: 'full',
 	maxMessages: 1000,
+	hideThinking: true,
+	cavemanMode: true,
 	autoCompact: {enabled: false, threshold: 75},
 	watchdogMs: 0,
 	streamGuard: {},
@@ -90,6 +102,8 @@ export function loadSettings(): Settings {
 			? settings.titleShape
 			: undefined;
 	const statusLine = settings.statusLine !== false;
+	const hideThinking = settings.hideThinking !== false;
+	const cavemanMode = settings.cavemanMode !== false;
 	return {
 		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode) ? mode : DEFAULTS.mode,
 		toolProfile: ['full', 'minimal', 'nano', 'auto'].includes(toolProfile)
@@ -99,6 +113,8 @@ export function loadSettings(): Settings {
 		theme,
 		titleShape,
 		statusLine,
+		hideThinking,
+		cavemanMode,
 		autoCompact: {
 			enabled: rawAuto.enabled === true,
 			threshold,

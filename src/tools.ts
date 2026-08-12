@@ -6,7 +6,12 @@
  */
 
 import {readFileSync} from 'node:fs';
-import {streamChat, type ChatMessageLike, type MockToolCall} from './client';
+import {
+	streamChat,
+	type ChatMessageLike,
+	type MockToolCall,
+	type ToolCatalogEntry,
+} from './client';
 import {bgTasks, runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
@@ -31,6 +36,10 @@ interface ToolDef {
 	execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string> | string;
 	/** Read-only tools never require approval (B16/D4 default). */
 	readOnly?: boolean;
+	/** Model-facing description (the provider sees this in the tools array). */
+	description?: string;
+	/** Model-facing JSON schema for the arguments (empty schema by default). */
+	parameters?: Record<string, unknown>;
 }
 
 const toolRegistry = new Map<string, ToolDef>();
@@ -41,6 +50,20 @@ export function registerTool(name: string, def: ToolDef): void {
 
 export function listTools(): string[] {
 	return [...toolRegistry.keys()];
+}
+
+/**
+ * Model-facing tool catalog: the registry names plus the optional
+ * descriptions/schemas each tool declares. The request head uses THIS (a
+ * bare name list leaves the model guessing what each tool does — the
+ * `skill` tools were unusable until they got descriptions + schemas).
+ */
+export function toolCatalog(): ToolCatalogEntry[] {
+	return [...toolRegistry.entries()].map(([name, def]) => ({
+		name,
+		description: def.description ?? '',
+		parameters: def.parameters,
+	}));
 }
 
 /** Mutation tools require approval in `normal` mode (B16). */
@@ -637,6 +660,21 @@ registerTool('fetch_url', {
 });
 
 registerTool('skill', {
+	description:
+		'Load a skill (a markdown instruction bundle) into context. Skills are ' +
+		'listed in the SYSTEM prompt under AVAILABLE SKILLS — pick the one that ' +
+		'matches the task (e.g. hilinga-prod-ops for production server work) and ' +
+		'call this with its exact name before acting on that domain.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {
+				type: 'string',
+				description: 'Exact skill name from the AVAILABLE SKILLS list.',
+			},
+		},
+		required: ['name'],
+	},
 	execute(args) {
 		const name = text(args, 'name') || 'unknown';
 		const path = text(args, 'path') || `<${name}>`;
@@ -658,6 +696,19 @@ registerTool('skill', {
 });
 
 registerTool('check_skill', {
+	description:
+		'Check whether a skill exists and is valid (no undeclared template ' +
+		'variables). Use before/after calling the skill tool to confirm the name.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {
+				type: 'string',
+				description: 'Skill name to validate.',
+			},
+		},
+		required: ['name'],
+	},
 	execute(args) {
 		const name = text(args, 'name') || 'unknown';
 		const skill = loadSkills().find(
@@ -760,7 +811,7 @@ async function runSubagent(
 			// its per-call progress is visible while it works.
 			onText: text => onProgress?.(text),
 			onReasoning: () => {},
-		}, undefined, listTools().map(name => ({name})));
+		}, undefined, toolCatalog());
 		if (result.toolCalls.length === 0) {
 			return result.text.trim() || 'Subagent produced no output.';
 		}

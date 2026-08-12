@@ -39,9 +39,10 @@ describe('formatTokens', () => {
 	test('compacts large totals with K/M suffixes', () => {
 		expect(formatTokens(0)).toBe('0');
 		expect(formatTokens(9)).toBe('9');
+		expect(formatTokens(7995)).toBe('7.9K');
 		expect(formatTokens(482_000)).toBe('482K');
 		expect(formatTokens(1_240_000)).toBe('1.24M');
-		expect(formatTokens(12_400_000)).toBe('12M');
+		expect(formatTokens(12_400_000)).toBe('12.4M');
 	});
 });
 

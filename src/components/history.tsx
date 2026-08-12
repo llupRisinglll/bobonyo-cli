@@ -19,6 +19,7 @@ import {
 	expandedBlocks,
 	gearGlyph,
 	hoverRow,
+	hideThinking,
 	liveOutputs,
 	messages,
 	mode,
@@ -57,6 +58,7 @@ import {
 	rowLanguage,
 } from '../tool-display';
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
+import {formatCount, formatDuration} from '../format';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
 import {
@@ -149,7 +151,17 @@ function rowPath(text: string): string {
  * headings/lists/code/tables format live while the stream grows, and the
  * settled transcript is byte-identical in shape.
  */
-export function History(props: {height?: number}) {
+export function History(props: {
+	height?: number;
+	/**
+	 * Terminal-like input placement: reports the REAL rendered content
+	 * height (banner + transcript rows, measured from the laid-out scrollbox
+	 * children) so the parent can size the history to min(content, cap) and
+	 * let the input ride below the banner, sliding down as the conversation
+	 * grows until it sticks at the bottom.
+	 */
+	onContentHeight?: (height: number) => void;
+}) {
 	const renderer = useRenderer();
 	const dim = () => createTextAttributes({dim: true});
 	// OpenTUI's built-in tree-sitter grammars (ts/js/md) highlight fenced
@@ -531,7 +543,7 @@ export function History(props: {height?: number}) {
 			} else if (message.error) {
 				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else {
-				if (message.reasoning) {
+				if (message.reasoning && !hideThinking()) {
 					const thoughtKey = `thought-${i}`;
 					// Full reasoning text for the DETAILS modal (collapsed
 					// previews cap at PREVIEW_LINES=3; click opens the modal).
@@ -958,13 +970,46 @@ export function History(props: {height?: number}) {
 		hoveredBlockRef = null;
 		setHoveredBlock(null);
 	};
+	// Measure the ACTUAL content height from the laid-out scrollbox children
+	// (markdown wrapping included — estimates would drift and misplace the
+	// input). Re-measures whenever the rendered content changes; the height
+	// prop change itself does NOT retrigger this effect, so no loop.
+	let lastContentHeight = -1;
+	const measureContentHeight = (): void => {
+		const box = scrollRef;
+		if (!box || !props.onContentHeight) return;
+		let total = 0;
+		for (const child of box.content.getChildren()) {
+			total += child.height ?? 0;
+		}
+		if (total !== lastContentHeight) {
+			lastContentHeight = total;
+			props.onContentHeight(total);
+		}
+	};
+	createEffect(() => {
+		// Subscribe to every signal that changes the rendered content:
+		// settled transcript, streaming reply, live tool output, thinking
+		// tail, and the spinner ticker (drives the live region frames).
+		void messages();
+		void running();
+		void streaming();
+		void liveOutputs();
+		void spinnerFrame();
+		// Layout lands a tick after the render, so read heights after the
+		// current event loop turn.
+		setTimeout(measureContentHeight, 0);
+	});
 	return (
 		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
 		<scrollbox
 			ref={element => {
 				scrollRef = element;
 			}}
-			flexGrow={1}
+			// NO flex-grow: the parent sizes us to min(content, cap), so the
+			// input below stays adjacent to the content (terminal-like) until
+			// the content fills the cap and the box pins at the bottom.
+			flexGrow={0}
 			flexShrink={1}
 			minHeight={0}
 			height={props.height ?? '100%'}
@@ -1078,7 +1123,7 @@ export function History(props: {height?: number}) {
 			{/* LIVE THOUGHT: PLAIN TEXT (no markdown re-parse) so the thinking
 			    block can never flicker while reasoning streams. The leading
 			    breakline matches the settled blank row before the block. */}
-			<Show when={liveThoughtHeader()}>
+			<Show when={!hideThinking() && liveThoughtHeader()}>
 				<box
 					ref={element => {
 						liveThoughtRef = element as never;
@@ -1105,33 +1150,37 @@ export function History(props: {height?: number}) {
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are
-			    identical while streaming and when done. */}
+			    identical while streaming and when done. The leading breakline
+			    matches the settled blank row before every response. */}
 			<Show when={liveReplyText()}>
-				<box flexDirection="row">
-					<text
-						fg={colors().secondary}
-						attributes={dim()}
-					>
-						✦
-					</text>
-					<box flexGrow={1} paddingLeft={2}>
-						<markdown
-							ref={element => {
-								liveReplyRef = element as never;
-							}}
-							content={liveReplyText()}
-							streaming={running()}
-							fg={colors().text}
-							syntaxStyle={syntaxStyle()}
-							internalBlockMode="top-level"
-							renderNode={renderNode}
-							treeSitterClient={treeSitter}
-							tableOptions={{
-								style: 'grid',
-								borders: true,
-								widthMode: 'content',
-							}}
-						/>
+				<box flexDirection="column">
+					<box height={1} />
+					<box flexDirection="row">
+						<text
+							fg={colors().secondary}
+							attributes={dim()}
+						>
+							✦
+						</text>
+						<box flexGrow={1} paddingLeft={2}>
+							<markdown
+								ref={element => {
+									liveReplyRef = element as never;
+								}}
+								content={liveReplyText()}
+								streaming={running()}
+								fg={colors().text}
+								syntaxStyle={syntaxStyle()}
+								internalBlockMode="top-level"
+								renderNode={renderNode}
+								treeSitterClient={treeSitter}
+								tableOptions={{
+									style: 'grid',
+									borders: true,
+									widthMode: 'content',
+								}}
+							/>
+						</box>
 					</box>
 				</box>
 			</Show>
@@ -1183,36 +1232,34 @@ export function wrapThoughtBody(text: string, width: number): string {
 }
 
 /**
- * Settled Thought block, `⚙ Thought (Ns)` header with a `└` preview of the
- * FIRST rendered lines (head once settled), expandable via Ctrl+R. The body
- * uses the same `  └   ` container as tool rows, and the text is pre-wrapped
- * to the chat width so wrapped lines stay inside the indentation.
+ * Settled Thought block, `⚙ Thought (Ns) · ~N tokens` header with a `└`
+ * preview of the FIRST rendered lines (head once settled), expandable via
+ * Ctrl+R. The body uses the same `  └   ` container as tool rows, and the
+ * text is pre-wrapped to the chat width so wrapped lines stay inside the
+ * indentation.
  */
-function settledThought(
+export function settledThought(
 	reasoningText: string,
 	durationSec: number | undefined,
 	key: string,
 	width: number,
 ): string {
-	const header = `⚙ Thought${durationSec ? ` (${durationSec}s)` : ''}`;
+	const tokens = Math.max(1, Math.ceil(reasoningText.length / 4));
+	const header =
+		`⚙ Thought${durationSec ? ` (${formatDuration(durationSec)})` : ''}` +
+		` · ~${formatCount(tokens)} tokens`;
 	const body = wrapThoughtBody(reasoningText, width);
 	const lines = body.split('\n');
 	const expanded = expandedBlocks()[key] ?? thoughtExpanded();
-	const tokens = Math.max(1, Math.ceil(reasoningText.length / 4));
 	if (expanded || lines.length <= PREVIEW_LINES) {
-		return fence(
-			'thought',
-			'done',
-			`${header}\n${body}\n~${tokens} tokens`,
-		);
+		return fence('thought', 'done', `${header}\n${body}`);
 	}
 	const preview = lines.slice(0, PREVIEW_LINES).join('\n');
 	return fence(
 		'thought',
 		'done',
 		`${header}\n${preview}\n` +
-			`     … +${lines.length - PREVIEW_LINES} more lines\n` +
-			`~${tokens} tokens`,
+			`     … +${lines.length - PREVIEW_LINES} more lines`,
 	);
 }
 
@@ -1480,7 +1527,7 @@ function agentRow(message: ChatMessage): string {
 	const stats = message.toolStats;
 	const statsText = [
 		stats?.toolCalls ? `${stats.toolCalls} tool ${stats.toolCalls === 1 ? 'call' : 'calls'}` : '',
-		stats?.durationSec ? `${stats.durationSec}s` : '',
+		stats?.durationSec ? formatDuration(stats.durationSec) : '',
 	].filter(Boolean).join(' · ');
 	const footer = hidden > 0
 		? `\n     … +${hidden} more line${hidden === 1 ? '' : 's'}${statsText ? ` · ${statsText}` : ''}`

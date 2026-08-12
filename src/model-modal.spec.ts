@@ -1,5 +1,8 @@
 import {describe, expect, test} from 'bun:test';
-import {initialModelRowIndex} from './components/model-modal';
+import {
+	connectProviderShortcut,
+	initialModelRowIndex,
+} from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
 
@@ -54,5 +57,17 @@ describe('initialModelRowIndex (/model opens on the current model)', () => {
 	test('returns -1 when nothing is navigable', () => {
 		expect(initialModelRowIndex([{kind: 'empty'}])).toBe(-1);
 		expect(initialModelRowIndex([])).toBe(-1);
+	});
+});
+
+describe('connectProviderShortcut (C must not fire while searching)', () => {
+	test('fires only when the LIST is focused', () => {
+		expect(connectProviderShortcut('list', 'c')).toBe(true);
+		expect(connectProviderShortcut('search', 'c')).toBe(false);
+	});
+
+	test('no other key triggers it', () => {
+		expect(connectProviderShortcut('list', 'x')).toBe(false);
+		expect(connectProviderShortcut('list', 'C')).toBe(false);
 	});
 });

@@ -5,6 +5,8 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	activeAgents,
 	activeEndpoint,
+	cavemanMode,
+	hideThinking,
 	mode,
 	maxMessages,
 	settingsIndex,
@@ -48,6 +50,8 @@ export const SETTING_OPTIONS: Record<string, string[]> = {
 	theme: ['omnicode', 'tokyo-night'],
 	titleShape: ['powerline-angled', 'tiny', 'none'],
 	statusLine: ['on', 'off'],
+	hideThinking: ['on', 'off'],
+	cavemanMode: ['on', 'off'],
 	mode: ['yolo', 'normal', 'plan', 'auto-accept'],
 	profile: ['full', 'minimal', 'nano', 'auto'],
 };
@@ -93,6 +97,16 @@ export function settingsRows(tab: number): SettingsRow[] {
 					key: 'reasoningTraces',
 					label: 'Reasoning traces',
 					value: 'shown as Thought blocks',
+				},
+				{
+					key: 'hideThinking',
+					label: 'Hide thinking',
+					value: hideThinking() ? 'on' : 'off',
+				},
+				{
+					key: 'cavemanMode',
+					label: 'Caveman mode',
+					value: cavemanMode() ? 'on' : 'off',
 				},
 				{
 					key: 'sessions',
@@ -200,7 +214,6 @@ export function settingsRows(tab: number): SettingsRow[] {
 					label: 'Developer mode',
 					value: 'off (use `bobonyo preview tui`)',
 				},
-				{key: 'model', label: 'Model', value: activeEndpoint().model},
 			];
 	}
 }

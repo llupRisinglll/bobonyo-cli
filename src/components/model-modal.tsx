@@ -14,6 +14,11 @@ export interface ModelProvider {
 	models: string[];
 	modelEfforts: Record<string, string>;
 	contextWindow?: number;
+	/**
+	 * Per-model context windows (models.dev, auto-discovered catalogs like
+	 * DeepSeek / MiMo are bare ids — the size column reads this map first).
+	 */
+	modelContextWindows?: Record<string, number>;
 }
 
 type Row =
@@ -38,8 +43,22 @@ export function initialModelRowIndex(
 }
 
 /**
+ * The bare `C` connect-provider shortcut must ONLY fire while the LIST is
+ * focused. Typing a search query starts in the search box, so an
+ * ungated `C` would open the provider wizard on the first letter of
+ * "codex"/"claude" — every search would explode. Pure, unit-tested.
+ */
+export function connectProviderShortcut(
+	focus: 'search' | 'list',
+	key: string,
+): boolean {
+	return key === 'c' && focus === 'list';
+}
+
+/**
  * `/model` MODAL (parity: nanocoder's grouped ModelSelector), providers
- * grouped and expandable, searchable, ↑/↓ + Enter, ←/→ cycles the reasoning
+ * grouped and expandable, searchable (Tab toggles search/list focus, `C`
+ * connects a provider from the list), ↑/↓ + Enter, ←/→ cycles the reasoning
  * effort on a highlighted model, Esc closes. Selecting a model calls
  * `onSelect(providerId, model, effort)`.
  */
@@ -59,6 +78,10 @@ export function ModelModal(props: {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [query, setQuery] = createSignal('');
+	// Search vs list focus: single-letter shortcuts (C) are list-only so
+	// typing a query can never trip them (parity: the settings modal's Tab
+	// search/list toggle).
+	const [focus, setFocus] = createSignal<'search' | 'list'>('search');
 	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
 	// click's mouse-UP on the backdrop, which would close them instantly.
 	// Ignore the first mouse-up after mount (the opening click's release).
@@ -240,11 +263,16 @@ export function ModelModal(props: {
 			}
 			return;
 		}
+		if (event.name === 'tab') {
+			setFocus(prev => (prev === 'search' ? 'list' : 'search'));
+			return;
+		}
 		if (event.name === 'up' || event.name === 'down') {
+			setFocus('list');
 			moveRow(event.name === 'down' ? 1 : -1);
 			return;
 		}
-		if (event.name === 'c') {
+		if (connectProviderShortcut(focus(), event.name)) {
 			props.onConnectProvider();
 			return;
 		}
@@ -292,16 +320,19 @@ export function ModelModal(props: {
 			return;
 		}
 		if (event.name === 'backspace') {
+			setFocus('search');
 			setQuery(prev => prev.slice(0, -1));
 			return;
 		}
 		if (event.name === 'space' && !event.ctrl && !event.meta) {
+			setFocus('search');
 			setQuery(prev => prev + ' ');
 			setRowIndex(0);
 			return;
 		}
 		const char = event.name;
 		if (char && char.length === 1 && !event.ctrl && !event.meta) {
+			setFocus('search');
 			setQuery(prev => prev + char);
 			setRowIndex(0);
 		}
@@ -489,18 +520,21 @@ export function ModelModal(props: {
 									</text>
 									<box flexGrow={1} />
 									{/* Model SIZE on the right (parity: the reference). */}
-									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={item.active ? bold() : dim()}
-									>
-										{row.provider.contextWindow
-											? formatContextLength(row.provider.contextWindow)
-											: '-'}
-									</text>
+								<text
+									fg={
+										item.active
+											? activeRow().fg
+											: colors().secondary
+									}
+									attributes={item.active ? bold() : dim()}
+								>
+									{(() => {
+										const size =
+											row.provider.modelContextWindows?.[row.model] ??
+											row.provider.contextWindow;
+										return size ? formatContextLength(size) : '-';
+									})()}
+								</text>
 									{item.active ? (
 										<text fg={activeRow().fg} attributes={dim()}>
 											{'  ←/→ effort'}
@@ -514,7 +548,7 @@ export function ModelModal(props: {
 					</For>
 					<box height={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						↑/↓ select · Enter choose · ←/→ effort · C connect provider · Esc close
+						Tab search/list · ↑/↓ select · Enter choose · ←/→ effort · C connect (list) · Esc close
 					</text>
 				</Show>
 			</box>

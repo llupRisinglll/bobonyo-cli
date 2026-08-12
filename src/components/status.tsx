@@ -15,7 +15,7 @@ import {resolveProfile} from '../tools';
 import {colors} from '../theme';
 import {statusPathLabel} from '../status-path';
 import {formatMonthlyUsage, formatTokens} from '../provider-usage';
-import {isXiaomiMiMo} from '../deepseek';
+import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
 
 /**
  * Mode line, parity flavor of nanocoder's footer: mode · model · ctx.
@@ -47,7 +47,7 @@ export function Status() {
 	// amount primary — mirrors the `tune:` two-tone pair.
 	const credSegment = () => {
 		const balance = deepSeekBalance();
-		if (!balance) return '';
+		if (!isDeepSeek(activeEndpoint()) || !balance) return '';
 		const symbol =
 			balance.currency === 'USD'
 				? '$'
@@ -94,7 +94,7 @@ export function Status() {
 			    between `tune:` and the value. */}
 			<text fg={colors().secondary}> · tune:</text>
 			<text fg={colors().primary}> {tuneLabel().replace(/^tune:\s*/, '')}</text>
-			<Show when={deepSeekBalance()}>
+			<Show when={isDeepSeek(activeEndpoint()) && deepSeekBalance()}>
 				<text fg={colors().secondary}> · Cred:</text>
 				<text fg={colors().primary}>
 					{' '}

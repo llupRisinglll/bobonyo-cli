@@ -4,7 +4,11 @@ import {themeColors} from './highlight';
 import {settledGlyphColor} from './row-highlight';
 import {colors} from './theme';
 import {thinkingSeconds} from './state';
-import {liveThinkingHeader, wrapThoughtBody} from './components/history';
+import {
+	liveThinkingHeader,
+	settledThought,
+	wrapThoughtBody,
+} from './components/history';
 
 function rgb(c: RGBA): string {
 	return `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`;
@@ -52,12 +56,45 @@ describe('liveThinkingHeader (animated gear + dots BEFORE the timer)', () => {
 	});
 });
 
-describe('thinkingSeconds (settled Thought (Ns) duration)', () => {
-	test('rounds to whole seconds and never reports 0', () => {
+describe('thinkingSeconds (settled Thought duration)', () => {
+	test('returns fractional seconds so sub-second thoughts render as ms', () => {
 		expect(thinkingSeconds(1000, 5000)).toBe(4);
-		expect(thinkingSeconds(1000, 1999)).toBe(1);
-		expect(thinkingSeconds(1000, 1200)).toBe(1);
-		expect(thinkingSeconds(0, 0)).toBe(1);
+		expect(thinkingSeconds(1000, 3200)).toBeCloseTo(2.2, 5);
+		expect(thinkingSeconds(1000, 1200)).toBeCloseTo(0.2, 5);
+		expect(thinkingSeconds(0, 0)).toBe(0);
+	});
+});
+
+describe('settledThought (token estimate beside the duration)', () => {
+	test('~N tokens sits on the header next to the seconds', () => {
+		const text = settledThought('hello world', 12, 'thought-a', 60);
+		expect(text).toContain('⚙ Thought (12s) · ~3 tokens');
+		expect(text).toContain('· ~3 tokens\n  └   hello world');
+	});
+
+	test('sub-second thoughts render milliseconds, big estimates get K', () => {
+		const text = settledThought('x'.repeat(31_980), 0.2, 'thought-ms', 60);
+		expect(text).toContain('⚙ Thought (200ms) · ~7.9K tokens');
+	});
+
+	test('no standalone ~N tokens footer line remains', () => {
+		const text = settledThought('hello world', 12, 'thought-b', 60);
+		expect(text).not.toMatch(/\n~\d+ tokens\n/);
+	});
+
+	test('duration-less header still carries the token estimate', () => {
+		const text = settledThought('abcd', undefined, 'thought-c', 60);
+		expect(text).toContain('⚙ Thought · ~1 tokens');
+	});
+
+	test('collapsed previews end on the +N more lines footer', () => {
+		const body = Array.from({length: 20}, (_, i) => `line ${i}`).join('\n');
+		const text = settledThought(body, 12, 'thought-d', 60);
+		const expected =
+			`⚙ Thought (12s) · ~${Math.max(1, Math.ceil(body.length / 4))} tokens`;
+		expect(text).toContain(expected);
+		expect(text).toContain('… +17 more lines');
+		expect(text).not.toMatch(/\n~\d+ tokens\n/);
 	});
 });
 

@@ -212,6 +212,79 @@ export function loadSession(id: string): SessionData | null {
 	}
 }
 
+/**
+ * Resume repair for sessions persisted BEFORE interrupted turns committed
+ * their history to the provider context (the context can lag the
+ * transcript — user messages missing, so a resumed conversation looks
+ * empty to the model). Detects the divergence (context has FEWER user
+ * messages than the transcript) and rebuilds the provider context from the
+ * transcript: user rows verbatim, error rows and reasoning-only rows
+ * skipped, and runs of tool rows reconstructed as one assistant
+ * `tool_calls` message + per-call tool results (the real outputs live in
+ * the transcript's `tool.output`). Pure, unit-tested.
+ */
+export function healResumedContext(
+	context: ChatMessageLike[],
+	messages: ChatMessage[],
+): ChatMessageLike[] {
+	const transcriptUsers = messages.filter(
+		message => message.role === 'user' && !message.error,
+	).length;
+	const contextUsers = context.filter(message => message.role === 'user').length;
+	if (contextUsers >= transcriptUsers) return context;
+
+	const out: ChatMessageLike[] = [];
+	let toolRun: Array<{
+		id?: string;
+		name: string;
+		args?: Record<string, unknown>;
+		output?: string;
+	}> = [];
+	const flushTools = () => {
+		if (toolRun.length === 0) return;
+		out.push({
+			role: 'assistant',
+			content: '',
+			tool_calls: toolRun.map((tool, index) => ({
+				id: tool.id ?? `call-${index}`,
+				name: tool.name,
+				arguments: JSON.stringify(tool.args ?? {}),
+			})),
+		});
+		for (const tool of toolRun) {
+			out.push({
+				role: 'tool',
+				content: tool.output ?? '',
+				tool_call_id: tool.id ?? '',
+			});
+		}
+		toolRun = [];
+	};
+	for (const message of messages) {
+		if (message.role === 'tool') {
+			toolRun.push({
+				id: message.toolId,
+				name: message.tool?.name ?? '',
+				args: message.tool?.args,
+				output: message.tool?.output,
+			});
+			continue;
+		}
+		flushTools();
+		if (message.role === 'user' && !message.error) {
+			out.push({role: 'user', content: message.content});
+		} else if (
+			message.role === 'assistant' &&
+			!message.error &&
+			message.content.trim()
+		) {
+			out.push({role: 'assistant', content: message.content});
+		}
+	}
+	flushTools();
+	return out;
+}
+
 interface NanocoderSessionFile {
 	id: string;
 	title?: string;

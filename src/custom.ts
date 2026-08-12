@@ -10,6 +10,7 @@
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {cavemanMode} from './state';
 
 export interface ParsedFrontmatter {
 	frontmatter: Record<string, unknown>;
@@ -256,14 +257,46 @@ export function loadCustomTools(): CustomTool[] {
 	return tools;
 }
 
+/**
+ * The harness-shipped caveman skill (see `src/builtin/caveman.md`).
+ * Reads the bundled markdown at runtime so a future caveman update is just a
+ * file replacement; `null` if the file is missing/unreadable.
+ */
+export function builtinCavemanSkill(): Skill | null {
+	try {
+		const file = join(import.meta.dir, 'builtin', 'caveman.md');
+		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
+		return {
+			name: 'caveman',
+			description:
+				typeof frontmatter.description === 'string'
+					? frontmatter.description
+					: '',
+			body,
+			source: file,
+		};
+	} catch {
+		return null;
+	}
+}
+
 export function loadSkills(): Skill[] {
 	const skills: Skill[] = [];
+	// Caveman is bundled with the harness and ON by default; the settings
+	// toggle gates it. A project/global `caveman.md` wins over the built-in
+	// on name conflict (project wins, same as command/skill layering).
+	const builtin = cavemanMode() ? builtinCavemanSkill() : null;
+	if (builtin) skills.push(builtin);
 	for (const file of findFiles('skills')) {
 		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
 		const name = (
 			(typeof frontmatter.name === 'string' ? frontmatter.name : '') ||
 			(file.split('/').pop()?.replace(/\.md$/, '') ?? '')
 		);
+		if (builtin && name === 'caveman') {
+			const builtinIndex = skills.indexOf(builtin);
+			if (builtinIndex >= 0) skills.splice(builtinIndex, 1);
+		}
 		const subscribe = frontmatter.subscribe;
 		skills.push({
 			name,
