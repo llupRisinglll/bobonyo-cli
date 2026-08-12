@@ -28,6 +28,24 @@ describe('parseVizData', () => {
 		]);
 	});
 
+	test('heat statuses parse from strings and booleans', () => {
+		expect(
+			parseVizData([
+				{label: 'login', status: 'passed'},
+				{label: 'pay', status: 'failed'},
+				{label: 'run', status: 'running'},
+				{label: 'ok', value: true},
+				{label: 'bad', value: false},
+			]),
+		).toEqual([
+			{label: 'login', value: 0, status: 'pass'},
+			{label: 'pay', value: 0, status: 'fail'},
+			{label: 'run', value: 0, status: 'run'},
+			{label: 'ok', value: 1, status: 'pass'},
+			{label: 'bad', value: 0, status: 'fail'},
+		]);
+	});
+
 	test('CSV-style lines label,value', () => {
 		expect(parseVizData('bash,4\nread,2')).toEqual([
 			{label: 'bash', value: 4},

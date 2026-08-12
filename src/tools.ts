@@ -379,8 +379,10 @@ registerTool('execute_bash', {
 
 registerTool('monitor', {
 	description:
-		'Read the current status and recent output of a background task. ' +
-		'Use list_background_tasks to see what is running first.',
+		'Read the current status and recent output of ONE background task ' +
+		'(task_id required). Prefer list_background_tasks for an overview and ' +
+		'visualize for progress; NEVER call this repeatedly to poll a task — ' +
+		'check once after a reasonable wait instead.',
 	execute(args) {
 		const taskId = text(args, 'task_id') || text(args, 'id');
 		const task = bgTasks().find(t => t.id === taskId);
@@ -394,8 +396,10 @@ registerTool('monitor', {
 registerTool('list_background_tasks', {
 	description:
 		'List every running/completed background task with its status, ' +
-		'elapsed time, and output tail. Prefer this over blind monitor calls ' +
-		'so the user sees one overview instead of repeated monitor rows.',
+		'elapsed time, and output tail as a TABLE. Prefer this over blind ' +
+		'monitor calls so the user sees one overview instead of repeated ' +
+		'monitor rows. After long-running work (worktrees, e2e suites, CI), ' +
+		'call this or visualize to summarize progress.',
 	execute() {
 		const tasks = bgTasks();
 		if (tasks.length === 0) return 'No background tasks.';
@@ -418,10 +422,15 @@ registerTool('list_background_tasks', {
 registerTool('visualize', {
 	description:
 		'Render numbers as a REAL-TIME chart UI the user can read at a glance. ' +
-		"kind: 'bar' | 'line' | 'table'. data: JSON array of numbers, JSON " +
-		"array of {label,value} objects, or CSV lines 'label,value'. " +
-		'Use this instead of dumping raw numbers when summarizing stats, ' +
-		'progress, timings, git counts, or any series.',
+		"kind: 'bar' | 'line' | 'heat' | 'spark'. data: JSON array of " +
+		"{label, value} objects (or {label, value, status}), or CSV lines " +
+		"'label,value'. HEAT example: data: [{label: 'login.spec.ts', " +
+		"status: 'passed'}, {label: 'pay.spec.ts', status: 'failed'}] — " +
+		'status accepts passed/failed/running or true/false, and renders ' +
+		'✓ pass / ✗ fail / ◐ run rows. Use this INSTEAD of dumping raw ' +
+		'numbers when summarizing stats, progress, timings, git counts, ' +
+		'test runs, or any series. Use chartId to update the SAME card ' +
+		'across repeated calls.',
 	readOnly: true,
 	async execute(args, ctx) {
 		const kind = text(args, 'kind') || 'bar';

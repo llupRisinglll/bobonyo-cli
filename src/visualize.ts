@@ -45,13 +45,37 @@ export function parseVizData(
 				if (item && typeof item === 'object') {
 					const record = item as Record<string, unknown>;
 					const label = String(record.label ?? record.name ?? record.key ?? '');
-					const value = Number(record.value ?? record.count ?? record.total ?? 0);
+					// Accept boolean pass/fail (true/false, "passed"/"failed")
+					// so heat cards work with natural agent output. Booleans
+					// map to 1 (pass) / 0 (fail); "passed"/"failed" strings
+					// set the status directly and value 0.
+					const rawValue = record.value ?? record.count ?? record.total;
+					let value = Number(rawValue ?? 0);
+					if (!Number.isFinite(value)) value = 0;
+					let status: string | undefined;
+					if (typeof rawValue === 'boolean') {
+						value = rawValue ? 1 : 0;
+						status = rawValue ? 'pass' : 'fail';
+					} else if (
+						typeof record.status === 'string' &&
+						['pass', 'passed', 'fail', 'failed', 'run', 'running'].includes(
+							record.status.toLowerCase(),
+						)
+					) {
+						status = record.status.toLowerCase();
+						if (status === 'passed') status = 'pass';
+						if (status === 'failed') status = 'fail';
+						if (status === 'running') status = 'run';
+					} else if (
+						typeof rawValue === 'string' &&
+						['passed', 'failed'].includes(rawValue.toLowerCase())
+					) {
+						status = rawValue.toLowerCase() === 'passed' ? 'pass' : 'fail';
+					}
 					return {
 						label,
-						value: Number.isFinite(value) ? value : 0,
-						...(record.status
-							? {status: String(record.status)}
-							: {}),
+						value,
+						...(status ? {status} : {}),
 					};
 				}
 				return null;

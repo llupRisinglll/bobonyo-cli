@@ -241,6 +241,9 @@ export function ChartHeat(props: {
 		if (status === 'run' || status === 'running') return '◐ run';
 		return status ?? '—';
 	};
+	const passed = props.points.filter(p => p.status === 'pass' || p.status === 'passed').length;
+	const failed = props.points.filter(p => p.status === 'fail' || p.status === 'failed').length;
+	const running = props.points.filter(p => p.status === 'run' || p.status === 'running').length;
 	return (
 		<box flexDirection="column">
 			<box flexDirection="row">
@@ -270,6 +273,12 @@ export function ChartHeat(props: {
 					</box>
 				)}
 			</For>
+			<Show when={props.points.length > 0}>
+				<text fg={colors().secondary} attributes={dim()}>
+					{passed} passed · {failed} failed · {running} running ·{' '}
+					{props.points.length} total
+				</text>
+			</Show>
 		</box>
 	);
 }

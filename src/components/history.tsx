@@ -530,7 +530,7 @@ export function History(props: {height?: number}) {
 					const title =
 						typeof message.tool.args?.title === 'string'
 							? message.tool.args.title
-							: 'Visualization';
+							: 'Values';
 					const kind =
 						typeof message.tool.args?.kind === 'string'
 							? message.tool.args.kind
