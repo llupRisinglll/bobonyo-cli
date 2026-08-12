@@ -438,6 +438,10 @@ export function History(props: {height?: number}) {
 	 * rebuilt every 100ms tick.
 	 */
 	const settledBlocks = createMemo(() => {
+		// The memo must depend on the REAL-TIME store so chart cards re-run
+		// when the visualize tool publishes points (OpenTUI's reconciler
+		// only re-renders the For children when this memo re-runs).
+		const storeTick = vizData();
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
 		// the full-row-bg code blocks instead of keeping the old-width chunks.
@@ -1090,7 +1094,6 @@ export function History(props: {height?: number}) {
 								title={chartBlock.chart.title}
 								kind={chartBlock.chart.kind}
 								running={chartBlock.chart.running}
-								getData={(toolId) => vizData()[toolId]}
 							/>
 						);
 					}

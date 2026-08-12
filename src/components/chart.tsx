@@ -3,6 +3,7 @@ import {createTextAttributes} from '@opentui/core';
 import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import type {VizPoint} from '../viz-store';
+import {vizData} from '../viz-store';
 
 /**
  * Parse streamed chart lines into points. Accepts:
@@ -42,7 +43,14 @@ export function ChartBar(props: {
 }) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
-	const max = Math.max(1, ...props.points.map(point => Math.abs(point.value)));
+	// EMPTY-STATE GUARD: with no points (the card mounts before the first
+	// publish) `Math.max(1, ...[])` = 1 would make every later bar render at
+	// 100% width until the true max arrives. Track a minimum max so the
+	// first bar is proportional to the first value instead of full-width.
+	const max = Math.max(
+		1,
+		...props.points.map(point => Math.abs(point.value)),
+	);
 	const barWidth = 34;
 	return (
 		<box flexDirection="column">
@@ -56,8 +64,17 @@ export function ChartBar(props: {
 					</text>
 				</Show>
 			</box>
+			<Show when={props.points.length > 0} fallback={
+				<text fg={colors().secondary} attributes={dim()}>
+					waiting for data…
+				</text>
+			}>
 			<For each={props.points}>
-				{(point) => (
+				{(point) => {
+					const barW = Math.round(
+						(Math.abs(point.value) / max) * barWidth,
+					);
+					return (
 					<box flexDirection="row" height={1}>
 						<text
 							width={22}
@@ -68,18 +85,12 @@ export function ChartBar(props: {
 						</text>
 						<text fg={colors().secondary}>│</text>
 						<box
-							width={Math.max(
-								1,
-								Math.round((Math.abs(point.value) / max) * barWidth),
-							)}
+							width={Math.max(1, barW)}
 							backgroundColor={colors().primary}
 						>
 							<text fg={colors().base}>
 								{' '.repeat(
-									Math.max(
-										1,
-										Math.round((Math.abs(point.value) / max) * barWidth),
-									),
+									Math.max(1, barW),
 								)}
 							</text>
 						</box>
@@ -87,8 +98,10 @@ export function ChartBar(props: {
 							{' '}{Math.round(point.value)}
 						</text>
 					</box>
-				)}
+					);
+				}}
 			</For>
+			</Show>
 			<text fg={colors().secondary} attributes={dim()}>
 				{' '.repeat(23)}└ scale: 0 … {Math.round(max)}
 			</text>
@@ -271,35 +284,41 @@ export function VizCard(props: {
 	toolId: string;
 	title: string;
 	kind: string;
-	getData: (toolId: string) => {title: string; kind: string; points: VizPoint[]} | undefined;
 	running?: boolean;
 }) {
-	const data = () => props.getData(props.toolId);
-	const points = () => data()?.points ?? [];
+	// Read the store signal DIRECTLY in the component body so OpenTUI's
+	// reconciler tracks the dependency and re-renders the card IN PLACE as
+	// the tool publishes points (a prop-function indirection was invisible
+	// to the reconciler — the card only re-rendered on mount/settle).
+	// NOTE: vizData() is read HERE (not inside a memo) so the reconciler
+	// subscribes this component to the store signal.
+	// Read the store DIRECTLY in the render body (the spinner pattern: a
+	// signal read in the JSX path is what the reconciler tracks).
+	const chartPoints = vizData()[props.toolId]?.points ?? [];
 	return (
 		<box flexDirection="column" paddingX={1} paddingY={1}>
 			{props.kind === 'line' ? (
 				<ChartLine
 					title={props.title}
-					points={points()}
+					points={chartPoints}
 					running={props.running}
 				/>
 			) : props.kind === 'spark' || props.kind === 'sparkline' ? (
 				<ChartSpark
 					title={props.title}
-					points={points()}
+					points={chartPoints}
 					running={props.running}
 				/>
 			) : props.kind === 'heat' || props.kind === 'status' ? (
 				<ChartHeat
 					title={props.title}
-					points={points()}
+					points={chartPoints}
 					running={props.running}
 				/>
 			) : (
 				<ChartBar
 					title={props.title}
-					points={points()}
+					points={chartPoints}
 					running={props.running}
 				/>
 			)}
