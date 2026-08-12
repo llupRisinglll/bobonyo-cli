@@ -60,8 +60,11 @@ export function DetailsModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const cardWidth = () => Math.min(96, Math.max(60, dims().width - 4));
 	const cardHeight = () => {
+		// RESPONSIVE: use nearly the whole terminal height (like the
+		// commands modal) so long details need less scrolling — only the
+		// screen bounds it, never a fixed 30-row cap.
 		const available = Math.max(8, dims().height - 2);
-		return Math.min(30, available);
+		return available;
 	};
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
