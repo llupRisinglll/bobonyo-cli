@@ -70,6 +70,7 @@ import {
 	tokenizeThought,
 	tokenizeTaskRow,
 	tokenizeToolRow,
+	tokenizeCommandRow,
 	tokenizeWarningRow,
 	tokenizeUserMessage,
 	type RowStatus,
@@ -301,6 +302,14 @@ export function History(props: {height?: number}) {
 						String(token.lang ?? '').split(':')[2] ?? '',
 					),
 			}),
+		commandrow: (token, status) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () =>
+					tokenizeCommandRow(token.text ?? '', status, colors()),
+			}),
 		taskrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
@@ -461,17 +470,23 @@ export function History(props: {height?: number}) {
 		for (let i = 0; i < all.length; i++) {
 			const message = all[i]!;
 			if (message.role === 'user') {
+				// Triggered commands/skills render as TOOL-STYLE blocks
+				// (`✦ Triggered a Command(name)` + body preview + `+N more
+				// lines`) instead of echoing the injected body as a plain
+				// multi-line user message.
+				if (message.command) {
+					const key = `command-${i}`;
+					const rendered = renderCommandBlock(message.command, key);
+					pushBlock(rendered.text, rendered.blockKey);
+					continue;
+				}
 				// User messages render as a surface-filled `❯ content` block
-				// (parity: nanocoder's arrow-style UserMessage background).
-				const keys = Object.keys(message.attachments ?? {}).join('');
-				pushBlock(
-					fence(
-						'usermsg',
-						'done',
-						`❯ ${message.content}`,
-						keys ? `a${keys}` : '',
-					),
-				);
+				// (parity: nanocoder's arrow-style UserMessage background),
+				// capped at USER_PREVIEW_LINES with a clickable
+				// `+N more lines` footer that opens the full text.
+				const userKey = `user-${i}`;
+				const userBlock = renderUserBlock(message, userKey);
+				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
 				// RUNNING tool rows render in the LIVE region (their output
 				// streams). Including them here would re-read liveOutputs,
@@ -807,7 +822,13 @@ export function History(props: {height?: number}) {
 			setHoveredBlock(null);
 			const details = compactDetails.get(range.key);
 			if (details) {
-				setDetailsTitle(renderText[range.start] ?? 'Tool details');
+				setDetailsTitle(
+					range.key.startsWith('user-')
+						? 'User message'
+						: range.key.startsWith('command-')
+							? 'Triggered command'
+							: (renderText[range.start] ?? 'Tool details'),
+				);
 				setDetailsContent(details);
 				setDetailsOpen(true);
 				return;
@@ -1226,6 +1247,64 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 		);
 		return [{text: compactToolBlock(block, key), blockKey: key}];
 	});
+}
+
+/**
+ * Triggered-command block (custom commands / skills / subscribe auto-
+ * triggers), tool-row format: `✦ Triggered a Command(name)` header, the
+ * injected body preview (FIRST 10 lines) under a `  └   ` container, and a
+ * `+N more lines` footer. Clicking the block opens the full body in the
+ * details modal (same expand mechanism as the tool rows). Only the word
+ * `Command` is primary; the rest is secondary (parity: tool rows).
+ */
+const COMMAND_PREVIEW_LINES = 10;
+/** User messages are capped for display; the footer opens the full text. */
+const USER_PREVIEW_LINES = 12;
+
+export function renderCommandBlock(
+	command: NonNullable<ChatMessage['command']>,
+	key: string,
+): {text: string; blockKey: string} {
+	const body = command.body.trim();
+	compactDetails.set(key, body);
+	const lines = body.split('\n');
+	const expanded = expandedBlocks()[key] ?? toolsExpanded();
+	const preview = expanded
+		? lines
+		: lines.slice(0, COMMAND_PREVIEW_LINES);
+	const bodyText = preview
+		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
+		.join('\n');
+	const hidden = lines.length - preview.length;
+	const footer = hidden > 0 ? `\n     … +${hidden} more lines` : '';
+	const header = `✦ Triggered a ${command.kind === 'skill' ? 'Skill' : 'Command'}(${command.name})`;
+	return {
+		text: fence('commandrow', 'done', `${header}\n${bodyText}${footer}`),
+		blockKey: key,
+	};
+}
+
+/**
+ * User message block: `❯ content` on the surface background, capped to
+ * USER_PREVIEW_LINES for display with a `+N more lines` footer. Clicking the
+ * block opens the FULL text in the details modal (the cap matches the tool
+ * rows, the background matches the original nanocoder's UserMessage).
+ */
+export function renderUserBlock(
+	message: ChatMessage,
+	key: string,
+): {text: string; blockKey: string} {
+	const content = message.content;
+	const lines = content.replace(/\n+$/, '').split('\n');
+	compactDetails.set(key, content);
+	const keys = Object.keys(message.attachments ?? {}).join('');
+	const hidden = lines.length - USER_PREVIEW_LINES;
+	const preview = hidden > 0 ? lines.slice(0, USER_PREVIEW_LINES) : lines;
+	const text = preview.join('\n') + (hidden > 0 ? `\n     … +${hidden} more lines` : '');
+	return {
+		text: fence('usermsg', 'done', `❯ ${text}`, keys ? `a${keys}` : ''),
+		blockKey: key,
+	};
 }
 
 function singleToolRow(message: ChatMessage, key: string): string {

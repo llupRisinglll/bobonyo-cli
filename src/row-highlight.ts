@@ -213,6 +213,39 @@ export function tokenizeToolRow(
 	}, defaultFg);
 }
 
+/**
+ * Triggered-command row (`✦ Triggered a Command(name)`): ONLY the word
+ * `Command` is primary (the tool-name convention); the glyph, `Triggered a`,
+ * the parenthesized name and the `└` body all stay secondary (parity: the
+ * user asked for the same format as tools).
+ */
+export function tokenizeCommandRow(
+	text: string,
+	status: RowStatus,
+	colors: Colors,
+): TextChunk[] {
+	const palette = themeColors(colors);
+	const defaultFg = palette.fg.text;
+	const lines = text.replace(/\n+$/, '').split('\n');
+	return emitLines(lines, (line, _index, isHeader) => {
+		if (isHeader) {
+			const m = line.match(
+				/^([✦⚙]\s*)(.*?\s)(Command|Skill)(\s*\(.*)$/,
+			);
+			if (m) {
+				return [
+					chunk(m[1] ?? '', glyphColor(status, palette)),
+					chunk(m[2] ?? '', palette.fg.secondary),
+					chunk(m[3] ?? '', palette.fg.primary, bold()),
+					chunk(m[4] ?? '', palette.fg.secondary),
+				];
+			}
+			return headerChunks(line, status, palette, defaultFg);
+		}
+		return [chunk(line, palette.fg.secondary, dim())];
+	}, defaultFg);
+}
+
 /** Bash row: header with a bash-highlighted command, secondary output. */
 export function tokenizeBashRow(
 	text: string,
@@ -671,7 +704,9 @@ export function tokenizeUserMessage(
 	};
 	// The fenced token text carries a leading blank line after the opener,
 	// KEEP it as the bg-free breakline BEFORE the message (the separator is
-	// required; only its BACKGROUND was wrong). Blank rows render plain.
+	// required; only its BACKGROUND was wrong). Blank rows INSIDE the message
+	// (index > 0) keep the surface background so multi-line user messages
+	// read as ONE solid block, breaklines included.
 	const lines = text.replace(/\n+$/, '').split('\n');
 	// The message block's background spans the WHOLE row, not just the text
 	// (multi-line user messages read as one solid highlighted block).
@@ -682,9 +717,24 @@ export function tokenizeUserMessage(
 			? [...chunks, {...chunk(' '.repeat(padding), palette.fg.text), bg}]
 			: chunks;
 	};
-	return emitLines(lines, (line, _index, isHeader) => {
+	return emitLines(lines, (line, index, isHeader) => {
 		if (!line.trim()) {
-			return [chunk(line, palette.fg.text)];
+			// The leading blank separator (index 0) stays bg-free; interior
+			// paragraph breaklines get the same full-row surface.
+			if (index === 0) return [chunk(line, palette.fg.text)];
+			return fill(
+				[{...chunk(line, palette.fg.text), bg}],
+				line.length,
+			);
+		}
+		// The `+N more lines` footer (user messages capped for display)
+		// renders secondary-dim INSIDE the surface, consistent with tool
+		// footers.
+		if (/^\s*… \+(\d+) more lines/.test(line) && !isHeader) {
+			return fill(
+				[{...chunk(line, palette.fg.secondary, dim()), bg}],
+				line.length,
+			);
 		}
 		const m = line.match(/^(❯\s*)(.*)$/);
 		if (m && isHeader) {

@@ -35,6 +35,14 @@ export interface ChatMessage {
 	toolStats?: {durationSec?: number; toolCalls?: number};
 	/** Tool-call id for live output updates (running rows). */
 	toolId?: string;
+	/**
+	 * A triggered command/skill body sent to the LLM (custom commands,
+	 * skills, subscribe auto-triggers). The transcript renders it as a
+	 * tool-style `✦ Triggered a Command(name)` block instead of echoing the
+	 * injected body as a plain user message (parity: nanocoder's
+	 * `[Executing custom command: …]` marker + UserMessage collapse).
+	 */
+	command?: {kind: 'command' | 'skill'; name: string; body: string};
 }
 
 // Messages only ever APPEND (rows mount once with their final content). The

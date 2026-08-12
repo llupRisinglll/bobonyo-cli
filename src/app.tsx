@@ -972,7 +972,11 @@ export function App() {
 			appendInfo(`Custom command /${name} has an empty prompt.`);
 			return;
 		}
-		void submit(prompt);
+		void submit(prompt, undefined, {
+			kind: 'command',
+			name: command.name,
+			body: prompt,
+		});
 	};
 
 	/** B15: consecutive identical noop traces collapse into one `×N` row. */
@@ -1384,6 +1388,7 @@ export function App() {
 	const submit = async (
 		value: string,
 		attachments?: Record<string, string>,
+		command?: {kind: 'command' | 'skill'; name: string; body: string},
 	) => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
@@ -1539,7 +1544,7 @@ export function App() {
 
 		// The transcript shows the ORIGINAL user text; the provider sees the
 		// prompt with vision-description blocks substituted for [Image #N].
-		await runTurn(value, prompt, attachments);
+		await runTurn(value, prompt, attachments, command);
 		processQueue();
 	};
 
@@ -1547,6 +1552,7 @@ export function App() {
 		value: string,
 		providerValue: string = value,
 		attachments?: Record<string, string>,
+		command?: {kind: 'command' | 'skill'; name: string; body: string},
 	) => {
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
@@ -1569,6 +1575,7 @@ export function App() {
 			...(attachments && Object.keys(attachments).length > 0
 				? {attachments}
 				: {}),
+			...(command ? {command} : {}),
 		});
 		const userMsg = {
 			role: 'user' as const,
@@ -1614,6 +1621,15 @@ export function App() {
 					...history,
 					{role: 'user', content: command.body.trim()},
 				];
+				appendMessage({
+					role: 'user',
+					content: `/${command.name} (auto-triggered)`,
+					command: {
+						kind: 'command',
+						name: command.name,
+						body: command.body.trim(),
+					},
+				});
 				appendInfo(
 					`Auto-triggered custom command /${command.name} (subscribe).`,
 				);
@@ -1627,6 +1643,15 @@ export function App() {
 				)
 			) {
 				history = [...history, {role: 'user', content: skill.body.trim()}];
+				appendMessage({
+					role: 'user',
+					content: `/skill:${skill.name} (auto-triggered)`,
+					command: {
+						kind: 'skill',
+						name: skill.name,
+						body: skill.body.trim(),
+					},
+				});
 				appendInfo(`Auto-triggered skill ${skill.name} (subscribe).`);
 			}
 		}
