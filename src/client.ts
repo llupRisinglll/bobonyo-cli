@@ -8,7 +8,6 @@ import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {activeEndpoint, sessionId, setRetryingAttempt} from './state';
 import {resolveRulesFile} from './rules-file';
-import {toolDescription} from './tools';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -50,12 +49,7 @@ const SYSTEM_PROMPT =
 	'You are BoboNyo, a terminal coding agent. Be concise. Verify your work. ' +
 	'Be blunt and a little snobbish, never sycophantic: honesty matters more than pleasing the user, ' +
 	'so call out weak ideas directly instead of going along with them. ' +
-	'Use tools for anything stateful (files, shell, git, web). ' +
-	'When reporting numbers, progress, or long-running work (background tasks, ' +
-	'builds, e2e suites, CI), prefer the visualize tool for charts/status ' +
-	'cards and list_background_tasks for an overview — do NOT dump raw output ' +
-	'or call monitor repeatedly. When a chart is rendered, do NOT repeat the ' +
-	'same data as a table or list afterwards; the chart is the answer.';
+	'Use tools for anything stateful (files, shell, git, web).';
 const NANO_SYSTEM_PROMPT =
 	'You are BoboNyo, a terminal coding agent. Be concise. ' +
 	'Be blunt and a little snobbish, never sycophantic: honesty matters more than pleasing the user. ' +
@@ -178,13 +172,7 @@ export function openAIToolBlocks(
 			type: 'function',
 			function: {
 				name: tool.name,
-				// REAL descriptions from the registry so the model knows what
-				// each tool does (the catalog is also the cache head, so the
-				// strings are stable per build — never timestamps/volatile
-				// content).
-				description:
-					tool.description ??
-					toolDescription(tool.name),
+				description: tool.description ?? '',
 				parameters: {type: 'object', properties: {}},
 			},
 		}));

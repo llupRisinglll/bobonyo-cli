@@ -7,7 +7,7 @@
 
 import {readFileSync} from 'node:fs';
 import {streamChat, type ChatMessageLike, type MockToolCall} from './client';
-import {bgTasks, PROGRESS_STEP_MARKERS, runBash} from './bash';
+import {bgTasks, runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
@@ -16,8 +16,6 @@ import {
 	resolveWebSearchFallback,
 } from './web-search';
 import type {Mode, ToolProfile} from './settings';
-import {parseVizData, type VizPoint} from './visualize';
-import {publishViz} from './viz-store';
 
 export interface ToolResult {
 	tool_call_id: string;
@@ -27,16 +25,12 @@ export interface ToolResult {
 export interface ToolContext {
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
-	/** Tool-call id (charts publish under it so the card can subscribe). */
-	toolId?: string;
 }
 
 interface ToolDef {
 	execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string> | string;
 	/** Read-only tools never require approval (B16/D4 default). */
 	readOnly?: boolean;
-	/** What the tool does — sent to the model in the tool catalog. */
-	description?: string;
 }
 
 const toolRegistry = new Map<string, ToolDef>();
@@ -47,11 +41,6 @@ export function registerTool(name: string, def: ToolDef): void {
 
 export function listTools(): string[] {
 	return [...toolRegistry.keys()];
-}
-
-/** Description for a registered tool (the model's tool catalog). */
-export function toolDescription(name: string): string {
-	return toolRegistry.get(name)?.description ?? '';
 }
 
 /** Mutation tools require approval in `normal` mode (B16). */
@@ -68,8 +57,7 @@ const READ_ONLY_TOOLS = new Set([
 	'skill',
 	'check_skill',
 	'agent',
-	'list_background_tasks',
-	'visualize',
+	'monitor',
 ]);
 
 export function requiresApproval(
@@ -99,6 +87,7 @@ const PLAN_EXCLUDED = new Set([
 	'diff_edit',
 	'file_op',
 	'execute_bash',
+	'monitor',
 	'write_tasks',
 	'git_add',
 	'git_commit',
@@ -135,6 +124,7 @@ const NANO_TOOLS = new Set([
 	'diff_edit',
 	'write_file',
 	'execute_bash',
+	'monitor',
 	'web_search',
 	'search_file_contents',
 ]);
@@ -145,6 +135,7 @@ const MINIMAL_TOOLS = new Set([
 	'write_file',
 	'string_replace',
 	'diff_edit',
+	'monitor',
 	'search_file_contents',
 	'find_files',
 	'web_search',
@@ -373,129 +364,14 @@ registerTool('execute_bash', {
 	},
 });
 
-registerTool('list_background_tasks', {
-	description:
-		'List every running/completed background task with its status, ' +
-		'elapsed time, and output tail as a TABLE. Call this ONCE per check, ' +
-		'NOT in a loop. If a task is still running, report the progress and ' +
-		'stop; you may use visualize to show the progress chart. NEVER use ' +
-		'monitor for polling.',
-	execute() {
-		const tasks = bgTasks();
-		if (tasks.length === 0) return 'No background tasks.';
-		// Progress chart: each task's recognized milestone as a bar, so a
-		// worktree/e2e build reads as a progress card instead of raw lines.
-		const progressLines = tasks
-			.map(task => {
-				const steps = task.progress.map(p => p.step);
-				const label = `${task.id} (${task.running ? 'running' : `exit ${task.exitCode ?? '?'}`})`;
-				if (steps.length === 0) {
-					return `${label}:0:${PROGRESS_STEP_MARKERS.length}`;
-				}
-				const total = PROGRESS_STEP_MARKERS.length;
-				return `${label}:${steps.length}:${total}`;
-			})
-			.join('\n');
-		// ASCII progress bars per task: `[█████░░░░░] 4/7 steps`.
-		const bars = tasks
-			.map(task => {
-				const total = PROGRESS_STEP_MARKERS.length;
-				const done = Math.min(total, task.progress.length);
-				const filled = Math.round((done / Math.max(1, total)) * 20);
-				const bar = '█'.repeat(filled) + '░'.repeat(Math.max(0, 20 - filled));
-				const status = task.running
-					? 'running'
-					: `exit ${task.exitCode ?? '?'}`;
-				const steps = task.progress.map(p => p.step).join(', ');
-				return `  ${task.id} [${bar}] ${done}/${total} ${status}${steps ? ` — ${steps}` : ''}`;
-			})
-			.join('\n');
-		// Markdown table — the built-in markdown formatter renders it (the
-		// dedicated table VISUALIZATION is not needed).
-		const rows = tasks.map(
-			task =>
-				`| ${task.id} | ${task.running ? 'running' : `exit ${task.exitCode ?? '?'}`} | ` +
-				`${Math.round((Date.now() - task.startedAt) / 1000)}s | ` +
-				`${task.command.slice(0, 50)} | ${task.output.slice(-1).join('').slice(0, 30)} | ` +
-				`${task.progress.length}/${PROGRESS_STEP_MARKERS.length} steps |`,
-		);
-		return (
-			`Progress:\n${bars || '  (no progress markers yet)'}\n\n` +
-			`Steps: ${progressLines}\n\n` +
-			`| id | status | elapsed | command | tail | steps |\n` +
-			`|---|---|---|---|---|---|\n` +
-			rows.join('\n')
-		);
-	},
-});
-
-// `monitor` stays registered ONLY so legacy calls (mock worktree scenarios)
-// resolve; it returns a redirect instead of task output, so the agent is
-// forced toward list_background_tasks / visualize.
 registerTool('monitor', {
-	description:
-		'DEPRECATED. Use list_background_tasks (overview table) and visualize ' +
-		'(chart) for progress. This tool returns no task output.',
-	execute() {
-		return (
-			'[monitor deprecated] Call list_background_tasks for the overview ' +
-			'table, then visualize for charts. No output returned.'
-		);
-	},
-});
-
-registerTool('visualize', {
-	description:
-		'Render numbers as a REAL-TIME chart UI the user can read at a glance. ' +
-		"kind: 'bar' | 'line' | 'heat' | 'spark'. data: JSON array of " +
-		"{label, value} objects (or {label, value, status}), or CSV lines " +
-		"'label,value'. HEAT example: data: [{label: 'login.spec.ts', " +
-		"status: 'passed'}, {label: 'pay.spec.ts', status: 'failed'}] — " +
-		'status accepts passed/failed/running or true/false, and renders ' +
-		'✓ pass / ✗ fail / ◐ run rows. Use this INSTEAD of dumping raw ' +
-		'numbers when summarizing stats, progress, timings, git counts, ' +
-		'test runs, or any series. Use chartId to update the SAME card ' +
-		'across repeated calls. IMPORTANT: the chart IS your final answer — ' +
-		'after calling visualize, do NOT also write the same numbers as a ' +
-		'table, list, or text recap. One short sentence of insight maximum.',
-	readOnly: true,
-	async execute(args, ctx) {
-		const kind = text(args, 'kind') || 'bar';
-		const title = text(args, 'title') || 'Values';
-		const chartId =
-			(typeof args.chartId === 'string' && args.chartId) || title;
-		const points = parseVizData(args.data ?? args.values ?? args.rows);
-		if (points.length === 0) return 'No data to visualize.';
-		// REAL-TIME: stream the points one by one so the chart GROWS live in
-		// the transcript (each `label:value` line is parsed by the chart
-		// component as it arrives). The settled row renders the full chart
-		// from the final output.
-		let acc = '';
-		for (const point of points) {
-			acc = acc ? `${acc}\n${point.label}:${point.value}` : `${point.label}:${point.value}`;
-			ctx.onProgress?.(acc);
-			// PUBLISH to the real-time store: the chart card in the
-			// transcript reads this signal and grows in place.
-			const published: VizPoint[] = [];
-			for (const line of acc.split('\n')) {
-				const [label, value] = line.split(':');
-				const n = Number(value);
-				if (label && Number.isFinite(n)) {
-					const original = points.find(p => p.label === label);
-					published.push({
-						label,
-						value: n,
-						...(original?.status ? {status: original.status} : {}),
-					});
-				}
-			}
-			// PUBLISH under the STABLE chart identity: repeated `visualize`
-			// calls with the same chartId update the SAME card (the LLM keeps
-			// calling the tool and the card refreshes, like the task list).
-			publishViz(chartId, title, kind, published);
-			await sleep(600);
-		}
-		return acc;
+	execute(args) {
+		const taskId = text(args, 'task_id') || text(args, 'id');
+		const task = bgTasks().find(t => t.id === taskId);
+		if (!task) return `No background task with ID ${taskId}.`;
+		const status = task.running ? 'running' : `exited ${task.exitCode}`;
+		const tail = task.output.slice(-5).join('\n');
+		return `Task ${task.id}: ${status}\n${tail}`;
 	},
 });
 

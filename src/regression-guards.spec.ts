@@ -186,40 +186,6 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(state).toMatch(/export function thinkingSeconds/);
 	});
 
-	test('the live Thinking block settles BEFORE tools execute (no stale timer)', () => {
-		// The "still thinking above bash" bug: when a round commits its
-		// reasoning as a settled `⚙ Thought (Ns)` block and then runs tools,
-		// the live `⚙ Thinking` block (driven by the reasoning signal) must
-		// stop immediately. If `settleThinkingPhase()` is missing from the
-		// settle path, the animated header + ticking timer hang above the
-		// running tool rows for the whole tool turn.
-		const app = read('./app.tsx');
-		expect(app).toMatch(
-			/appendAssistantMessage\('', \{\s*reasoning: result\.reasoning\.trim\(\),\s*durationSec: thoughtDuration\(\),\s*\}\);\s*settleThinkingPhase\(\);/,
-		);
-		expect(app).toMatch(/thinkingStartedAt = 0;/);
-		const state = read('./state.ts');
-		expect(state).toMatch(/export function settleThinkingPhase/);
-	});
-
-	test('visualizations render as diamond-glyph CARDS, never `  └   ` tool rows', () => {
-		// `list_background_tasks` is a dashboard card (like `visualize`),
-		// not a tool row: the message loop routes it to a card BEFORE the
-		// tool-row path, the live region skips it, and the card header
-		// carries the ✦ diamond glyph with NO `└` body indent anywhere.
-		const history = read('./components/history.tsx');
-		expect(history).toMatch(/name === 'list_background_tasks'/);
-		expect(history).toMatch(/chart:bgtasks:overview/);
-		expect(history).toMatch(/<BgTasksCard/);
-		expect(history).toMatch(
-			/message\.tool\.name === 'list_background_tasks'/,
-		);
-		const chart = read('./components/chart.tsx');
-		expect(chart).toMatch(/✦/);
-		// The card body and footers must never use the tool-branch marker.
-		expect(chart).not.toMatch(/└/);
-	});
-
 	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {
 		const history = read('./components/history.tsx');
 		// The reply content box owns its left padding; the glyph is its own

@@ -101,12 +101,6 @@ export const MOCK_COMMAND_NAMES = [
 	'mock:steering',
 	'mock:innerdaemon',
 	'mock:scenario',
-	'mock:visualize',
-	'mock:visualize-trend',
-	'mock:visualize-table',
-	'mock:visualize-heat',
-	'mock:visualize-spark',
-	'mock:e2e',
 	'mock:model',
 	'mock:settings',
 ] as const;
@@ -215,12 +209,6 @@ const MOCK_PROMPTS: Record<string, string> = {
 	innerdaemon: 'innerdaemon',
 	confirm: 'confirm',
 	scenario: 'scenario',
-	visualize: 'visualize chart',
-	'visualize-trend': 'visualize trend',
-	'visualize-table': 'visualize table',
-	'visualize-heat': 'visualize heat',
-	'visualize-spark': 'visualize spark',
-	e2e: 'e2e progress',
 };
 
 export interface CommandContext {

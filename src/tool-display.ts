@@ -101,21 +101,6 @@ function formatGenericEntry(
 	if (tool.name === 'write_tasks') {
 		return formatTaskList(tool, status);
 	}
-	// VISUALIZATIONS are never collapsed and never use the `  └   ` tool
-	// container: a chart/table must render in FULL (truncating a bar chart
-	// to 3 lines hides most of the data and defeats the purpose), and the
-	// transcript routes these tools to dedicated CARDS anyway (this branch
-	// is only a non-indented fallback for other surfaces). The output is
-	// already ASCII, so it wraps safely.
-	if (tool.name === 'visualize' || tool.name === 'list_background_tasks') {
-		const output = tool.output.replace(/\s+$/, '');
-		return output
-			? `✦ ${displayToolName(tool.name)}\n${output
-					.split('\n')
-					.map(line => `  ${line}`)
-					.join('\n')}`
-			: `✦ ${displayToolName(tool.name)}`;
-	}
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
 		: `✦ ${displayToolName(tool.name)}`;
