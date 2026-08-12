@@ -104,6 +104,8 @@ export const MOCK_COMMAND_NAMES = [
 	'mock:visualize',
 	'mock:visualize-trend',
 	'mock:visualize-table',
+	'mock:visualize-heat',
+	'mock:visualize-spark',
 	'mock:e2e',
 	'mock:model',
 	'mock:settings',
@@ -216,6 +218,8 @@ const MOCK_PROMPTS: Record<string, string> = {
 	visualize: 'visualize chart',
 	'visualize-trend': 'visualize trend',
 	'visualize-table': 'visualize table',
+	'visualize-heat': 'visualize heat',
+	'visualize-spark': 'visualize spark',
 	e2e: 'e2e progress',
 };
 

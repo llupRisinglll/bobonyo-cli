@@ -856,5 +856,85 @@
       }
     ],
     "stepDelay": 2500
+  },
+  {
+    "keyword": "visualize heat",
+    "tool": {
+      "name": "visualize",
+      "arguments": {
+        "kind": "heat",
+        "title": "E2E suite status",
+        "data": [
+          {
+            "label": "auth.spec.ts",
+            "value": 1200,
+            "status": "pass"
+          },
+          {
+            "label": "checkout.spec.ts",
+            "value": 3400,
+            "status": "run"
+          },
+          {
+            "label": "payments.spec.ts",
+            "value": 2100,
+            "status": "fail"
+          },
+          {
+            "label": "search.spec.ts",
+            "value": 900,
+            "status": "pass"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "keyword": "visualize spark",
+    "tool": {
+      "name": "visualize",
+      "arguments": {
+        "kind": "spark",
+        "title": "E2E pass rate",
+        "data": [
+          {
+            "label": "t1",
+            "value": 3
+          },
+          {
+            "label": "t2",
+            "value": 4
+          },
+          {
+            "label": "t3",
+            "value": 2
+          },
+          {
+            "label": "t4",
+            "value": 5
+          },
+          {
+            "label": "t5",
+            "value": 6
+          },
+          {
+            "label": "t6",
+            "value": 4
+          },
+          {
+            "label": "t7",
+            "value": 7
+          },
+          {
+            "label": "t8",
+            "value": 8
+          },
+          {
+            "label": "t9",
+            "value": 9
+          }
+        ]
+      }
+    }
   }
 ]
