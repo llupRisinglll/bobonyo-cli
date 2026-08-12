@@ -30,6 +30,7 @@ import {
 	loadCustomCommands,
 	loadCustomTools,
 	loadSkills,
+	mapCommandArguments,
 	substituteTemplateVariables,
 } from './custom';
 import {
@@ -966,15 +967,20 @@ export function App() {
 		if (tokens.length < required) {
 			appendInfo(
 				`Usage: /${name} ${spec
-					.map(arg => (arg.required ? `<${arg.name}>` : `[${arg.name}]`))
+					.map(arg =>
+						arg.rest
+							? `[${arg.name}…]`
+							: arg.required
+								? `<${arg.name}>`
+								: `[${arg.name}]`,
+					)
 					.join(' ')}`,
 			);
 			return;
 		}
-		const values: Record<string, string> = {};
-		spec.forEach((arg, index) => {
-			values[arg.name] = tokens[index] ?? '';
-		});
+		// Positional args map one token each; a `rest: true` arg captures
+		// everything after them as ONE value (multi-word purposes).
+		const values = mapCommandArguments(spec, tokens);
 		const prompt = substituteTemplateVariables(command.body, values).trim();
 		if (!prompt) {
 			appendInfo(`Custom command /${name} has an empty prompt.`);

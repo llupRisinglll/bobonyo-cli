@@ -21,6 +21,8 @@ export interface ArgumentSpec {
 	type?: string;
 	required?: boolean;
 	description?: string;
+	/** Capture ALL remaining tokens as ONE value (multi-word purposes). */
+	rest?: boolean;
 }
 
 export interface CustomCommand {
@@ -30,6 +32,30 @@ export interface CustomCommand {
 	body: string;
 	source: string;
 	subscribe?: string[];
+}
+
+/**
+ * Map command tokens to argument values: positional args take one token
+ * each; a `rest: true` arg captures EVERYTHING after the positional ones as
+ * a single value (multi-word purposes like `/worktree purpose: hello world`).
+ * Pure, unit-tested.
+ */
+export function mapCommandArguments(
+	spec: ArgumentSpec[],
+	tokens: string[],
+): Record<string, string> {
+	const values: Record<string, string> = {};
+	let cursor = 0;
+	for (const arg of spec) {
+		if (arg.rest) {
+			values[arg.name] = tokens.slice(cursor).join(' ').trim();
+			cursor = tokens.length;
+		} else {
+			values[arg.name] = tokens[cursor] ?? '';
+			cursor += 1;
+		}
+	}
+	return values;
 }
 
 export interface CustomTool {
@@ -174,8 +200,9 @@ export function loadCustomCommands(): CustomCommand[] {
 							typeof (arg as {type?: unknown}).type === 'string'
 								? String((arg as {type?: unknown}).type)
 								: undefined,
-						required: Boolean((arg as {required?: unknown}).required),
-						description:
+					required: Boolean((arg as {required?: unknown}).required),
+					rest: Boolean((arg as {rest?: unknown}).rest),
+					description:
 							typeof (arg as {description?: unknown}).description === 'string'
 								? String((arg as {description?: unknown}).description)
 								: undefined,
