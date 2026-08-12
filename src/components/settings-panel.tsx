@@ -424,6 +424,11 @@ export function SettingsModal(props: {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [query, setQuery] = createSignal('');
+	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
+	// click's mouse-UP on the backdrop, which would close them instantly.
+	// Ignore the first mouse-up after mount (the opening click's release).
+	let suppressFirstMouseUp = true;
+
 	const [focus, setFocus] = createSignal<'search' | 'list'>('search');
 	const [hoveredRow, setHoveredRow] = createSignal(-1);
 	const [editing, setEditing] = createSignal<SettingsRow | null>(null);
@@ -603,6 +608,7 @@ export function SettingsModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

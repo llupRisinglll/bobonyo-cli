@@ -59,6 +59,11 @@ export function ModelModal(props: {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [query, setQuery] = createSignal('');
+	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
+	// click's mouse-UP on the backdrop, which would close them instantly.
+	// Ignore the first mouse-up after mount (the opening click's release).
+	let suppressFirstMouseUp = true;
+
 
 	const matches = (text: string): boolean => {
 		const q = query().trim().toLowerCase();
@@ -325,6 +330,7 @@ export function ModelModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

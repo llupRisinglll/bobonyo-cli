@@ -34,6 +34,11 @@ export function CommandsModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
 	const [query, setQuery] = createSignal('');
+	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
+	// click's mouse-UP on the backdrop, which would close them instantly.
+	// Ignore the first mouse-up after mount (the opening click's release).
+	let suppressFirstMouseUp = true;
+
 	const [index, setIndex] = createSignal(0);
 
 	const cardWidth = () => Math.min(100, Math.max(72, dims().width - 6));
@@ -199,6 +204,7 @@ export function CommandsModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&
@@ -301,7 +307,7 @@ export function CommandsModal(props: {
 										}
 										attributes={dim()}
 									>
-										{'   '}
+										{' '.repeat(32)}
 										{row.wrapped?.[1] ?? ''}
 									</text>
 								</Show>

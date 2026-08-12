@@ -325,14 +325,24 @@ export function formatOutputTail(output: string, expanded: boolean): string {
 	const cap = expanded ? PREVIEW_EXPANDED_LINES : PREVIEW_COLLAPSED_LINES;
 	const tail = lines.slice(-cap);
 	const hidden = lines.length - tail.length;
-	const body = tail
+	// WRAP WITHIN THE CONTAINER: a raw output line longer than the indent
+	// width would spill past the `  └   ` edge (bash logs, URLs, test
+	// output). Pre-wrap each line so every continuation keeps the indent —
+	// the wrapped text can never escape the container (parity: the wrapped
+	// command lines use the same fixed width).
+	const WRAP = 84;
+	const wrappedLines: string[] = [];
+	for (const line of tail) {
+		for (const piece of wordWrap(line, WRAP)) wrappedLines.push(piece);
+	}
+	const bodyWithWrap = wrappedLines
 		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
 		.join('\n');
 	const footer =
 		hidden > 0
 			? `\n     … +${hidden} line${hidden === 1 ? '' : 's'}`
 			: '';
-	return `${body}${footer}`;
+	return `${bodyWithWrap}${footer}`;
 }
 
 function wordWrap(text: string, width: number): string[] {
@@ -340,6 +350,19 @@ function wordWrap(text: string, width: number): string[] {
 	const lines: string[] = [];
 	let current = '';
 	for (const word of words) {
+		// A single word longer than the width must be HARD-SPLIT (URLs,
+		// long paths, unbroken log lines) so no line can escape the
+		// container (parity: wrapText's long-word handling).
+		if (word.length > width) {
+			if (current) {
+				lines.push(current);
+				current = '';
+			}
+			for (let i = 0; i < word.length; i += width) {
+				lines.push(word.slice(i, i + width));
+			}
+			continue;
+		}
 		if (!current) {
 			current = word;
 			continue;

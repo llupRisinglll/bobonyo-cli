@@ -68,6 +68,10 @@ export function DetailsModal(props: {
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const lines = () => props.content.replace(/\s+$/, '').split('\n');
 	const [scroll, setScroll] = createSignal(0);
+	// AUTO-CLOSE GUARD: the modal opens on the row's mouse-DOWN; the SAME
+	// click's mouse-UP lands on the backdrop and would close it instantly.
+	// Ignore the first mouse-up after mount (the opening click's release).
+	let suppressFirstMouseUp = true;
 
 	// Color each line like the tool rows: `✦ Name(detail)` headers primary,
 	// `└`/indented output + `⎿` summaries secondary, everything else text.
@@ -122,6 +126,7 @@ export function DetailsModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

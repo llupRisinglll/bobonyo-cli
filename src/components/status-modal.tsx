@@ -22,6 +22,8 @@ export function StatusModal(props: {
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
+	// AUTO-CLOSE GUARD: ignore the opening click's mouse-UP on the backdrop.
+	let suppressFirstMouseUp = true;
 	const cardWidth = () => Math.min(76, Math.max(52, dims().width - 8));
 	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -71,6 +73,7 @@ export function StatusModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

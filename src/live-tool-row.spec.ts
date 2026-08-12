@@ -57,4 +57,21 @@ describe('liveRowSegments', () => {
 			settledTail,
 		);
 	});
+
+	test('long output lines wrap INSIDE the └ container (never column 0)', () => {
+		const longLine = 'x'.repeat(200);
+		const tail = formatOutputTail(longLine, false).split('\n');
+		// Every rendered line keeps the indent prefix (`  └   ` first,
+		// `      ` continuations) — nothing can escape the container.
+		expect(tail.length).toBeGreaterThan(1);
+		for (const [index, line] of tail.entries()) {
+			if (line.startsWith('…')) continue;
+			if (index === 0) expect(line.startsWith('  └   ')).toBe(true);
+			else expect(line.startsWith('      ')).toBe(true);
+		}
+		// The wrapped content never exceeds the container width.
+		for (const line of tail) {
+			if (!line.startsWith('…')) expect(line.length).toBeLessThanOrEqual(91);
+		}
+	});
 });

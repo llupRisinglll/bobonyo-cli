@@ -73,6 +73,11 @@ export function SettingsListModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
 	const [index, setIndex] = createSignal(0);
+	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
+	// click's mouse-UP on the backdrop, which would close them instantly.
+	// Ignore the first mouse-up after mount (the opening click's release).
+	let suppressFirstMouseUp = true;
+
 	const [query, setQuery] = createSignal('');
 	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
 	// RESPONSIVE: use as much vertical space as the terminal gives us
@@ -174,6 +179,7 @@ export function SettingsListModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
+					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&
