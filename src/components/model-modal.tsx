@@ -56,6 +56,92 @@ export function connectProviderShortcut(
 	return key === 'c' && focus === 'list';
 }
 
+/**
+ * Next grid cursor for one model-modal navigation step (pure, unit-tested).
+ * `current` is a global index over the flattened model cells; -1 is the
+ * Inherit row. LEFT/RIGHT wrap across provider-group boundaries — LEFT from
+ * the first cell of a group jumps to the PREVIOUS group's last cell and
+ * RIGHT from the last cell jumps to the NEXT group's first cell (they must
+ * stay symmetric); the very first/last cell of the whole grid stay put.
+ */
+export function nextModelCursor(
+	current: number,
+	direction: 'up' | 'down' | 'left' | 'right',
+	groupSizes: number[],
+	columns: number,
+	hasInherit: boolean,
+): number {
+	const total = groupSizes.reduce((sum, size) => sum + size, 0);
+	if (total === 0) return current;
+	if (current === -1) {
+		return direction === 'down' ? 0 : current;
+	}
+	// Locate the provider group + local index for this global cursor.
+	let remaining = current;
+	let groupIndex = 0;
+	while (
+		groupIndex < groupSizes.length &&
+		remaining >= (groupSizes[groupIndex] ?? 0)
+	) {
+		remaining -= groupSizes[groupIndex] ?? 0;
+		groupIndex += 1;
+	}
+	if (groupIndex >= groupSizes.length) return current;
+	const local = remaining;
+	const count = groupSizes[groupIndex] ?? 0;
+	const col = local % columns;
+	const offset = (group: number): number =>
+		groupSizes.slice(0, group).reduce((sum, size) => sum + size, 0);
+	const hasNextGroup = (): boolean =>
+		groupIndex + 1 < groupSizes.length &&
+		(groupSizes[groupIndex + 1] ?? 0) > 0;
+	switch (direction) {
+		case 'left': {
+			if (local > 0) return offset(groupIndex) + local - 1;
+			if (groupIndex > 0) {
+				return (
+					offset(groupIndex - 1) +
+					(groupSizes[groupIndex - 1] ?? 0) -
+					1
+				);
+			}
+			return current;
+		}
+		case 'right': {
+			if (local + 1 < count) return offset(groupIndex) + local + 1;
+			if (hasNextGroup()) return offset(groupIndex + 1);
+			return current;
+		}
+		case 'up': {
+			let next = local - columns;
+			if (next < 0) {
+				const bottomRow = Math.max(0, Math.floor((count - 1) / columns));
+				const bottom = bottomRow * columns + col;
+				next = bottom < count ? bottom : Math.max(0, bottom - columns);
+				if (next === local) {
+					if (groupIndex > 0) {
+						return (
+							offset(groupIndex - 1) +
+							(groupSizes[groupIndex - 1] ?? 0) -
+							1
+						);
+					}
+					if (hasInherit) return -1;
+					return current;
+				}
+			}
+			return offset(groupIndex) + next;
+		}
+		case 'down': {
+			const next = local + columns;
+			if (next < count) return offset(groupIndex) + next;
+			if (hasNextGroup()) return offset(groupIndex + 1);
+			return offset(groupIndex) + (col < count ? col : 0);
+		}
+	}
+	return current;
+}
+
 interface ModelCell {
 	provider: ModelProvider;
 	model: string;
@@ -290,101 +376,22 @@ export function ModelModal(props: {
 		const cells = modelCells();
 		return cursor() >= 0 ? cells[cursor()] : undefined;
 	};
-	/** Map a global cell index to its provider group + local index. */
-	const locateCell = (
-		index: number,
-	): {groupIndex: number; local: number} | null => {
-		const list = groups();
-		let remaining = index;
-		for (let g = 0; g < list.length; g++) {
-			const count = list[g]!.models.length;
-			if (remaining < count) return {groupIndex: g, local: remaining};
-			remaining -= count;
-		}
-		return null;
-	};
-	const groupOffset = (groupIndex: number): number => {
-		const list = groups();
-		let offset = 0;
-		for (let g = 0; g < groupIndex; g++) offset += list[g]!.models.length;
-		return offset;
-	};
-
 	// Grid navigation (row-major per provider group). Moving past a group's
 	// last row jumps to the NEXT group's first cell so long catalogs stay
 	// reachable with ↓ alone; ↑ from a group's first cell wraps to the
-	// previous group's last cell (or the Inherit row).
+	// previous group's last cell (or the Inherit row). LEFT/RIGHT wrap across
+	// group boundaries symmetrically (pure, unit-tested).
 	const moveCell = (direction: 'up' | 'down' | 'left' | 'right'): void => {
-		const cells = modelCells();
-		if (cells.length === 0) return;
-		if (cursor() === -1) {
-			if (direction === 'down') setCursor(0);
-			return;
-		}
-		const located = locateCell(cursor());
-		if (!located) return;
-		const {groupIndex, local} = located;
 		const list = groups();
-		const group = list[groupIndex]!;
-		const count = group.models.length;
-		const cols = modelColumns();
-		const col = local % cols;
-		switch (direction) {
-			case 'left': {
-				if (local > 0) {
-					setCursor(groupOffset(groupIndex) + local - 1);
-				} else if (groupIndex > 0) {
-					// previous group's last cell
-					const prev = list[groupIndex - 1]!;
-					setCursor(groupOffset(groupIndex - 1) + prev.models.length - 1);
-				}
-				return;
-			}
-			case 'right': {
-				if (local + 1 < count) {
-					setCursor(groupOffset(groupIndex) + local + 1);
-				}
-				return;
-			}
-			case 'up': {
-				let next = local - cols;
-				if (next < 0) {
-					// wrap to the bottom of the same column within this group
-					const bottomRow = Math.max(0, Math.floor((count - 1) / cols));
-					const bottom = bottomRow * cols + col;
-					next = bottom < count ? bottom : Math.max(0, bottom - cols);
-					if (next === local) {
-						// already at the group's top: previous group's last cell
-						// or the Inherit row.
-						if (groupIndex > 0) {
-							const prev = list[groupIndex - 1]!;
-							setCursor(
-								groupOffset(groupIndex - 1) + prev.models.length - 1,
-							);
-						} else if (props.inheritLabel) {
-							setCursor(-1);
-						}
-						return;
-					}
-				}
-				setCursor(groupOffset(groupIndex) + next);
-				return;
-			}
-			case 'down': {
-				const next = local + cols;
-				if (next < count) {
-					setCursor(groupOffset(groupIndex) + next);
-					return;
-				}
-				if (groupIndex + 1 < list.length && list[groupIndex + 1]!.models.length > 0) {
-					setCursor(groupOffset(groupIndex + 1));
-					return;
-				}
-				// last group: wrap to the top of the same column
-				setCursor(groupOffset(groupIndex) + (col < count ? col : 0));
-				return;
-			}
-		}
+		setCursor(
+			nextModelCursor(
+				cursor(),
+				direction,
+				list.map(group => group.models.length),
+				modelColumns(),
+				Boolean(props.inheritLabel),
+			),
+		);
 	};
 
 	const selectCell = (cell: ModelCell): void => {

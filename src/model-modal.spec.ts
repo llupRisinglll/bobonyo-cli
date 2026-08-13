@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import {
 	connectProviderShortcut,
 	initialModelRowIndex,
+	nextModelCursor,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
@@ -69,5 +70,60 @@ describe('connectProviderShortcut (C must not fire while searching)', () => {
 	test('no other key triggers it', () => {
 		expect(connectProviderShortcut('list', 'x')).toBe(false);
 		expect(connectProviderShortcut('list', 'C')).toBe(false);
+	});
+});
+
+describe('nextModelCursor (grid navigation, symmetric across groups)', () => {
+	// Groups: mock(1) → codex(4) → custom(2), 2 columns.
+	// Flattened cells: 0 | 1 2 / 3 4 | 5 6
+	const SIZES = [1, 4, 2];
+
+	test('RIGHT from a group last cell wraps to the NEXT group (left parity)', () => {
+		expect(nextModelCursor(4, 'right', SIZES, 2, false)).toBe(5);
+	});
+
+	test('LEFT from a group first cell wraps to the PREVIOUS group last', () => {
+		expect(nextModelCursor(5, 'left', SIZES, 2, false)).toBe(4);
+	});
+
+	test('the very first/last cells stay put (no wrap-around cycle)', () => {
+		expect(nextModelCursor(0, 'left', SIZES, 2, false)).toBe(0);
+		expect(nextModelCursor(6, 'right', SIZES, 2, false)).toBe(6);
+	});
+
+	test('LEFT/RIGHT move within a row and wrap across LINES symmetrically', () => {
+		// codex row 1: 3 | 4 → left from 3 lands on 2 (row 0, last col).
+		expect(nextModelCursor(3, 'left', SIZES, 2, false)).toBe(2);
+		// right from 2 lands on 3 (row 1, first col).
+		expect(nextModelCursor(2, 'right', SIZES, 2, false)).toBe(3);
+		expect(nextModelCursor(1, 'right', SIZES, 2, false)).toBe(2);
+	});
+
+	test('DOWN jumps past the group to the next group first cell', () => {
+		expect(nextModelCursor(4, 'down', SIZES, 2, false)).toBe(5);
+		expect(nextModelCursor(0, 'down', SIZES, 2, false)).toBe(1);
+	});
+
+	test('UP wraps to the bottom of the same column / previous group / Inherit', () => {
+		// codex row 0 col 0 → bottom of column 0 (cell 3), not the previous
+		// group: vertical wrap stays INSIDE a multi-row group.
+		expect(nextModelCursor(1, 'up', SIZES, 2, false)).toBe(3);
+		// A single-row group has nowhere to wrap: previous group's last cell,
+		// or the Inherit row when present.
+		expect(nextModelCursor(0, 'up', SIZES, 2, true)).toBe(-1);
+		expect(nextModelCursor(0, 'up', SIZES, 2, false)).toBe(0);
+	});
+
+	test('Inherit (-1) only moves with DOWN', () => {
+		expect(nextModelCursor(-1, 'down', SIZES, 2, false)).toBe(0);
+		expect(nextModelCursor(-1, 'up', SIZES, 2, false)).toBe(-1);
+		expect(nextModelCursor(-1, 'right', SIZES, 2, false)).toBe(-1);
+	});
+
+	test('ragged last row wraps within the same column', () => {
+		// 3 columns, group of 5: rows 0 1 2 / 3 4 — down from 4 wraps to 1
+		// (top of column 1); up from 1 wraps to the bottom of column 1 (4).
+		expect(nextModelCursor(4, 'down', [5], 3, false)).toBe(1);
+		expect(nextModelCursor(1, 'up', [5], 3, false)).toBe(4);
 	});
 });
