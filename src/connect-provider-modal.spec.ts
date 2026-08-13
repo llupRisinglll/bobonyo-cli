@@ -56,6 +56,8 @@ describe('provider presets (known endpoints, never asked)', () => {
 				'openrouter',
 				'deepseek',
 				'xiaomi',
+				'opencode-zen',
+				'opencode-go',
 				'mistral',
 				'xai',
 				'groq',
@@ -72,6 +74,22 @@ describe('provider presets (known endpoints, never asked)', () => {
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')?.baseUrl,
 		).toBe('https://token-plan-sgp.xiaomimimo.com');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')
+				?.baseUrl,
+		).toBe('https://opencode.ai/zen/v1');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')
+				?.modelDiscoveryUrl,
+		).toBe('https://opencode.ai/zen/v1/models');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')
+				?.baseUrl,
+		).toBe('https://opencode.ai/zen/go/v1');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')
+				?.modelDiscoveryUrl,
+		).toBe('https://opencode.ai/zen/go/v1/models');
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'anthropic')
 				?.sdkProvider,
@@ -157,6 +175,42 @@ describe('provider presets (known endpoints, never asked)', () => {
 		)!;
 		expect(buildPresetProvider(deepseekPreset, 'ds', 'sk-1')?.id).toBe('ds');
 		expect(buildPresetProvider(deepseekPreset, 'ds', '  ')).toBeNull();
+	});
+
+	test('OpenCode Zen connects WITHOUT a key (anonymous free tier)', () => {
+		const zen = PROVIDER_PRESETS.find(
+			preset => preset.id === 'opencode-zen',
+		)!;
+		expect(zen.optionalKey).toBe(true);
+		const provider = buildPresetProvider(zen, 'opencode-zen', '  ');
+		expect(provider).not.toBeNull();
+		expect(provider).toMatchObject({
+			id: 'opencode-zen',
+			baseUrl: 'https://opencode.ai/zen/v1',
+			modelDiscoveryUrl: 'https://opencode.ai/zen/v1/models',
+		});
+		expect(provider!.apiKey).toBeUndefined();
+		// The free models are seeded so the picker works before discovery.
+		expect(provider!.models).toContain('deepseek-v4-flash-free');
+		// A key is still accepted when the user has a subscription.
+		expect(
+			buildPresetProvider(zen, 'opencode-zen', 'sk-zen')?.apiKey,
+		).toBe('sk-zen');
+	});
+
+	test('OpenCode Go requires a subscription key', () => {
+		const go = PROVIDER_PRESETS.find(
+			preset => preset.id === 'opencode-go',
+		)!;
+		expect(go.optionalKey).toBeUndefined();
+		expect(buildPresetProvider(go, 'opencode-go', '  ')).toBeNull();
+		expect(
+			buildPresetProvider(go, 'opencode-go', 'sk-go'),
+		).toMatchObject({
+			id: 'opencode-go',
+			baseUrl: 'https://opencode.ai/zen/go/v1',
+			modelDiscoveryUrl: 'https://opencode.ai/zen/go/v1/models',
+		});
 	});
 
 	test('openAICompatibleProvider keeps preset endpoint + discovery', () => {

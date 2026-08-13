@@ -55,6 +55,44 @@ const XIAOMI_MODELS = [
 	'mimo-v2.5-tts',
 ];
 
+/**
+ * OpenCode Zen catalog seeds (live `/zen/v1/models` refresh replaces these
+ * after connect). The `*-free` models work WITHOUT a subscription — the
+ * reason a blank key is allowed for this preset.
+ */
+const OPENCODE_ZEN_MODELS = [
+	'deepseek-v4-flash-free',
+	'mimo-v2.5-free',
+	'hy3-free',
+	'nemotron-3-ultra-free',
+	'nemotron-3.5-lightning-free',
+	'laguna-s-2.1-free',
+	'big-pickle',
+	'gpt-5.6-sol',
+	'gpt-5.6-terra',
+	'gpt-5.6-luna',
+	'gpt-5.5',
+	'claude-opus-5',
+	'deepseek-v4-flash',
+	'deepseek-v4-pro',
+	'qwen3.6-plus',
+	'kimi-k3',
+];
+
+/** OpenCode Go catalog seeds (subscription; live refresh replaces these). */
+const OPENCODE_GO_MODELS = [
+	'deepseek-v4-flash',
+	'deepseek-v4-pro',
+	'glm-5.2',
+	'kimi-k2.7-code',
+	'qwen3.8-max',
+	'qwen3.7-plus',
+	'minimax-m3',
+	'gpt-5.6-luna',
+	'grok-4.5',
+	'mimo-v2.5-pro',
+];
+
 export interface ProviderPreset {
 	/** Default provider id/name; a blank name falls back to this. */
 	id: string;
@@ -72,6 +110,8 @@ export interface ProviderPreset {
 	contextWindow?: number;
 	/** Codex offers a ChatGPT-account method; every other preset is key-only. */
 	authMethods?: Array<{id: 'account' | 'api'; label: string; detail: string}>;
+	/** Key OPTIONAL — a blank key connects anyway (anonymous free tier). */
+	optionalKey?: boolean;
 }
 
 /**
@@ -144,6 +184,28 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
 		models: XIAOMI_MODELS,
 		// normalize() auto-adds modelDiscoveryUrl for token-plan hosts.
+	},
+	{
+		id: 'opencode-zen',
+		title: 'OpenCode Zen',
+		description: 'free models without a key, subscription unlocks more',
+		category: 'Popular',
+		baseUrl: 'https://opencode.ai/zen/v1',
+		models: OPENCODE_ZEN_MODELS,
+		modelDiscoveryUrl: 'https://opencode.ai/zen/v1/models',
+		// Zen is the FREE source: a blank key still connects (anonymous
+		// tier, IP-limited) so users without a subscription keep the
+		// `*-free` models.
+		optionalKey: true,
+	},
+	{
+		id: 'opencode-go',
+		title: 'OpenCode Go',
+		description: 'low-cost subscription models',
+		category: 'Popular',
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models: OPENCODE_GO_MODELS,
+		modelDiscoveryUrl: 'https://opencode.ai/zen/go/v1/models',
 	},
 	{
 		id: 'mistral',
@@ -434,7 +496,9 @@ export function buildPresetProvider(
 	apiKey: string,
 ): ProviderConfig | null {
 	if (preset.id === 'codex') return codexApiKeyProvider(apiKey, name);
-	if (!apiKey.trim()) return null;
+	// OpenCode Zen allows a BLANK key: the anonymous tier still serves the
+	// free models, so a user without a subscription can connect anyway.
+	if (!apiKey.trim() && !preset.optionalKey) return null;
 	if (preset.id === 'deepseek') return deepseekProvider(name, apiKey);
 	if (preset.id === 'xiaomi') return xiaomiProvider(name, apiKey);
 	return openAICompatibleProvider(preset, name, apiKey);
@@ -1043,7 +1107,9 @@ export function ConnectProviderModal(props: {
 	const promptDescription = (): string | undefined => {
 		switch (view().kind) {
 			case 'apikey':
-				return 'sk-... or env:VAR';
+				return selectedPreset().optionalKey
+					? 'optional — empty uses free models'
+					: 'sk-... or env:VAR';
 			case 'name':
 				return `optional — empty uses ${defaultProviderName(selectedPreset().id)}`;
 			case 'custom-base':
