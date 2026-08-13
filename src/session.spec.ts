@@ -1,11 +1,20 @@
-import {describe, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {afterAll, beforeAll, describe, expect, test} from 'bun:test';
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
 	convertNanocoderSession,
 	healResumedContext,
 	listSessions,
+	loadSession,
+	migrateNanocoderSessions,
 	newSessionId,
 	resolveSession,
 	saveSession,
@@ -226,5 +235,122 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 			{role: 'assistant', content: 'a2'},
 			{role: 'user', content: 'u3'},
 		]);
+	});
+});
+
+describe('nanocoder session migration', () => {
+	const originalBobonyoData = process.env.BOBONYO_DATA_DIR;
+	const originalNanoData = process.env.NANOCODER_DATA_DIR;
+	let tempRoot = '';
+	let bobonyoDir = '';
+	let nanoDir = '';
+
+	const legacyFile = (id: string): string =>
+		join(nanoDir, 'sessions', `${id}.json`);
+
+	beforeAll(() => {
+		tempRoot = mkdtempSync(join(tmpdir(), 'bobonyo-sess-migrate-'));
+		bobonyoDir = join(tempRoot, 'bobonyo');
+		nanoDir = join(tempRoot, 'nanocoder');
+		process.env.BOBONYO_DATA_DIR = bobonyoDir;
+		process.env.NANOCODER_DATA_DIR = nanoDir;
+	});
+
+	afterAll(() => {
+		rmSync(tempRoot, {recursive: true, force: true});
+		if (originalBobonyoData === undefined) {
+			delete process.env.BOBONYO_DATA_DIR;
+		} else {
+			process.env.BOBONYO_DATA_DIR = originalBobonyoData;
+		}
+		if (originalNanoData === undefined) {
+			delete process.env.NANOCODER_DATA_DIR;
+		} else {
+			process.env.NANOCODER_DATA_DIR = originalNanoData;
+		}
+	});
+
+	test('converts every legacy UUID session, skipping the sessions.json index', () => {
+		mkdirSync(join(nanoDir, 'sessions'), {recursive: true});
+		writeFileSync(
+			legacyFile('e785d2e1-218f-4196-8071-116ffaf1e9ac'),
+			JSON.stringify({
+				id: 'e785d2e1-218f-4196-8071-116ffaf1e9ac',
+				title: 'I want to merge them all',
+				createdAt: '2026-08-10T08:57:02.703Z',
+				lastAccessedAt: '2026-08-10T09:00:00.000Z',
+				messages: [
+					{role: 'user', content: 'hello'},
+					{role: 'assistant', content: 'hi there'},
+				],
+			}),
+		);
+		writeFileSync(
+			join(nanoDir, 'sessions', 'sessions.json'),
+			JSON.stringify([{id: 'e785d2e1-218f-4196-8071-116ffaf1e9ac'}]),
+		);
+
+		expect(migrateNanocoderSessions()).toBe(1);
+		const migrated = join(
+			bobonyoDir,
+			'sessions',
+			'e785d2e1-218f-4196-8071-116ffaf1e9ac.json',
+		);
+		expect(existsSync(migrated)).toBe(true);
+		const data = JSON.parse(readFileSync(migrated, 'utf8')) as {
+			name: string;
+			context?: unknown[];
+		};
+		expect(data.name).toBe('I want to merge them all');
+		// The bobonyo shape carries a rebuilt provider context.
+		expect(Array.isArray(data.context)).toBe(true);
+		// The legacy index file must NOT be treated as a session.
+		expect(
+			existsSync(join(bobonyoDir, 'sessions', 'sessions.json')),
+		).toBe(false);
+	});
+
+	test('migration is idempotent and skips already-present ids', () => {
+		expect(migrateNanocoderSessions()).toBe(0);
+	});
+
+	test('loadSession falls back to the legacy file and persists the copy', () => {
+		const id = '0afdcbec-3270-42cd-8b3b-446e5929f75b';
+		writeFileSync(
+			legacyFile(id),
+			JSON.stringify({
+				id,
+				title: 'return 403',
+				createdAt: '2026-08-10T05:26:47.876Z',
+				lastAccessedAt: '2026-08-10T05:26:47.876Z',
+				messages: [{role: 'user', content: 'why 403?'}],
+			}),
+		);
+		// No migration run yet — the bobonyo file does not exist.
+		const session = loadSession(id);
+		expect(session).not.toBeNull();
+		expect(session!.name).toBe('return 403');
+		// The fallback persisted the converted copy for the next resume.
+		expect(
+			existsSync(join(bobonyoDir, 'sessions', `${id}.json`)),
+		).toBe(true);
+	});
+
+	test('listSessions includes migrated legacy sessions', () => {
+		const ids = listSessions().map(meta => meta.id);
+		expect(ids).toContain('e785d2e1-218f-4196-8071-116ffaf1e9ac');
+		expect(ids).toContain('0afdcbec-3270-42cd-8b3b-446e5929f75b');
+	});
+
+	test('empty and corrupt legacy files never migrate', () => {
+		writeFileSync(
+			legacyFile('empty-session'),
+			JSON.stringify({id: 'empty-session', messages: []}),
+		);
+		writeFileSync(legacyFile('corrupt-session'), '{not json');
+		expect(migrateNanocoderSessions()).toBe(0);
+		expect(
+			existsSync(join(bobonyoDir, 'sessions', 'empty-session.json')),
+		).toBe(false);
 	});
 });

@@ -16,6 +16,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
+import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
 import {displayToolName, toolArgsSummary} from './tools';
@@ -62,6 +63,63 @@ function sessionsDir(): string {
 	// NOT the config dir; the legacy nanocoder sessions are migrated once.
 	const base = bobonyoDataDir();
 	return join(base, 'sessions');
+}
+
+/**
+ * The LEGACY nanocoder sessions dir. The one-time full-dir copy in
+ * `bobonyo-paths` only runs when the bobonyo data dir did not exist yet —
+ * if it already did (or new sessions were created after the copy), old
+ * UUID session files never reach `bobonyo/sessions` and `--resume <uuid>`
+ * reports "not found". This is the source those sessions are migrated from.
+ */
+function nanocoderSessionsDir(): string {
+	if (process.env.NANOCODER_DATA_DIR) {
+		return join(process.env.NANOCODER_DATA_DIR, 'sessions');
+	}
+	if (process.env.XDG_DATA_HOME) {
+		return join(process.env.XDG_DATA_HOME, 'nanocoder', 'sessions');
+	}
+	return join(homedir(), '.local', 'share', 'nanocoder', 'sessions');
+}
+
+/**
+ * Migrate every legacy nanocoder session into the bobonyo sessions dir
+ * (converted to the bobonyo shape, idempotent, non-destructive). The
+ * legacy `sessions.json` index is skipped — only real `<uuid>.json`
+ * conversations convert. Returns the number of sessions migrated.
+ */
+export function migrateNanocoderSessions(): number {
+	const legacy = nanocoderSessionsDir();
+	if (!existsSync(legacy)) return 0;
+	mkdirSync(sessionsDir(), {recursive: true});
+	let migrated = 0;
+	for (const file of readdirSync(legacy)) {
+		if (!file.endsWith('.json') || file === 'sessions.json') continue;
+		try {
+			const raw = JSON.parse(
+				readFileSync(join(legacy, file), 'utf8'),
+			) as NanocoderSessionFile;
+			if (
+				typeof raw.id !== 'string' ||
+				!Array.isArray(raw.messages) ||
+				raw.messages.length === 0
+			) {
+				continue;
+			}
+			if (existsSync(sessionPath(raw.id))) continue;
+			const converted = convertNanocoderSession(raw);
+			if (!converted || converted.messages.length === 0) continue;
+			writeFileSync(
+				sessionPath(converted.id),
+				`${JSON.stringify(converted, null, 2)}\n`,
+				'utf8',
+			);
+			migrated += 1;
+		} catch {
+			// Corrupt legacy file: skip, never block resume/startup.
+		}
+	}
+	return migrated;
 }
 
 function checkpointsDir(): string {
@@ -156,6 +214,9 @@ export function saveSession(data: SessionData): void {
 }
 
 export function listSessions(): SessionMeta[] {
+	// Bring legacy nanocoder sessions into the bobonyo dir so the resume
+	// picker shows every old conversation (idempotent after the first run).
+	migrateNanocoderSessions();
 	const dir = sessionsDir();
 	if (!existsSync(dir)) return [];
 	return readdirSync(dir)
@@ -213,6 +274,24 @@ export function loadSession(id: string): SessionData | null {
 			);
 		}
 		return raw;
+	} catch {
+		// fall through to the legacy nanocoder file below
+	}
+	// The session may only exist in the legacy data dir (the full-dir copy
+	// is skipped when the bobonyo dir already existed). Convert it on the
+	// fly and persist the copy so the next resume is a local hit.
+	try {
+		const legacy = join(nanocoderSessionsDir(), `${id}.json`);
+		if (!existsSync(legacy)) return null;
+		const raw = JSON.parse(
+			readFileSync(legacy, 'utf8'),
+		) as NanocoderSessionFile;
+		const converted = convertNanocoderSession(raw);
+		if (converted && converted.messages.length > 0) {
+			saveSession(converted);
+			return converted;
+		}
+		return null;
 	} catch {
 		return null;
 	}
@@ -352,6 +431,8 @@ interface NanocoderSessionFile {
 			function?: {name: string; arguments: string | Record<string, unknown>};
 		}>;
 	}>;
+	/** Some nanocoder files carry the display label as `name`, not `title`. */
+	name?: string;
 }
 
 /** Convert a NANOCODER session file into bobonyo's SessionData shape. */
@@ -434,7 +515,7 @@ export function convertNanocoderSession(
 
 	return {
 		id: file.id,
-		name: file.title ?? file.id,
+		name: file.name ?? file.title ?? file.id,
 		createdAt: new Date(file.createdAt ?? Date.now()).getTime(),
 		updatedAt: new Date(
 			file.lastAccessedAt ?? file.createdAt ?? Date.now(),
