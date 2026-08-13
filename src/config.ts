@@ -11,6 +11,7 @@
 import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {nanocoderConfigDir} from './nanocoder-paths';
+import {readCodexAuth} from './codex-auth';
 
 export interface ProviderConfig {
 	id: string;
@@ -515,5 +516,60 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 		const stale = disk.entries[discoveryUrl]?.models;
 		if (stale && stale.length > 0) return stale;
 		return provider.models;
+	}
+}
+
+/**
+ * Live model discovery for the ChatGPT-ACCOUNT codex backend: its catalog
+ * endpoint needs the `codex login` token + account id (a generic Bearer
+ * apiKey fetch can't), so it reads ~/.codex/auth.json itself and caches to
+ * the same model-catalogs.json disk cache with the same stale fallback.
+ * Returns [] when not logged in (the static account list remains).
+ */
+export async function discoverCodexAccountModels(
+	baseUrl: string,
+): Promise<string[]> {
+	const discoveryUrl = `${baseUrl.replace(/\/+$/, '')}/models?client_version=0.145.0`;
+	const now = Date.now();
+	const memory = discoveryCache.get(discoveryUrl);
+	if (memory && now - memory.at < DISCOVERY_TTL_MS) return memory.models;
+	const disk = loadModelCatalogCache();
+	const freshDisk = disk.entries[discoveryUrl];
+	if (freshDisk && now - freshDisk.at < MODEL_CATALOG_TTL_MS) {
+		discoveryCache.set(discoveryUrl, {
+			at: freshDisk.at,
+			models: freshDisk.models,
+		});
+		return freshDisk.models;
+	}
+	try {
+		const auth = readCodexAuth();
+		if (!auth.accessToken) throw new Error('no codex login');
+		const response = await fetch(discoveryUrl, {
+			headers: {
+				accept: 'application/json',
+				authorization: `Bearer ${auth.accessToken}`,
+				...(auth.accountId
+					? {'chatgpt-account-id': auth.accountId}
+					: {}),
+				originator: 'bobonyo',
+			},
+		});
+		if (!response.ok) throw new Error(`codex models ${response.status}`);
+		const body = (await response.json()) as {
+			models?: Array<{slug?: string}>;
+		};
+		const ids = (body.models ?? [])
+			.map(model => model.slug)
+			.filter((id): id is string => Boolean(id));
+		if (ids.length === 0) return ids;
+		discoveryCache.set(discoveryUrl, {at: now, models: ids});
+		disk.entries[discoveryUrl] = {models: ids, at: now};
+		saveModelCatalogCache(disk.entries);
+		return ids;
+	} catch {
+		const stale = disk.entries[discoveryUrl]?.models;
+		if (stale && stale.length > 0) return stale;
+		return [];
 	}
 }

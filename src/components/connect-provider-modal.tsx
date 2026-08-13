@@ -30,6 +30,17 @@ const CODEX_MODELS = [
 	'gpt-5.4-codex',
 	'gpt-5.4-codex-mini',
 ];
+/**
+ * The ChatGPT-ACCOUNT codex backend's model catalog (fetched live from
+ * /backend-api/codex/models). The `gpt-5.5-codex` family is API-key-only —
+ * the account endpoint rejects it with 400.
+ */
+const CODEX_ACCOUNT_MODELS = [
+	'gpt-5.5',
+	'gpt-5.6-terra',
+	'gpt-5.6-luna',
+	'gpt-5.4-mini',
+];
 
 // The CURRENT DeepSeek catalog (the /models endpoint returns v4-flash/v4-pro;
 // the live fetch refreshes it after connect, these seeds just keep the picker
@@ -346,7 +357,7 @@ export function codexAccountProvider(name = 'codex'): ProviderConfig {
 		sdkProvider: 'responses',
 		codexAccount: true,
 		contextWindow: 400_000,
-		models: CODEX_MODELS,
+		models: CODEX_ACCOUNT_MODELS,
 	};
 }
 

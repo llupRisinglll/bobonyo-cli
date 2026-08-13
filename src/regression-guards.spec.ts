@@ -239,6 +239,22 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).not.toMatch(/deepseek-chat/);
 	});
 
+	test('codex ACCOUNT models match the ChatGPT backend, with live discovery', () => {
+		const modal = read('./components/connect-provider-modal.tsx');
+		// The account backend rejects the API-key gpt-5.5-codex family (400).
+		expect(modal).toMatch(/CODEX_ACCOUNT_MODELS = \[/);
+		expect(modal).toMatch(/models: CODEX_ACCOUNT_MODELS,/);
+		expect(modal).toMatch(/'gpt-5\.5'/);
+		// The catalog endpoint needs the login token + account id.
+		const config = read('./config.ts');
+		expect(config).toMatch(/export async function discoverCodexAccountModels/);
+		expect(config).toMatch(/chatgpt-account-id/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/provider\.codexAccount\n\s*\? discoverCodexAccountModels/,
+		);
+	});
+
 	test('the provider modal auto-widens and tiles on big screens', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
 		expect(modal).toMatch(/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/);

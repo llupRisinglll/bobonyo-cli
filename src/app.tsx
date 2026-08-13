@@ -21,6 +21,7 @@ import {
 	listProviders,
 	loadConfig,
 	loadPreferences,
+	discoverCodexAccountModels,
 	resolveApiKey,
 	resolveContextWindow,
 	resolveProvider,
@@ -3250,13 +3251,15 @@ export function App() {
 	 */
 	const refreshModelCatalogs = () => {
 		for (const provider of listProviders()) {
-		const refresh = isDeepSeek(provider)
-			? refreshDeepSeekModels(provider)
-			: isXiaomiMiMo(provider) && provider.modelDiscoveryUrl
-				? refreshProviderModels(provider, provider.modelDiscoveryUrl)
-				: provider.modelDiscoveryUrl
-					? discoverModels(provider)
-					: undefined;
+			const refresh = provider.codexAccount
+				? discoverCodexAccountModels(provider.baseUrl)
+				: isDeepSeek(provider)
+					? refreshDeepSeekModels(provider)
+					: isXiaomiMiMo(provider) && provider.modelDiscoveryUrl
+						? refreshProviderModels(provider, provider.modelDiscoveryUrl)
+						: provider.modelDiscoveryUrl
+							? discoverModels(provider)
+							: undefined;
 			if (!refresh) continue;
 			void refresh.then(models => {
 				if (models.length > 0) {

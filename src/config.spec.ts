@@ -1,7 +1,9 @@
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
 import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {
+	discoverCodexAccountModels,
 	discoverModels,
 	listProviders,
 	MODEL_CATALOG_TTL_MS,
@@ -314,6 +316,55 @@ describe('discoverModels (full-URL contract)', () => {
 			expect(savedModels).toEqual(['mimo-v2.5']);
 		} finally {
 			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('codex ACCOUNT discovery uses the login token + account id', async () => {
+		const codexHome = join(configDir, 'codex-home');
+		mkdirSync(codexHome, {recursive: true});
+		writeFileSync(
+			join(codexHome, 'auth.json'),
+			JSON.stringify({
+				tokens: {access_token: 'tok-account', account_id: 'acc-1'},
+			}),
+			'utf8',
+		);
+		const prevHome = process.env.CODEX_HOME;
+		process.env.CODEX_HOME = codexHome;
+		let requested = '';
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (
+			input: RequestInfo | URL,
+			init?: RequestInit,
+		) => {
+			requested = String(input);
+			const headers = (init?.headers ?? {}) as Record<string, string>;
+			expect(headers.authorization).toBe('Bearer tok-account');
+			expect(headers['chatgpt-account-id']).toBe('acc-1');
+			return new Response(
+				JSON.stringify({
+					models: [{slug: 'gpt-5.5'}, {slug: 'gpt-5.6-terra'}],
+				}),
+				{status: 200},
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const models = await discoverCodexAccountModels(
+				'https://chatgpt.com/backend-api/codex',
+			);
+			expect(models).toEqual(['gpt-5.5', 'gpt-5.6-terra']);
+			expect(requested).toContain('/models?client_version=');
+			const saved = JSON.parse(
+				readFileSync(modelCatalogCachePath(), 'utf8'),
+			) as {entries: Record<string, {models: string[]; at: number}>};
+			expect(saved.entries[requested]?.models).toEqual([
+				'gpt-5.5',
+				'gpt-5.6-terra',
+			]);
+		} finally {
+			globalThis.fetch = originalFetch;
+			if (prevHome === undefined) delete process.env.CODEX_HOME;
+			else process.env.CODEX_HOME = prevHome;
 		}
 	});
 });

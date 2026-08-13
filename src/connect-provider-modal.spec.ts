@@ -101,6 +101,14 @@ describe('provider presets (known endpoints, never asked)', () => {
 			contextWindow: 400_000,
 		});
 		expect(codexAccountProvider('codex-pro').id).toBe('codex-pro');
+		// The ChatGPT-account backend rejects the API-key `gpt-5.5-codex`
+		// family (400 "not supported"); it serves gpt-5.5 / gpt-5.6-* instead.
+		expect(codexAccountProvider().models).toEqual([
+			'gpt-5.5',
+			'gpt-5.6-terra',
+			'gpt-5.6-luna',
+			'gpt-5.4-mini',
+		]);
 	});
 
 	test('codexApiKeyProvider targets the standard OpenAI responses API', () => {
