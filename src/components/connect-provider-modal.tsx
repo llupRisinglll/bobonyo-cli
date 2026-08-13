@@ -14,9 +14,11 @@ import {
 /**
  * OpenCode-style provider connect MODAL (parity: opencode's
  * dialog-provider). NEVER the chat input row: a provider picker → auth
- * method selection → in-modal prompt steps (API key / ChatGPT account
- * waiting view / custom fields), each step owns every keypress. Esc steps
- * back; the modal only closes at the picker root.
+ * method selection → in-modal prompt steps. Presets (Codex / DeepSeek /
+ * Xiaomi MiMo) know their endpoints, so only the NAME + API key are asked;
+ * custom providers ask everything. Naming is per-instance: the same
+ * endpoint may be connected multiple times under different names (the user
+ * organizes/splits models). Each step owns every keypress; Esc steps back.
  */
 
 const CODEX_MODELS = [
@@ -26,8 +28,86 @@ const CODEX_MODELS = [
 	'gpt-5.4-codex-mini',
 ];
 
+const DEEPSEEK_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+
+const XIAOMI_MODELS = [
+	'mimo-v2.5',
+	'mimo-v2.5-pro',
+	'mimo-v2.5-asr',
+	'mimo-v2.5-tts',
+];
+
+export interface ProviderPreset {
+	/** Default provider id/name; the user may rename each connection. */
+	id: string;
+	title: string;
+	description: string;
+	category: 'Popular' | 'Providers';
+	/** Known endpoint — presets NEVER ask for it (custom does). */
+	baseUrl: string;
+	/** Seeded catalog so the picker never shows mock-model-1 before discovery. */
+	models: string[];
+	modelDiscoveryUrl?: string;
+	sdkProvider?: string;
+	/** ChatGPT-account mode (responses wire via ~/.codex/auth.json). */
+	codexAccount?: boolean;
+	contextWindow?: number;
+	/** Codex offers a ChatGPT-account method; every other preset is key-only. */
+	authMethods?: Array<{id: 'account' | 'api'; label: string; detail: string}>;
+}
+
+/** The provider catalog the connect modal offers (order = picker order). */
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+	{
+		id: 'codex',
+		title: 'Codex',
+		description: 'ChatGPT account or API key',
+		category: 'Popular',
+		baseUrl: 'https://api.openai.com/v1',
+		models: CODEX_MODELS,
+		modelDiscoveryUrl: 'https://api.openai.com/v1/models',
+		sdkProvider: 'responses',
+		contextWindow: 400_000,
+		authMethods: [
+			{
+				id: 'account',
+				label: 'ChatGPT account (codex login)',
+				detail: 'Uses ~/.codex/auth.json',
+			},
+			{id: 'api', label: 'API key', detail: 'sk-... or env:VAR'},
+		],
+	},
+	{
+		id: 'deepseek',
+		title: 'DeepSeek',
+		description: 'deepseek-chat / deepseek-reasoner',
+		category: 'Popular',
+		baseUrl: 'https://api.deepseek.com',
+		models: DEEPSEEK_MODELS,
+		modelDiscoveryUrl: 'https://api.deepseek.com/models',
+	},
+	{
+		id: 'xiaomi',
+		title: 'Xiaomi MiMo',
+		description: 'token-plan gateway (mimo-v2.5)',
+		category: 'Popular',
+		baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+		models: XIAOMI_MODELS,
+		// normalize() auto-adds modelDiscoveryUrl for token-plan hosts.
+	},
+	{
+		id: 'custom',
+		title: 'Custom provider',
+		description: 'Bring your own endpoint',
+		category: 'Providers',
+		baseUrl: '',
+		models: [],
+	},
+];
+
 type View =
 	| {kind: 'pick'}
+	| {kind: 'name'}
 	| {kind: 'methods'}
 	| {kind: 'apikey'}
 	| {kind: 'chatgpt'}
@@ -36,9 +116,9 @@ type View =
 	| {kind: 'custom-key'}
 	| {kind: 'custom-models'};
 
-interface PickerRow {
-	kind: 'provider' | 'custom' | 'header' | 'spacer' | 'empty';
-	id?: string;
+export interface PickerRow {
+	kind: 'provider' | 'custom' | 'header' | 'empty';
+	preset?: ProviderPreset;
 	connected?: boolean;
 	label?: string;
 }
@@ -50,18 +130,16 @@ export function filterConnectPicker(
 ): PickerRow[] {
 	const q = query.trim().toLowerCase();
 	const out: PickerRow[] = [];
-	// The nearest unmatched header is kept when one of its items matches
-	// (opencode groups the picker; a search must keep the group label).
+	// The nearest unmatched group header is kept when one of its items
+	// matches (opencode groups the picker; a search keeps the group label).
 	let pendingHeader: PickerRow | null = null;
 	for (const row of rows) {
 		if (row.kind === 'header') {
 			pendingHeader = row;
 			continue;
 		}
-		if (row.kind === 'spacer') continue;
 		if (row.kind === 'empty') continue;
-		const label =
-			row.kind === 'provider' ? 'Codex' : 'Custom provider';
+		const label = row.preset?.title ?? 'Custom provider';
 		if (!q || label.toLowerCase().includes(q)) {
 			if (pendingHeader) {
 				out.push(pendingHeader);
@@ -74,11 +152,11 @@ export function filterConnectPicker(
 	return out;
 }
 
-/** The provider payload a connect action produces (pure, unit-tested). */
-export function codexAccountProvider(): ProviderConfig {
+/** Codex provider payloads (pure, unit-tested). */
+export function codexAccountProvider(name = 'codex'): ProviderConfig {
 	return {
-		id: 'codex',
-		name: 'Codex',
+		id: name.trim() || 'codex',
+		name: name.trim() || 'codex',
 		baseUrl: 'https://chatgpt.com/backend-api/codex',
 		sdkProvider: 'responses',
 		codexAccount: true,
@@ -87,12 +165,16 @@ export function codexAccountProvider(): ProviderConfig {
 	};
 }
 
-export function codexApiKeyProvider(apiKey: string): ProviderConfig | null {
+export function codexApiKeyProvider(
+	apiKey: string,
+	name = 'codex',
+): ProviderConfig | null {
 	const key = apiKey.trim();
 	if (!key) return null;
+	const id = name.trim() || 'codex';
 	return {
-		id: 'codex',
-		name: 'Codex',
+		id,
+		name: id,
 		baseUrl: 'https://api.openai.com/v1',
 		sdkProvider: 'responses',
 		apiKey: key,
@@ -100,6 +182,44 @@ export function codexApiKeyProvider(apiKey: string): ProviderConfig | null {
 		contextWindow: 400_000,
 		models: CODEX_MODELS,
 	};
+}
+
+/** DeepSeek preset: known endpoint, discovery keeps the catalog fresh. */
+export function deepseekProvider(name: string, apiKey: string): ProviderConfig {
+	const id = name.trim() || 'deepseek';
+	return {
+		id,
+		name: id,
+		baseUrl: 'https://api.deepseek.com',
+		...(apiKey.trim() ? {apiKey: apiKey.trim()} : {}),
+		modelDiscoveryUrl: 'https://api.deepseek.com/models',
+		models: DEEPSEEK_MODELS,
+	};
+}
+
+/** Xiaomi MiMo token-plan preset (normalize adds the /models discovery). */
+export function xiaomiProvider(name: string, apiKey: string): ProviderConfig {
+	const id = name.trim() || 'xiaomi';
+	return {
+		id,
+		name: id,
+		baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+		...(apiKey.trim() ? {apiKey: apiKey.trim()} : {}),
+		models: XIAOMI_MODELS,
+	};
+}
+
+/** Generic preset builder (API-key auth; Codex routes to the codex builder). */
+export function buildPresetProvider(
+	preset: ProviderPreset,
+	name: string,
+	apiKey: string,
+): ProviderConfig | null {
+	if (preset.id === 'codex') return codexApiKeyProvider(apiKey, name);
+	if (!apiKey.trim()) return null;
+	if (preset.id === 'deepseek') return deepseekProvider(name, apiKey);
+	if (preset.id === 'xiaomi') return xiaomiProvider(name, apiKey);
+	return null;
 }
 
 export function customProvider(config: {
@@ -121,7 +241,7 @@ export function customProvider(config: {
 }
 
 export function ConnectProviderModal(props: {
-	provider?: 'codex' | 'custom';
+	provider?: string;
 	editId?: string;
 	onConnect: (provider: ProviderConfig) => void;
 	onClose: () => void;
@@ -136,15 +256,17 @@ export function ConnectProviderModal(props: {
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
-	// The opencode connect flow: picker → method select → prompt steps.
-	// `back` restores the previous view so Esc walks the stack.
-	const [viewStack, setViewStack] = createSignal<View[]>(
-		props.provider === 'custom'
-			? [{kind: 'custom-id'}, {kind: 'pick'}]
-			: props.provider === 'codex' || props.editId === 'codex'
-				? [{kind: 'methods'}, {kind: 'pick'}]
-				: [{kind: 'pick'}],
-	);
+	// opencode flow: picker → name → (auth method →) prompt steps.
+	const initialView = (): View[] => {
+		if (props.provider && props.provider !== 'custom') {
+			return [{kind: 'name'}, {kind: 'pick'}];
+		}
+		if (props.provider === 'custom' || props.editId) {
+			return [{kind: 'custom-id'}, {kind: 'pick'}];
+		}
+		return [{kind: 'pick'}];
+	};
+	const [viewStack, setViewStack] = createSignal<View[]>(initialView());
 	const view = () => viewStack()[viewStack().length - 1]!;
 	const push = (next: View): void => {
 		setViewStack(prev => [...prev, next]);
@@ -160,6 +282,10 @@ export function ConnectProviderModal(props: {
 	const [methodIndex, setMethodIndex] = createSignal(0);
 	const [input, setInput] = createSignal('');
 	const [error, setError] = createSignal('');
+	const [selectedPreset, setSelectedPreset] = createSignal<ProviderPreset>(
+		PROVIDER_PRESETS[0]!,
+	);
+	const [presetName, setPresetName] = createSignal('');
 	// Force auth.json re-reads (the "check again" action after `codex login`).
 	const [authTick, setAuthTick] = createSignal(0);
 	const auth = createMemo(() => {
@@ -186,6 +312,8 @@ export function ConnectProviderModal(props: {
 
 	const stepDefault = createMemo(() => {
 		switch (view().kind) {
+			case 'name':
+				return presetName() || selectedPreset().id;
 			case 'custom-id':
 				return customId();
 			case 'custom-base':
@@ -206,23 +334,30 @@ export function ConnectProviderModal(props: {
 	});
 
 	const pickerRows = (): PickerRow[] => {
-		const codexConnected = listProviders().some(
-			provider => provider.id.toLowerCase() === 'codex',
-		);
-		return filterConnectPicker(
-			[
-				{kind: 'header', label: 'Popular'},
-				{kind: 'provider', id: 'codex', connected: codexConnected},
-				{kind: 'header', label: 'Providers'},
-				{kind: 'custom'},
-			],
-			query(),
-		);
+		const configured = listProviders();
+		const connected = (id: string): boolean =>
+			configured.some(provider => provider.id.toLowerCase() === id);
+		const rows: PickerRow[] = [];
+		let lastCategory: string | null = null;
+		for (const preset of PROVIDER_PRESETS) {
+			if (preset.category !== lastCategory) {
+				rows.push({kind: 'header', label: preset.category});
+				lastCategory = preset.category;
+			}
+			rows.push({
+				kind: preset.id === 'custom' ? 'custom' : 'provider',
+				preset,
+				connected: connected(preset.id),
+			});
+		}
+		return filterConnectPicker(rows, query());
 	};
-	const movePicker = (delta: number): void => {
-		const rows = pickerRows().filter(
+	const navigableRows = (): PickerRow[] =>
+		pickerRows().filter(
 			row => row.kind === 'provider' || row.kind === 'custom',
 		);
+	const movePicker = (delta: number): void => {
+		const rows = navigableRows();
 		if (rows.length === 0) return;
 		const current = rows[index()];
 		const currentIndex = current ? rows.indexOf(current) : -1;
@@ -236,21 +371,35 @@ export function ConnectProviderModal(props: {
 		setIndex(next);
 	};
 	const activatePicker = (): void => {
-		const rows = pickerRows().filter(
-			row => row.kind === 'provider' || row.kind === 'custom',
-		);
-		const row = rows[index()];
-		if (!row) return;
-		if (row.kind === 'provider') {
-			push({kind: 'methods'});
-			setMethodIndex(0);
-		} else {
+		const row = navigableRows()[index()];
+		if (!row?.preset) return;
+		if (row.kind === 'custom') {
 			push({kind: 'custom-id'});
+			return;
 		}
+		setSelectedPreset(row.preset);
+		setPresetName(row.preset.id);
+		push({kind: 'name'});
 	};
 
-	const submitCodexApiKey = (): void => {
-		const provider = codexApiKeyProvider(input());
+	const submitName = (): void => {
+		const preset = selectedPreset();
+		const name = input().trim() || preset.id;
+		setPresetName(name);
+		if (preset.authMethods?.length) {
+			setMethodIndex(0);
+			push({kind: 'methods'});
+		} else {
+			setInput('');
+			push({kind: 'apikey'});
+		}
+	};
+	const submitApiKey = (): void => {
+		const preset = selectedPreset();
+		const provider =
+			preset.id === 'codex'
+				? codexApiKeyProvider(input(), presetName())
+				: buildPresetProvider(preset, presetName(), input());
 		if (!provider) {
 			setError('API key is required.');
 			return;
@@ -259,7 +408,7 @@ export function ConnectProviderModal(props: {
 	};
 	const connectChatgpt = (): void => {
 		if (hasCodexChatgptAuth(auth())) {
-			props.onConnect(codexAccountProvider());
+			props.onConnect(codexAccountProvider(presetName()));
 			return;
 		}
 		setAuthTick(tick => tick + 1);
@@ -343,8 +492,8 @@ export function ConnectProviderModal(props: {
 				setQuery(prev => prev + char);
 				setIndex(0);
 			}
-			// The picker owns EVERY key while it is open: nothing may leak
-			// into the chat input or the history scrollbox behind it.
+			// The picker owns EVERY key while open: nothing may leak into the
+			// chat input or the history scrollbox behind it.
 			return true;
 		}
 		if (current.kind === 'methods') {
@@ -353,15 +502,16 @@ export function ConnectProviderModal(props: {
 				return true;
 			}
 			if (event.name === 'up' || event.name === 'down') {
-				setMethodIndex(prev =>
-					event.name === 'down'
-						? Math.min(1, prev + 1)
-						: Math.max(0, prev - 1),
-				);
+				const methods = selectedPreset().authMethods ?? [];
+				setMethodIndex(prev => {
+					const next = event.name === 'down' ? prev + 1 : prev - 1;
+					return Math.max(0, Math.min(methods.length - 1, next));
+				});
 				return true;
 			}
 			if (event.name === 'return') {
-				if (methodIndex() === 0) {
+				const methods = selectedPreset().authMethods ?? [];
+				if (methods[methodIndex()]?.id === 'account') {
 					push({kind: 'chatgpt'});
 				} else {
 					setInput('');
@@ -387,7 +537,8 @@ export function ConnectProviderModal(props: {
 			return true;
 		}
 		if (event.name === 'return') {
-			if (current.kind === 'apikey') submitCodexApiKey();
+			if (current.kind === 'name') submitName();
+			else if (current.kind === 'apikey') submitApiKey();
 			else submitCustom();
 			return true;
 		}
@@ -416,18 +567,23 @@ export function ConnectProviderModal(props: {
 		y >= cardY() &&
 		y <= cardY() + cardHeight();
 	const pickerSelection = (row: PickerRow): boolean => {
-		const navigable = pickerRows().filter(
-			r => r.kind === 'provider' || r.kind === 'custom',
+		// Row OBJECTS are rebuilt per render (filterConnectPicker maps), but
+		// the preset refs come from PROVIDER_PRESETS — compare by preset so
+		// the highlight tracks the selection (identity compare was the bug).
+		return (
+			Boolean(row.preset) &&
+			row.preset === navigableRows()[index()]?.preset
 		);
-		return navigable[index()] === row;
 	};
 
 	const title = (): string => {
 		switch (view().kind) {
 			case 'pick':
 				return 'Connect a provider';
+			case 'name':
+				return `${selectedPreset().title} name`;
 			case 'methods':
-				return 'Codex';
+				return selectedPreset().title;
 			case 'apikey':
 				return 'API key';
 			case 'chatgpt':
@@ -440,6 +596,21 @@ export function ConnectProviderModal(props: {
 				return 'API key (optional)';
 			case 'custom-models':
 				return 'Models (comma-separated, optional)';
+		}
+	};
+
+	const promptDescription = (): string | undefined => {
+		switch (view().kind) {
+			case 'name':
+				return 'id used in /model and /provider — connect the same endpoint under multiple names';
+			case 'apikey':
+				return 'sk-... or env:VAR';
+			case 'custom-base':
+				return 'e.g. https://api.deepseek.com/v1';
+			case 'custom-models':
+				return 'e.g. deepseek-chat, deepseek-reasoner';
+			default:
+				return undefined;
 		}
 	};
 
@@ -491,36 +662,32 @@ export function ConnectProviderModal(props: {
 					when={view().kind === 'pick'}
 					fallback={
 						<Show
-							when={
-								view().kind === 'methods' ||
-								view().kind === 'chatgpt'
-							}
+							when={view().kind === 'methods' || view().kind === 'chatgpt'}
 							fallback={
 								<PromptField
 									value={input()}
 									error={error()}
 									secret={view().kind === 'apikey' || view().kind === 'custom-key'}
-									description={
-										view().kind === 'apikey'
-											? 'sk-... or env:VAR'
-											: view().kind === 'custom-base'
-												? 'e.g. https://api.deepseek.com/v1'
-												: view().kind === 'custom-models'
-													? 'e.g. deepseek-chat, deepseek-reasoner'
-													: undefined
-									}
+									description={promptDescription()}
 								/>
 							}
 						>
 							<Show
 								when={view().kind === 'methods'}
-								fallback={<ChatgptView authTick={authTick()} authSummary={codexAuthSummary(auth())} loggedIn={hasCodexChatgptAuth(auth())} onCheckAgain={() => setAuthTick(tick => tick + 1)} />}
+								fallback={
+									<ChatgptView
+										authTick={authTick()}
+										authSummary={codexAuthSummary(auth())}
+										loggedIn={hasCodexChatgptAuth(auth())}
+										onCheckAgain={() => setAuthTick(tick => tick + 1)}
+									/>
+								}
 							>
 								<MethodList
+									methods={selectedPreset().authMethods ?? []}
 									index={methodIndex()}
-									authSummary={codexAuthSummary(auth())}
 									onMove={setMethodIndex}
-									onSelect={(chosen) => {
+									onSelect={chosen => {
 										if (chosen === 0) push({kind: 'chatgpt'});
 										else {
 											setInput('');
@@ -564,11 +731,20 @@ export function ConnectProviderModal(props: {
 										active ? activeRow().bg : undefined
 									}
 									{...({
+										onMouseMove: () => {
+											const navigable = navigableRows();
+											const rowIndex = navigable.findIndex(
+												candidate => candidate.preset === row.preset,
+											);
+											if (rowIndex !== -1) setIndex(rowIndex);
+										},
 										onMouseUp: () => {
-											if (row.kind === 'provider') {
-												push({kind: 'methods'});
-											} else {
+											if (row.kind === 'custom') {
 												push({kind: 'custom-id'});
+											} else if (row.preset) {
+												setSelectedPreset(row.preset);
+												setPresetName(row.preset.id);
+												push({kind: 'name'});
 											}
 										},
 									} as any)}
@@ -582,27 +758,12 @@ export function ConnectProviderModal(props: {
 										attributes={active ? bold() : undefined}
 									>
 										{active ? '❯ ' : '  '}
-										{row.kind === 'provider' ? 'Codex' : 'Custom provider'}
+										{row.preset?.title ?? 'Custom provider'}
 									</text>
 									<box flexGrow={1} />
-									{row.kind === 'provider' ? (
-										<text
-											fg={
-												row.connected
-													? colors().success
-													: colors().secondary
-											}
-											attributes={dim()}
-										>
-											{row.connected
-												? '✓ connected'
-												: 'ChatGPT account or API key'}
-										</text>
-									) : (
-										<text fg={colors().secondary} attributes={dim()}>
-											Custom provider
-										</text>
-									)}
+									<text fg={colors().secondary} attributes={dim()}>
+										{row.connected ? '✓ connected' : row.preset?.description ?? 'Custom provider'}
+									</text>
 								</box>
 							);
 						}}
@@ -662,26 +823,17 @@ function PromptField(props: {
 }
 
 function MethodList(props: {
+	methods: Array<{id: 'account' | 'api'; label: string; detail: string}>;
 	index: number;
-	authSummary: string | null;
 	onMove: (next: number) => void;
 	onSelect: (index: number) => void;
 }) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
-	const methods: Array<{title: string; detail: string}> = [
-		{
-			title: 'ChatGPT account (codex login)',
-			detail:
-				props.authSummary ??
-				'Not logged in — run `codex login` to connect',
-		},
-		{title: 'API key', detail: 'sk-... or env:VAR'},
-	];
 	return (
 		<box flexDirection="column">
-			<For each={methods}>
+			<For each={props.methods}>
 				{(method, i) => {
 					const active = i() === props.index;
 					return (
@@ -699,7 +851,7 @@ function MethodList(props: {
 								attributes={active ? bold() : undefined}
 							>
 								{active ? '❯ ' : '  '}
-								{method.title}
+								{method.label}
 							</text>
 							<box flexGrow={1} />
 							<text fg={colors().secondary} attributes={dim()}>
