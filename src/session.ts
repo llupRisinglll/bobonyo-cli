@@ -106,7 +106,24 @@ export function migrateNanocoderSessions(): number {
 			) {
 				continue;
 			}
-			if (existsSync(sessionPath(raw.id))) continue;
+			if (existsSync(sessionPath(raw.id))) {
+				// Repair COLLAPSED conversions: the old converter flattened
+				// display-shape tool rows (`toolId`/`tool`) into one row, so
+				// a legacy source with MORE messages than the migrated copy
+				// is a collapsed conversion — reconvert it. A file the user
+				// continued in bobonyo has >= the legacy count and is never
+				// touched.
+				try {
+					const existing = JSON.parse(
+						readFileSync(sessionPath(raw.id), 'utf8'),
+					) as {messages?: unknown[]};
+					if ((existing.messages?.length ?? 0) >= raw.messages.length) {
+						continue;
+					}
+				} catch {
+					continue;
+				}
+			}
 			const converted = convertNanocoderSession(raw);
 			if (!converted || converted.messages.length === 0) continue;
 			writeFileSync(
@@ -433,6 +450,14 @@ interface NanocoderSessionFile {
 		role: string;
 		content?: string;
 		tool_call_id?: string;
+		/** Display-shape tool rows carry the full tool metadata directly. */
+		toolId?: string;
+		tool?: {
+			name?: string;
+			detail?: string;
+			output?: string;
+			args?: Record<string, unknown>;
+		};
 		name?: string;
 		tool_calls?: Array<{
 			id: string;
@@ -450,13 +475,11 @@ export function convertNanocoderSession(
 	if (!file || typeof file.id !== 'string') return null;
 	const msgs = Array.isArray(file.messages) ? file.messages : [];
 	const messages: ChatMessage[] = [];
-	const context: ChatMessageLike[] = [];
 
 	for (const message of msgs) {
 		if (message.role === 'user') {
 			const content = message.content ?? '';
 			messages.push({role: 'user', content});
-			context.push({role: 'user', content});
 			continue;
 		}
 		if (message.role === 'assistant') {
@@ -483,23 +506,42 @@ export function convertNanocoderSession(
 						toolId: call.id,
 						tool: {name, detail, output: '', args},
 					});
-					context.push({
-						role: 'assistant',
-						content: '',
-						tool_calls: [
-							{id: call.id ?? '', name, arguments: JSON.stringify(args)},
-						],
-					});
 				}
 			}
 			if (message.content) {
 				messages.push({role: 'assistant', content: message.content});
-				context.push({role: 'assistant', content: message.content});
 			}
 			continue;
 		}
 		if (message.role === 'tool') {
 			const content = message.content ?? '';
+			// DISPLAY shape (nanocoder persisted rows carry the whole tool
+			// metadata: toolId + tool{name,detail,output,args}). Copy them
+			// VERBATIM — flattening them like OpenAI tool results collapsed
+			// entire agentic histories into one row and lost the tool
+			// outputs the model needs to continue.
+			if (message.toolId !== undefined || message.tool !== undefined) {
+				messages.push({
+					role: 'tool',
+					content: content || message.tool?.output || '',
+					toolId: message.toolId,
+					tool: message.tool
+						? {
+								name: message.tool.name ?? '',
+								detail: message.tool.detail ?? '',
+								output: message.tool.output ?? '',
+								args: message.tool.args ?? {},
+							}
+						: {
+								name: message.name ?? '',
+								detail: '',
+								output: content,
+								args: {},
+							},
+				});
+				continue;
+			}
+			// OPENAI shape: attach the result to the matching tool row.
 			const name = message.name ?? '';
 			const toolId = message.tool_call_id ?? '';
 			// Attach the result to the matching tool row (by call id).
@@ -517,9 +559,15 @@ export function convertNanocoderSession(
 					tool: {name, detail: '', output: content, args: {}},
 				});
 			}
-			context.push({role: 'tool', content, tool_call_id: toolId});
 		}
 	}
+
+	// Rebuild the provider context from the transcript rows: user + assistant
+	// narration verbatim, tool rows grouped into assistant `tool_calls`
+	// declarations + matching results (ids preserved from `toolId`). The
+	// legacy file may have no declarations of its own — the run grouping
+	// synthesizes them so the provider never sees orphan tool results.
+	const context = healResumedContext([], messages);
 
 	return {
 		id: file.id,

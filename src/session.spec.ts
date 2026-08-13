@@ -74,6 +74,91 @@ describe('convertNanocoderSession', () => {
 	test('returns null for a missing id', () => {
 		expect(convertNanocoderSession({} as never)).toBeNull();
 	});
+
+	test('preserves DISPLAY-shape tool rows (toolId/tool) instead of collapsing them', () => {
+		const session = convertNanocoderSession({
+			id: 'nc-display',
+			title: 'Agentic chat',
+			messages: [
+				{role: 'user', content: 'do it'},
+				{
+					role: 'tool',
+					content: 'EXIT_CODE: 0\nok',
+					toolId: 'call_1',
+					tool: {
+						name: 'execute_bash',
+						detail: 'echo hi',
+						output: 'EXIT_CODE: 0\nok',
+						args: {command: 'echo hi'},
+					},
+				},
+				{role: 'assistant', content: 'done'},
+				{
+					role: 'tool',
+					content: 'written',
+					toolId: 'call_2',
+					tool: {
+						name: 'write_file',
+						detail: 'a.txt',
+						output: 'written',
+						args: {path: 'a.txt'},
+					},
+				},
+			],
+		});
+		expect(session).not.toBeNull();
+		const toolRows = session!.messages.filter(m => m.role === 'tool');
+		// Every tool row survives — the old converter flattened them into one.
+		expect(toolRows).toHaveLength(2);
+		expect(toolRows[0]!.toolId).toBe('call_1');
+		expect(toolRows[1]!.tool?.name).toBe('write_file');
+		// The context regroups each run into a declaration + matching result.
+		const declarations = session!.context.filter(
+			m => m.role === 'assistant' && m.tool_calls,
+		);
+		expect(declarations).toHaveLength(2);
+		expect(declarations[0]!.tool_calls?.[0]!.id).toBe('call_1');
+		const results = session!.context.filter(m => m.role === 'tool');
+		expect(results).toHaveLength(2);
+		expect(results[0]!.tool_call_id).toBe('call_1');
+		expect(results[0]!.content).toContain('EXIT_CODE: 0');
+		expect(results[1]!.tool_call_id).toBe('call_2');
+	});
+
+	test('a long consecutive display-shape run keeps every call (no collapse)', () => {
+		const messages = [
+			{role: 'user', content: 'run them'},
+			...Array.from({length: 5}, (_, i) => ({
+				role: 'tool',
+				content: `out-${i}`,
+				toolId: `call_${i}`,
+				tool: {
+					name: 'execute_bash',
+					detail: `echo ${i}`,
+					output: `out-${i}`,
+					args: {command: `echo ${i}`},
+				},
+			})),
+		];
+		const session = convertNanocoderSession({id: 'nc-run', messages});
+		expect(session!.messages.filter(m => m.role === 'tool')).toHaveLength(5);
+		// One parallel run → one declaration with 5 ids + 5 matching results.
+		const decl = session!.context.find(
+			m => m.role === 'assistant' && m.tool_calls,
+		);
+		expect(decl?.tool_calls?.map(call => call.id)).toEqual([
+			'call_0',
+			'call_1',
+			'call_2',
+			'call_3',
+			'call_4',
+		]);
+		expect(
+			session!.context
+				.filter(m => m.role === 'tool')
+				.map(m => m.tool_call_id),
+		).toEqual(['call_0', 'call_1', 'call_2', 'call_3', 'call_4']);
+	});
 });
 
 describe('session cwd (resume folder filter)', () => {
