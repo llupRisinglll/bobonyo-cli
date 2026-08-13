@@ -2,7 +2,12 @@ import {describe, expect, test} from 'bun:test';
 import {liveRowSegments, splitChunksByLine} from './live-tool-row';
 import {tokenizeBashRow} from './row-highlight';
 import {colors} from './theme';
-import {fence, formatOutputTail, rowLanguage} from './tool-display';
+import {
+	fence,
+	formatOutputTail,
+	formatToolEntry,
+	rowLanguage,
+} from './tool-display';
 import type {TextChunk} from '@opentui/core';
 
 function rgb(c: TextChunk): string | null {
@@ -174,6 +179,56 @@ describe('liveRowSegments', () => {
 			expect(keyword).toBeDefined();
 			// `const` is a keyword → primary, NOT the plain default text fg.
 			expect(rgb(keyword!)).toBe(themeRgb(colors().primary));
+		});
+	});
+
+	describe('edit diff preview cap', () => {
+		const bigOld = Array.from({length: 80}, (_, i) => `old line ${i + 1}`).join(
+			'\n',
+		);
+		const bigNew = `${bigOld}\nnew line added`;
+		const tool = (expanded: boolean) =>
+			formatToolEntry(
+				{
+					name: 'string_replace',
+					detail: 'src/foo.ts',
+					output: `Replaced 1 occurrence in src/foo.ts\n${bigNew}`,
+					args: {
+						path: 'src/foo.ts',
+						old_string: bigOld,
+						new_string: bigNew,
+					},
+				},
+				expanded,
+				'done',
+				true,
+				true,
+				84,
+			);
+
+		test('collapsed caps at 50 lines with a +N more lines footer', () => {
+			const raw = tool(false);
+			expect(raw).toMatch(/… \+31 more lines/);
+			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
+			// summary + 50 diff lines + footer
+			expect(body.length).toBe(52);
+		});
+
+		test('expanded shows the WHOLE diff (no cap, no footer)', () => {
+			const raw = tool(true);
+			expect(raw).not.toMatch(/more lines/);
+			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
+			expect(body.length).toBe(82);
+		});
+
+		test('diff lines render CONTIGUOUSLY (no blank rows between)', () => {
+			const {body} = liveRowSegments(tool(true), 'filediff', 'done', colors(), 84);
+			// Every diff line is a real row — a regression here means the
+			// edit preview gained an extra breakline per line.
+			expect(body.length).toBe(82);
+			for (const line of body) {
+				expect(line.map(c => c.text).join('').trim()).not.toBe('');
+			}
 		});
 	});
 });

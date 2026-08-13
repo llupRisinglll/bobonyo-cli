@@ -237,13 +237,22 @@ function formatFilePreview(
 	const newLines = newStr.replace(/\n+$/, '').split('\n').filter(line => line !== '');
 	const summary = ` ⎿ ${oldLines.length} line${oldLines.length === 1 ? '' : 's'} → ${newLines.length} line${newLines.length === 1 ? '' : 's'}`;
 	const diff = lineDiffText(oldStr, newStr);
+	// Cap the diff preview like the Write preview: collapsed shows the first
+	// 50 lines with a `+N more lines` footer (expand via click / ctrl+o);
+	// expanded shows the whole diff.
+	const diffLines = diff.split('\n');
+	const visibleDiff = expanded ? diffLines : diffLines.slice(0, 50);
+	const hiddenDiff = diffLines.length - visibleDiff.length;
+	const diffBody = visibleDiff.join('\n');
+	const diffFooter =
+		hiddenDiff > 0 ? `\n  … +${hiddenDiff} more lines` : '';
 	const header = `✦ ${displayName} ${path}`;
 	// Diff rows stay in ONE `filediff` fence (the +/- markers are not valid
 	// code, so the custom tokenizer colors them + the red/green row bg).
 	return fence(
 		'filediff',
 		status,
-		`${header}\n${summary}${diff ? `\n${diff}` : ''}`,
+		`${header}\n${summary}${diffBody ? `\n${diffBody}` : ''}${diffFooter}`,
 	);
 }
 
