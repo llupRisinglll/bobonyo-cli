@@ -40,6 +40,8 @@ bobonyo treats every model as a first class citizen:
   bobonyo fixes them automatically and keeps going, instead of stopping.
 - **Cache friendly.** Session management keeps the LLM prompt cache warm, so
   long conversations stay fast and cheap.
+- **Your usage, on screen.** DeepSeek balance, MiMo token plans, and Codex
+  rate limits show up in the terminal instead of a dashboard.
 - **Pick your agent style.** Swap the system prompt to behave like
   OpenCode, Claude Code, or Codex — or write your own — without leaving the
   harness.
@@ -216,6 +218,28 @@ disk and shown as `used N.NM` on the status line, with the full breakdown in
 ```bash
 bobonyo --provider Xiaomi
 ```
+
+### Codex, first class
+
+Codex works with your ChatGPT account, not just an API key. bobonyo connects
+the same way `codex login` does, and then puts your account's usage on
+screen. No browser tab, no dashboard.
+
+- **Connect your account.** `/connect` → Codex → ChatGPT account reuses the
+  same `~/.codex/auth.json` the codex CLI signs in with. API key connections
+  work too.
+- **Live models.** The codex model catalog is fetched from the backend, so
+  new models show up in `/model` without editing config.
+- **Rate limits on screen.** `/status` reads your real usage straight from
+  the Codex backend and shows it the same way Codex does:
+
+```text
+Monthly limit     [████████████████████] 100% left (resets 22:59 on 12 Sep)
+```
+
+The limit row fits itself to whatever window Codex gives you — hourly, 5h,
+daily, weekly, or monthly — and every window gets its own line, plus your
+credits. It refreshes every time you open `/status`.
 
 ### Cache-friendly requests
 
