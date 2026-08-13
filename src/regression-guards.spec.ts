@@ -452,13 +452,33 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/prevRefsByBlock\.get\(stableBlocks\[groupIndex\]!\) \?\? null/);
 	});
 
-	test('round-cap cutoff is actionable, never a dead-end message', () => {
-		// The old "Turn hit the 8-round limit … no final reply" told the
-		// user nothing and framed a safety cap as a model failure. The
-		// cutoff must point to the "continue" path (context is persisted).
+	test('tool loop is uncapped; runaway protection stays guard-based', () => {
+		// opencode / openclaude / codex don't limit per-turn tool calls,
+		// and a round cap killed long-running tasks. The loop must not
+		// iterate against a round ceiling; the REAL runaway protection is
+		// the repeated-tool-signature guard (plus empty-turn / malformed
+		// retries), and a future dev must not reintroduce a silent cap.
 		const app = read('./app.tsx');
-		expect(app).not.toMatch(/no final reply\.'/);
-		expect(app).toMatch(/Type "continue" to keep going/);
+		expect(app).toMatch(/for \(let round = 0; ; round\+\+\)/);
+		expect(app).not.toMatch(/round < MAX_TURN_ROUNDS/);
+		expect(app).not.toMatch(/MAX_TURN_ROUNDS/);
+		expect(app).toMatch(/MAX_REPEATED_TOOL_CALLS/);
+	});
+
+	test('tool rows hold their RUNNING state for a visible floor (MCP parity)', () => {
+		// A fast MCP stdio round trip (~1ms) settles before OpenTUI paints
+		// its next frame (~16ms), so the row would appear already green
+		// with output — the grey running glyph is never seen. The settle
+		// path must await the remaining floor before flipping running:false
+		// (parity: the startup loader's MIN_LOAD_MS floor).
+		const app = read('./app.tsx');
+		expect(app).toMatch(/MIN_TOOL_RUNNING_MS = 400/);
+		expect(app).toMatch(
+			/toolRunningRemainingMs\(\s*callStartedAt,\s*executedAt,?\s*\)/,
+		);
+		expect(app).toMatch(
+			/await new Promise\(resolve =>\s*setTimeout\(resolve, runningRemaining\),?\s*\)/,
+		);
 	});
 
 	test('the model brief before a tool call is rendered, never dropped', () => {

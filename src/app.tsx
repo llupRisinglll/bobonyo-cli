@@ -253,14 +253,38 @@ import {
 	type ChatMessage,
 } from './state';
 
-// Tool-round budget per user turn. Generous enough for long tasks (test
-// suites, refactors, multi-file changes) that legitimately chain many tool
-// calls; the REAL runaway-loop protection is the repeated-tool-signature
-// guard (MAX_REPEATED_TOOL_CALLS), not this cap.
-const MAX_TURN_ROUNDS = 24;
+// The per-turn TOOL LOOP is intentionally UNCAPPED. opencode, openclaude,
+// and codex do not limit how many tool calls a turn may chain, and a hard
+// round cap killed legitimate long-running tasks (test suites, refactors,
+// multi-file changes). Runaway/corruption protection comes from the guards
+// below plus the stream stall watchdog — never from a round count.
+// TOOL_LOOP_BUDGET is an ADVISORY steering-fact reference only (the
+// InnerDaemon audit row shows `budget N/24`); it is not enforced anywhere.
+const TOOL_LOOP_BUDGET = 24;
 const MAX_EMPTY_TURNS = 2;
 const MAX_REPEATED_TOOL_CALLS = 3;
 const MAX_MALFORMED_RETRIES = 2;
+/**
+ * Minimum time a tool row stays in its RUNNING state. A fast tool call
+ * (MCP stdio round trips can be ~1ms; read/write are similar) settles
+ * before OpenTUI paints its next frame (~16ms at 60fps), so the row would
+ * appear already green with output and the grey running glyph would never
+ * be seen. The floor holds the running state so the glyph is visible
+ * (parity: the startup loader's MIN_LOAD_MS floor for the same reason).
+ */
+export const MIN_TOOL_RUNNING_MS = 400;
+/**
+ * Milliseconds still needed to keep a tool row in its RUNNING state for at
+ * least MIN_TOOL_RUNNING_MS (0 once the floor has elapsed). Pure,
+ * unit-tested; the settle path awaits this before flipping the row green.
+ */
+export function toolRunningRemainingMs(
+	startedAt: number,
+	now: number,
+	floorMs = MIN_TOOL_RUNNING_MS,
+): number {
+	return Math.max(0, startedAt + floorMs - now);
+}
 // Codex-style LLM compaction (port of codex-rs/core/src/compact.rs): the old
 // context is sent to the model in a SEPARATE summarization request; the
 // returned handoff summary REPLACES the history (prefixed + recent user
@@ -1853,7 +1877,7 @@ export function App() {
 				intent: classifyIntent(value),
 				model: activeEndpoint().model,
 				budgetTurns: 0,
-				totalBudget: MAX_TURN_ROUNDS,
+				totalBudget: TOOL_LOOP_BUDGET,
 				backgroundTasksRunning: activeBgCount() > 0,
 			});
 			const steering = evaluateSteering(value, steeringRef, turnFacts());
@@ -1881,7 +1905,11 @@ export function App() {
 					appendNoopRow(formatInnerDaemonRow(rule.id, 'noop', facts));
 				}
 			}
-			for (let round = 0; round < MAX_TURN_ROUNDS; round++) {
+			// No round cap: the loop runs until the model answers with text,
+			// a safety guard trips (empty turn / repeated tool signature /
+			// malformed retries), or an error is thrown. `round` still
+			// counts tool turns for the steering audit fact.
+			for (let round = 0; ; round++) {
 				// Settled `⚙ Thought (Ns)` reports the THINKING phase length
 				// (since reasoning first streamed), not the whole turn.
 				const thoughtDuration = (): number =>
@@ -2117,7 +2145,7 @@ export function App() {
 								intent: classifyIntent(value),
 								model: activeEndpoint().model,
 								budgetTurns: round,
-								totalBudget: MAX_TURN_ROUNDS,
+								totalBudget: TOOL_LOOP_BUDGET,
 								backgroundTasksRunning: activeBgCount() > 0,
 							},
 						)
@@ -2219,7 +2247,7 @@ export function App() {
 							intent: classifyIntent(value),
 							model: activeEndpoint().model,
 							budgetTurns: round,
-							totalBudget: MAX_TURN_ROUNDS,
+							totalBudget: TOOL_LOOP_BUDGET,
 							backgroundTasksRunning: activeBgCount() > 0,
 						},
 					);
@@ -2235,7 +2263,7 @@ export function App() {
 									intent: toolConstraint.intent,
 									model: activeEndpoint().model,
 									budgetTurns: round,
-									totalBudget: MAX_TURN_ROUNDS,
+									totalBudget: TOOL_LOOP_BUDGET,
 									backgroundTasksRunning: activeBgCount() > 0,
 								},
 							),
@@ -2349,6 +2377,22 @@ export function App() {
 						content: toolResult.content,
 						tool_call_id: toolResult.tool_call_id,
 					});
+					// Fast tools settle before the next paint: an MCP stdio
+					// round trip can be ~1ms while the renderer frames at
+					// ~16ms, so without a floor the row appears already
+					// green with output and the grey running glyph is never
+					// seen. Hold the RUNNING state until the floor elapses
+					// (parity: the startup loader's MIN_LOAD_MS floor).
+					const executedAt = Date.now();
+					const runningRemaining = toolRunningRemainingMs(
+						callStartedAt,
+						executedAt,
+					);
+					if (runningRemaining > 0) {
+						await new Promise(resolve =>
+							setTimeout(resolve, runningRemaining),
+						);
+					}
 					setMessages(prev =>
 						prev.map(message =>
 							message.toolId === call.id
@@ -2359,7 +2403,7 @@ export function App() {
 										toolStats: {
 											durationSec: Math.max(
 												0,
-												(Date.now() - callStartedAt) / 1000,
+												(executedAt - callStartedAt) / 1000,
 											),
 											toolCalls: calls.length,
 										},
@@ -2446,15 +2490,6 @@ export function App() {
 					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
 						(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
 				);
-				// The turn hit the round cap after a tool call — the model
-				// never got a chance to narrate the last result (e.g. a
-				// failing test run). Say so instead of stopping silently,
-				// and give the user an ACTIONABLE path forward (the context
-				// is already persisted, so a plain "continue" prompt resumes
-				// from exactly where the loop stopped).
-				appendInfo(
-					`Long-running task paused at the ${MAX_TURN_ROUNDS}-round safety cap (the model kept using tools without a final reply). Type "continue" to keep going — the conversation state is saved.`,
-				);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -2476,7 +2511,7 @@ export function App() {
 							intent: classifyIntent(value),
 							model: activeEndpoint().model,
 							budgetTurns: 0,
-							totalBudget: MAX_TURN_ROUNDS,
+							totalBudget: TOOL_LOOP_BUDGET,
 							backgroundTasksRunning: activeBgCount() > 0,
 						}),
 					);
