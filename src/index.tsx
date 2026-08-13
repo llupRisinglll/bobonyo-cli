@@ -170,7 +170,32 @@ renderer.once('destroy', () => {
 	// Defer the exit: the App's own `exit()` writes the goodbye screen AFTER
 	// `renderer.destroy()` returns, a synchronous exit here would kill the
 	// process before the goodbye ever reaches stdout.
-	setTimeout(() => process.exit(0), 0);
+	setTimeout(() => {
+		// DRAIN TERMINAL RESPONSES BEFORE HANDSHAKING BACK TO THE SHELL.
+		// OpenTUI's startup capability probes (OSC 10/11 color queries, the
+		// DSR cursor position, kitty `$p` mode + `?u` keyboard queries, and
+		// the `+q4d73` DECRQSS) make the terminal answer through the PTY.
+		// On a FAST exit (Ctrl+C right after boot) the app never reads those
+		// answers, so they land in the shell's stdin as random garbage — the
+		// herdr "10;rgb:…;1R1+r4D73=…" characters. Consume and discard
+		// everything that arrives in a short window before exiting.
+		if (!process.stdin.isTTY) {
+			process.exit(0);
+			return;
+		}
+		const discard = (): void => {
+			// Responses are swallowed; they must never reach the shell.
+		};
+		process.stdin.on('data', discard);
+		process.stdin.resume();
+		const done = (): void => {
+			process.stdin.removeListener('data', discard);
+			process.stdin.pause();
+			process.exit(0);
+		};
+		process.stdin.once('end', done);
+		setTimeout(done, 400);
+	}, 0);
 });
 
 // Log every PARSED key event (name/modifiers/sequence) so we can see whether

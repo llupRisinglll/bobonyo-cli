@@ -30,6 +30,11 @@ export interface SessionMeta {
 	/** Working directory the conversation was created in (for /resume's
 	 *  current-folder filter; legacy sessions may not carry it). */
 	cwd?: string;
+	/** Provider + model the conversation ran on. Persisted on every save so
+	 *  /resume can restore the ORIGINAL model instead of the most-recently
+	 *  used one. Legacy sessions may not carry these. */
+	provider?: string;
+	model?: string;
 }
 
 export interface SessionData extends SessionMeta {

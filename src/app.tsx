@@ -625,6 +625,10 @@ export function App() {
 			firstMessage: firstMessagePreview(messages()),
 			messages: messages().filter(message => message.kind !== 'info'),
 			context: context(),
+			// Record the model this conversation is running on, so a later
+			// /resume can restore it instead of the most-recently used one.
+			provider: activeEndpoint().id,
+			model: activeEndpoint().model,
 		};
 		saveSession(currentSession);
 	};
@@ -653,7 +657,10 @@ export function App() {
 		} catch {
 			// best-effort goodbye
 		}
-		process.exit(0);
+		// The FINAL exit is owned by index.tsx's renderer 'destroy' handler:
+		// it drains the terminal's pending capability responses from stdin
+		// before handing the TTY back to the shell (a synchronous exit here
+		// would kill that drain and leak the responses as shell garbage).
 	};
 
 	const clear = () => {
@@ -708,6 +715,54 @@ export function App() {
 			setSessionName(resumed.name);
 			setUsageHistory([]);
 			currentSession = {...resumed};
+			// Model parity: the conversation keeps the model it ran on, NOT
+			// the most-recently used one. If the session's provider/model is
+			// no longer configured, fall back to the current model and tell
+			// the user instead of silently switching.
+			const sessionProvider = resumed.provider;
+			const sessionModel = resumed.model;
+			if (sessionProvider && sessionModel) {
+				const provider = listProviders().find(
+					candidate => candidate.id === sessionProvider,
+				);
+				const catalog =
+					provider && (discoveredModels()[provider.id] ?? provider.models);
+				if (provider && catalog?.includes(sessionModel)) {
+					setActiveEndpoint({
+						...activeEndpoint(),
+						id: provider.id,
+						name: provider.name ?? provider.id,
+						baseUrl: provider.baseUrl,
+						apiKey: provider.apiKeyResolved,
+						model: sessionModel,
+						models: discoveredModels()[provider.id] ?? provider.models,
+						modelEfforts: provider.modelEfforts,
+						contextWindow:
+							modelWindows()[provider.id]?.[sessionModel] ??
+							provider.contextWindow ??
+							128_000,
+						sdkProvider: provider.sdkProvider,
+						providerOptions: provider.providerOptions,
+						effort: provider.modelEfforts[sessionModel],
+						promptCacheKey: provider.promptCacheKey,
+						alwaysAllow: provider.alwaysAllow,
+					});
+					savePreferences({
+						lastProvider: provider.id,
+						lastModel: sessionModel,
+					});
+					// Deferred: this resume branch can run during App boot,
+					// BEFORE the later-defined loadProviderFeatures const is
+					// initialized (TDZ). A tick later is fine — the model
+					// restore + toast are already applied synchronously.
+					setTimeout(() => loadProviderFeatures(provider), 0);
+					showToast(`Resumed model: ${sessionModel} · ${provider.id}`);
+				} else {
+					showToast(
+						`Session model ${sessionModel} (${sessionProvider}) is no longer available — continuing with ${activeEndpoint().model}.`,
+					);
+				}
+			}
 			// Temporary success-green notice above the input (parity: the
 			// completion line) — cleared on the next prompt and after a few
 			// seconds, never a persistent history row.
@@ -732,6 +787,8 @@ export function App() {
 			// Record the folder the conversation was created in so /resume can
 			// filter to the current cwd by default.
 			cwd: process.cwd(),
+			provider: activeEndpoint().id,
+			model: activeEndpoint().model,
 			messages: [],
 			context: [],
 		};
@@ -3491,6 +3548,8 @@ export function App() {
 						updatedAt: session.updatedAt,
 						firstMessage: session.firstMessage,
 						cwd: session.cwd,
+						provider: session.provider,
+						model: session.model,
 					}))}
 					onResume={id => {
 						setResumeOpen(false);

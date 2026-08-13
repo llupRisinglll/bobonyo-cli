@@ -13,6 +13,11 @@ export interface ResumeSession {
 	firstMessage: string;
 	/** Folder the conversation was created in (legacy sessions may lack it). */
 	cwd?: string;
+	/** Provider + model the conversation ran on (legacy sessions may lack
+	 *  them) — shown in the picker so the original model is visible before
+	 *  resuming. */
+	provider?: string;
+	model?: string;
 }
 
 type Row =
@@ -422,6 +427,22 @@ export function ResumeModal(props: {
 										{item.active ? '❯ ' : '  '}
 										{sessionLabel(row.session).slice(0, 48)}
 									</text>
+									<Show when={row.session.model}>
+										<text
+											fg={
+												item.active
+													? activeRow().fg
+													: colors().secondary
+											}
+											attributes={dim()}
+										>
+											{' · '}
+											{row.session.model}
+											{row.session.provider
+												? ` · ${row.session.provider}`
+												: ''}
+										</text>
+									</Show>
 									<box flexGrow={1} />
 									<text
 										fg={

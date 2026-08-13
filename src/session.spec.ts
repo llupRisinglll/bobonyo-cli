@@ -7,6 +7,7 @@ import {
 	healResumedContext,
 	listSessions,
 	newSessionId,
+	resolveSession,
 	saveSession,
 } from './session';
 import type {ChatMessage} from './state';
@@ -88,6 +89,37 @@ describe('session cwd (resume folder filter)', () => {
 			// Sessions without a cwd (legacy) surface as undefined, not junk.
 			const legacy = listSessions().find(session => session.id === 'missing-cwd');
 			expect(legacy).toBeUndefined();
+		} finally {
+			process.env.NANOCODER_DATA_DIR = prev;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+
+	test('saveSession persists provider/model and resolveSession round-trips it', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-sess-model-'));
+		const prev = process.env.NANOCODER_DATA_DIR;
+		process.env.NANOCODER_DATA_DIR = dir;
+		try {
+			const id = newSessionId();
+			saveSession({
+				id,
+				name: 'model chat',
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				firstMessage: 'hi',
+				// The model the conversation ran on — /resume restores THIS,
+				// not the most-recently used model.
+				provider: 'Xiaomi',
+				model: 'mimo-v2.5',
+				messages: [{role: 'user', content: 'hi'}],
+				context: [],
+			});
+			const resolved = resolveSession(id);
+			expect(resolved?.provider).toBe('Xiaomi');
+			expect(resolved?.model).toBe('mimo-v2.5');
+			// Legacy sessions (no model fields) resolve with undefined, so
+			// resume keeps the current model instead of crashing.
+			expect(resolveSession('does-not-exist')).toBeNull();
 		} finally {
 			process.env.NANOCODER_DATA_DIR = prev;
 			rmSync(dir, {recursive: true, force: true});
