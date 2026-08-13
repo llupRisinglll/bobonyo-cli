@@ -13,7 +13,7 @@
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {bobonyoConfigDir} from './bobonyo-paths';
+import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
 import {parseCommandFile} from './custom';
 
 export interface Subagent {
@@ -29,6 +29,7 @@ export interface Subagent {
 }
 
 function subagentDirs(): Array<{dir: string; source: Subagent['source']}> {
+	migrateProjectDir(process.cwd());
 	const configBase =
 		process.env.BOBONYO_CONFIG_DIR ??
 		process.env.NANOCODER_CONFIG_DIR ??

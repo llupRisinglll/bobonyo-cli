@@ -1,6 +1,6 @@
 import {cpSync, existsSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 
 /**
  * BOBONYO storage paths. The rewrite now owns its own directories
@@ -49,4 +49,34 @@ export function bobonyoDataDir(): string {
 	const target = join(homedir(), '.local', 'share', 'bobonyo');
 	migrateLegacy(join(homedir(), '.local', 'share', 'nanocoder'), target);
 	return target;
+}
+
+/** Project roots already checked for migration (no repeated walk-ups). */
+const migratedProjects = new Set<string>();
+
+/**
+ * Migrate PROJECT-level configs: walk UP from `startDir` and, wherever a
+ * legacy `.nanocoder` folder exists without a `.bobonyo` sibling, copy it
+ * over (idempotent, non-destructive — the legacy folder stays as a
+ * fallback). This is what moves e.g. Hilinga's agents/commands/skills into
+ * bobonyo-owned project folders automatically.
+ */
+export function migrateProjectDir(startDir: string): void {
+	let dir = startDir;
+	for (;;) {
+		if (migratedProjects.has(dir)) break;
+		migratedProjects.add(dir);
+		try {
+			const source = join(dir, '.nanocoder');
+			const target = join(dir, '.bobonyo');
+			if (!existsSync(target) && existsSync(source)) {
+				cpSync(source, target, {recursive: true});
+			}
+		} catch {
+			// read-only / permission issue: keep going with the fallback.
+		}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
 }

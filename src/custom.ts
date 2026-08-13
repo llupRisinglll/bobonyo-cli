@@ -10,7 +10,7 @@
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {bobonyoConfigDir} from './bobonyo-paths';
+import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
 import {cavemanMode} from './state';
 
 export interface ParsedFrontmatter {
@@ -79,6 +79,7 @@ export interface Skill {
 }
 
 function baseDirs(): string[] {
+	migrateProjectDir(process.cwd());
 	const dirs: string[] = [];
 	const configBase =
 		process.env.BOBONYO_CONFIG_DIR ??

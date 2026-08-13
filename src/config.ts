@@ -11,7 +11,7 @@
 import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {bobonyoConfigDir} from './bobonyo-paths';
+import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
 import {readCodexAuth} from './codex-auth';
 
 export interface ProviderConfig {
@@ -260,6 +260,13 @@ function normalize(config: AppConfig): AppConfig {
 }
 
 export function loadConfig(): AppConfig {
+	// Project-level migration: legacy `.nanocoder` project folders become
+	// `.bobonyo` so the project config is bobonyo-owned from here on.
+	migrateProjectDir(
+		process.env.BOBONYO_PROJECT_DIR ??
+			process.env.NANOCODER_PROJECT_DIR ??
+			process.cwd(),
+	);
 	// Highest precedence: providers from env (BOBONYO_*, legacy NANOCODER_*).
 	const envProviders =
 		process.env.BOBONYO_PROVIDERS ??

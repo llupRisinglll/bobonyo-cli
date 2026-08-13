@@ -240,6 +240,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
+	test('project .nanocoder folders auto-migrate to .bobonyo', () => {
+		const paths = read('./bobonyo-paths.ts');
+		expect(paths).toMatch(/export function migrateProjectDir/);
+		expect(paths).toMatch(/cpSync\(source, target, \{recursive: true\}\)/);
+		expect(paths).toMatch(/\.bobonyo/);
+		// The migration runs wherever project dirs resolve (config/custom/
+		// subagents), so Hilinga-style project agents/commands/skills move.
+		expect(read('./config.ts')).toMatch(/migrateProjectDir\(/);
+		expect(read('./custom.ts')).toMatch(/migrateProjectDir\(process\.cwd\(\)\)/);
+		expect(read('./subagents.ts')).toMatch(/migrateProjectDir\(process\.cwd\(\)\)/);
+	});
+
 	test('the DeepSeek preset seeds the CURRENT v4 catalog', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
 		expect(modal).toMatch(
