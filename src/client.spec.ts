@@ -4,7 +4,9 @@ import {
 	openAIToolBlocks,
 	parseToolCalls,
 	parseXmlToolCalls,
+	streamChat,
 } from './client';
+import {setActiveEndpoint} from './state';
 
 describe('parseXmlToolCalls', () => {
 	test('parses the plain <tool_calls>/<invoke> dialect with named params', () => {
@@ -44,6 +46,56 @@ describe('parseXmlToolCalls', () => {
 
 	test('returns null when no tool-call block exists', () => {
 		expect(parseXmlToolCalls('just a normal reply')).toBeNull();
+	});
+});
+
+describe('stream stall guard (silent provider must not hang)', () => {
+	test('a silent provider is surfaced as a stall error instead of hanging forever', async () => {
+		setActiveEndpoint({
+			id: 'stall-test',
+			name: 'Stall Test',
+			baseUrl: 'http://127.0.0.1:1',
+			apiKey: 'x',
+			model: 'm',
+			models: ['m'],
+			contextWindow: 128_000,
+		});
+		const realFetch = globalThis.fetch;
+		// The provider opened the connection, sent nothing, and never
+		// closes — the stucked-pane scenario. `reader.read()` would block
+		// forever without the stall guard.
+		globalThis.fetch = (async () => ({
+			ok: true,
+			status: 200,
+			body: {
+				getReader: () => ({
+					read: () => new Promise<never>(() => {}),
+					cancel: async () => {},
+					releaseLock: () => {},
+				}),
+			},
+		})) as unknown as typeof fetch;
+		try {
+			const started = Date.now();
+			await expect(
+				streamChat(
+					[{role: 'user', content: 'hi'}],
+					{onText: () => {}, onReasoning: () => {}},
+					undefined,
+					[],
+					// 30ms no-data timeout so the test finishes fast; the
+					// retry path (MAX_STREAM_STALL_RETRIES) runs too.
+					{stallTimeoutMs: 30},
+				),
+			).rejects.toThrow(
+				/Stream produced no non-ping SSE event within 30ms/,
+			);
+			// 3 attempts × 30ms + retry backoff ≈ 1.3s — far from the old
+			// indefinite hang (the stucked pane sat at "Working…" for 6+ min).
+			expect(Date.now() - started).toBeLessThan(10_000);
+		} finally {
+			globalThis.fetch = realFetch;
+		}
 	});
 });
 

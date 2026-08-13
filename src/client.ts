@@ -39,6 +39,11 @@ export class StreamRunawayError extends Error {
 export interface StreamGuard {
 	maxOutputChars?: number;
 	maxDurationMs?: number;
+	/** Max ms with NO bytes from the provider before the stream is treated
+	 *  as stalled (default 60s). Guards the read loop, not just the
+	 *  between-read duration check — a silent provider would otherwise hang
+	 *  the turn on a blocked `reader.read()` forever. */
+	stallTimeoutMs?: number;
 }
 
 /**
@@ -420,6 +425,7 @@ async function streamOnce(
 			tools,
 			endpoint,
 			toolProfile,
+			streamGuard,
 		);
 	}
 	const body = buildOpenAIRequestBody(
@@ -474,11 +480,17 @@ async function streamOnce(
 		maxOutputChars:
 			streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
 		maxDurationMs: streamGuard?.maxDurationMs ?? MAX_STREAM_DURATION_MS,
+		stallTimeoutMs: streamGuard?.stallTimeoutMs ?? 60_000,
 	};
 	const streamStartedAt = Date.now();
+	// See createStallGuard: a silent provider must not hang the turn.
+	const stallGuard = createStallGuard(guard.stallTimeoutMs, () =>
+		reader.cancel(),
+	);
 
 	while (true) {
-		const {done, value} = await reader.read();
+		const {done, value} = await stallGuard.race(reader.read());
+		stallGuard.clear();
 		if (done) break;
 		const elapsed = Date.now() - streamStartedAt;
 		if (elapsed > guard.maxDurationMs) {
@@ -809,6 +821,7 @@ async function anthropicStreamOnce(
 	tools: ToolCatalogEntry[] = [],
 	endpointOverride?: EndpointOverride,
 	toolProfile?: string,
+	streamGuard?: StreamGuard,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
 	const {system, anthropicMessages} = buildAnthropicMessages(
@@ -863,9 +876,16 @@ async function anthropicStreamOnce(
 		{id: string; name: string; arguments: string}
 	>();
 	let eventName = '';
+	// Same silent-provider guard as the OpenAI loop: a blocked read must not
+	// hang the turn forever.
+	const stallGuard = createStallGuard(
+		streamGuard?.stallTimeoutMs ?? 60_000,
+		() => reader.cancel(),
+	);
 
 	while (true) {
-		const {done, value} = await reader.read();
+		const {done, value} = await stallGuard.race(reader.read());
+		stallGuard.clear();
 		if (done) break;
 		buffer += decoder.decode(value, {stream: true});
 		const lines = buffer.split('\n');
@@ -1040,6 +1060,52 @@ export function buildAnthropicMessages(
 
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Client-side STALL guard for a stream reader. The provider can go SILENT
+ * (no bytes, no close); a plain `await reader.read()` would then block the
+ * turn forever — the duration guard only runs BETWEEN reads, so it never
+ * fires. Every read races a no-data timeout; on timeout the connection is
+ * released and a ProviderError with the stall-message shape is thrown, so
+ * streamOnceWithRetries retries (and eventually surfaces) instead of
+ * hanging at "Working…".
+ */
+function createStallGuard(
+	timeoutMs: number,
+	release: () => Promise<void>,
+): {
+	race<T>(promise: Promise<T>): Promise<T>;
+	clear(): void;
+} {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	const clear = (): void => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = null;
+		}
+	};
+	return {
+		clear,
+		race<T>(promise: Promise<T>): Promise<T> {
+			clear();
+			return Promise.race([
+				promise,
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => {
+						clear();
+						void release().catch(() => {});
+						reject(
+							new ProviderError(
+								500,
+								`Stream produced no non-ping SSE event within ${timeoutMs}ms`,
+							),
+						);
+					}, timeoutMs);
+				}),
+			]);
+		},
+	};
 }
 
 export function parseArguments(raw: string): Record<string, unknown> {
