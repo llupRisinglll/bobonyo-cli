@@ -242,6 +242,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 75\}/);
 	});
 
+	test('the monitor tool is removed (background completion reports instead)', () => {
+		// Background bash tasks already append a completion row when they
+		// exit, so the model-facing monitor polling tool is redundant (the
+		// future realtime background-task modal replaces it for the user).
+		const tools = read('./tools.ts');
+		expect(tools).not.toMatch(/registerTool\('monitor'/);
+		expect(tools).not.toMatch(/'monitor',/);
+		const app = read('./app.tsx');
+		expect(app).not.toMatch(/allMonitor/);
+	});
+
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
 		const input = read('./components/input-box.tsx');
 		// The arrow handler branches on ctrl and goes through the word-jump

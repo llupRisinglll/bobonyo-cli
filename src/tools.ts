@@ -12,7 +12,7 @@ import {
 	type MockToolCall,
 	type ToolCatalogEntry,
 } from './client';
-import {bgTasks, runBash} from './bash';
+import {runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
@@ -81,7 +81,6 @@ const READ_ONLY_TOOLS = new Set([
 	'skill',
 	'check_skill',
 	'agent',
-	'monitor',
 ]);
 
 export function requiresApproval(
@@ -112,7 +111,6 @@ const PLAN_EXCLUDED = new Set([
 	'delete_file',
 	'file_op',
 	'execute_bash',
-	'monitor',
 	'write_tasks',
 	'git_add',
 	'git_commit',
@@ -150,7 +148,6 @@ const NANO_TOOLS = new Set([
 	'write_file',
 	'delete_file',
 	'execute_bash',
-	'monitor',
 	'web_search',
 	'search_file_contents',
 ]);
@@ -162,7 +159,6 @@ const MINIMAL_TOOLS = new Set([
 	'string_replace',
 	'diff_edit',
 	'delete_file',
-	'monitor',
 	'search_file_contents',
 	'find_files',
 	'web_search',
@@ -416,17 +412,6 @@ registerTool('execute_bash', {
 		const command = text(args, 'command') || 'true';
 		const result = await runBash(command, ctx.onProgress);
 		return result.content;
-	},
-});
-
-registerTool('monitor', {
-	execute(args) {
-		const taskId = text(args, 'task_id') || text(args, 'id');
-		const task = bgTasks().find(t => t.id === taskId);
-		if (!task) return `No background task with ID ${taskId}.`;
-		const status = task.running ? 'running' : `exited ${task.exitCode}`;
-		const tail = task.output.slice(-5).join('\n');
-		return `Task ${task.id}: ${status}\n${tail}`;
 	},
 });
 

@@ -1223,7 +1223,6 @@ const TOOL_POSITIONAL_ARGS: Record<string, string[]> = {
 	fetch_url: ['url'],
 	skill: ['name', 'path'],
 	check_skill: ['name', 'path'],
-	monitor: ['task_id'],
 };
 
 /**

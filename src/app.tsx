@@ -2189,10 +2189,7 @@ export function App() {
 				const signature = result.toolCalls
 					.map(call => `${call.name}:${JSON.stringify(call.arguments)}`)
 					.join('|');
-				const allMonitor = result.toolCalls.every(call => call.name === 'monitor');
-				if (allMonitor) {
-					repeatedToolCount = 0;
-				} else if (signature === lastToolSignature) {
+				if (signature === lastToolSignature) {
 					repeatedToolCount += 1;
 					if (repeatedToolCount >= MAX_REPEATED_TOOL_CALLS) {
 						appendError(

@@ -179,7 +179,7 @@ export async function runBash(
 			content:
 				`Command exceeded the ${AUTO_BACKGROUND_MS / 1000}-second foreground budget ` +
 				`and is still running as background task ${task.id}. ` +
-				'Use monitor to read output, check status, or stop it.',
+				'A completion row appears in the chat when it exits (status line shows `bg: N` while running).',
 			task,
 		};
 	}
