@@ -300,10 +300,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/keptContext = healResumedContext/);
 		// The "Undid the last message." notice uses the SUCCESS completion
 		// slot (green, leading breakline, auto-expires), never a permanent
-		// transcript row.
+		// transcript row. The message may carry a restored-files suffix.
 		expect(app).toMatch(/setCompletionTone\('success'\)/);
-		expect(app).toMatch(/setCompletionMessage\('Undid the last message\.'\)/);
+		expect(app).toMatch(/setCompletionMessage\(/);
+		expect(app).toMatch(/Undid the last message\./);
 		expect(app).not.toMatch(/appendInfo\('Undid the last message\.'\)/);
+		// /undo file parity (openclaude rewind): the handler restores the
+		// files the undone exchange mutated, and every REAL LLM turn starts a
+		// new file-undo exchange (slash commands must not — they would push a
+		// dummy entry that swallows the previous exchange's file undo).
+		expect(app).toMatch(/undoFileExchange\(\)/);
+		expect(app).toMatch(/beginFileUndoExchange\(value\)/);
 	});
 
 	test('typed keys are claimed so the history scrollbox never scrolls', () => {

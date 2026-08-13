@@ -27,6 +27,7 @@ import {
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
+import {beginFileUndoExchange, undoFileExchange} from './file-undo';
 import {
 	loadCustomCommands,
 	loadCustomTools,
@@ -1718,6 +1719,12 @@ export function App() {
 			body: string;
 		},
 	) => {
+		// /undo file parity (openclaude rewind): every REAL LLM turn starts a
+		// file-undo exchange — the file tools snapshot their targets during
+		// the turn, and /undo restores them with the transcript. Slash
+		// commands and `!bash` never reach here, so they can't push dummy
+		// exchanges that would swallow the previous exchange's file undo.
+		beginFileUndoExchange(value);
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
 			messages: [...messages()],
@@ -2679,6 +2686,10 @@ export function App() {
 		}
 		setMessages(keptMessages);
 		setContext(keptContext);
+		// openclaude-rewind parity: restore the files the undone exchange
+		// mutated (write/edit/delete/file_op snapshots taken before each
+		// tool ran). The transcript and the files move back together.
+		const fileUndo = undoFileExchange();
 		// opencode parity: the undone prompt comes back into the input so it
 		// can be edited and re-sent.
 		if (undonePrompt) setInput(undonePrompt);
@@ -2688,7 +2699,15 @@ export function App() {
 		// the next turn starts (runTurn clears the completion slot). Never a
 		// permanent transcript row.
 		setCompletionTone('success');
-		setCompletionMessage('Undid the last message.');
+		setCompletionMessage(
+			`Undid the last message.${
+				fileUndo && fileUndo.restored.length > 0
+					? ` Restored ${fileUndo.restored.length} file${
+							fileUndo.restored.length === 1 ? '' : 's'
+						}.`
+					: ''
+			}`,
+		);
 		if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
 		resumeNoticeTimer = setTimeout(() => {
 			setCompletionMessage('');

@@ -16,6 +16,7 @@ import {bgTasks, runBash} from './bash';
 import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
+import {snapshotMutationTargets} from './file-undo';
 import {
 	executeNativeWebSearch,
 	resolveWebSearchFallback,
@@ -366,6 +367,10 @@ export async function executeTool(
 		return {tool_call_id: call.id, content: `Unknown tool: ${call.name}`};
 	}
 	try {
+		// /undo parity (openclaude rewind): snapshot the file(s) this
+		// mutation will touch BEFORE executing, so a later undo can restore
+		// them alongside the transcript truncation. Non-file tools no-op.
+		snapshotMutationTargets(canonicalName, canonicalCall.arguments);
 		const content = await def.execute(canonicalCall.arguments, ctx);
 		return {tool_call_id: call.id, content};
 	} catch (error) {
