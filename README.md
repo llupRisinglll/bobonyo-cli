@@ -40,6 +40,33 @@ bobonyo treats every model as a first class citizen:
   bobonyo fixes them automatically and keeps going, instead of stopping.
 - **Cache friendly.** Session management keeps the LLM prompt cache warm, so
   long conversations stay fast and cheap.
+- **Pick your agent style.** Swap the system prompt to behave like
+  OpenCode, Claude Code, or Codex — or write your own — without leaving the
+  harness.
+
+## System prompt
+
+The harness is the part that stays: cache-friendly requests, tool-call
+recovery, vision/web-search fallbacks, sessions and multi-agent
+collaboration. The **personality** is the part you can change. Settings →
+Behavior → System prompt lets you switch the agent's style on the fly:
+
+- **default** — the built-in BoboNyo prompt (blunt, a little snobbish,
+  honest).
+- **opencode** — the OpenCode workflow: short answers (under 4 lines),
+  no preamble, minimal tokens, never commit unless asked.
+- **claudecode** — the Claude Code workflow: no gold-plating, read before
+  proposing, diagnose before switching tactics, report faithfully.
+- **codex** — the Codex CLI workflow: curious personality, blunt honesty,
+  `rg`-first search, careful with destructive commands.
+- **custom** — write your own. Selecting it seeds `~/.config/bobonyo/SYSTEM.md`
+  with the built-in prompt; edit the file in any editor and it is loaded on
+  the next turn.
+
+All styles keep the harness's one hard rule: explain in one line what a
+tool call is about to do before firing it. So you get the vibe of the tool
+you already know, with the model freedom and cache savings you don't get
+from that tool.
 
 ## Caveman mode
 
