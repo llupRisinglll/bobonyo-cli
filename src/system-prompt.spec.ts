@@ -33,20 +33,23 @@ describe('system prompt styles', () => {
 		);
 	});
 
-	test('presets are non-empty, distinct and keep the tool rule', () => {
-		const bodies = [
-			SYSTEM_PROMPT_PRESETS.opencode,
-			SYSTEM_PROMPT_PRESETS.claudecode,
-			SYSTEM_PROMPT_PRESETS.codex,
-		];
-		for (const body of bodies) {
-			expect(body.length).toBeGreaterThan(80);
-			expect(body).toMatch(/tools? for anything stateful/);
+	test('presets carry the REAL tool prompts (opencode/codex/claude-code)', () => {
+		// opencode: its actual verbosity + no-preamble rules.
+		expect(SYSTEM_PROMPT_PRESETS.opencode).toMatch(/Minimize output tokens/);
+		expect(SYSTEM_PROMPT_PRESETS.opencode).toMatch(/under 4 lines/);
+		expect(SYSTEM_PROMPT_PRESETS.opencode).toMatch(/unnecessary preamble or postamble/);
+		// openclaude / Claude Code: no gold-plating + diagnose-before-switching.
+		expect(SYSTEM_PROMPT_PRESETS.claudecode).toMatch(/beyond what was asked/);
+		expect(SYSTEM_PROMPT_PRESETS.claudecode).toMatch(/diagnose why before switching tactics/);
+		expect(SYSTEM_PROMPT_PRESETS.claudecode).toMatch(/prompt injection/);
+		// Codex CLI: personality + working rules.
+		expect(SYSTEM_PROMPT_PRESETS.codex).toMatch(/Call out weak ideas directly/);
+		expect(SYSTEM_PROMPT_PRESETS.codex).toMatch(/rg, rg --files/);
+		// The harness tool rule survives in every preset.
+		for (const body of Object.values(SYSTEM_PROMPT_PRESETS)) {
 			expect(body).toMatch(/Before each tool call/);
 		}
-		expect(
-			new Set(bodies).size,
-		).toBe(3);
+		expect(new Set(Object.values(SYSTEM_PROMPT_PRESETS)).size).toBe(3);
 	});
 
 	test('custom falls back to the default until SYSTEM.md exists', () => {
