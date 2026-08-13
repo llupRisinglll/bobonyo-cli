@@ -654,13 +654,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// useful content. Every bash call must keep its own `✦ Bash(cmd)`
 		// row (same rule as file-write tools and agents).
 		const history = read('./components/history.tsx');
-		const renderToolRun = history.slice(
-			history.indexOf('function renderToolRun'),
-			history.indexOf('function renderToolRun') + 1400,
+		const groupToolRun = history.slice(
+			history.indexOf('function groupToolRun'),
+			history.indexOf('function groupToolRun') + 1400,
 		);
-		expect(renderToolRun).toMatch(/name === 'execute_bash'/);
-		expect(renderToolRun).toMatch(/name === 'execute_bash:user'/);
-		expect(renderToolRun).toMatch(/blocks\.push\(\[message\]\);/);
+		expect(groupToolRun).toMatch(/name === 'execute_bash'/);
+		expect(groupToolRun).toMatch(/name === 'execute_bash:user'/);
+		expect(groupToolRun).toMatch(/blocks\.push\(\[message\]\);/);
 	});
 
 	test('bash command/body wrap to the REAL render width, never a fixed 72', () => {
@@ -774,6 +774,45 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The row component renders the brief ONCE above the box.
 		const row = read('./components/bash-tool-row.tsx');
 		expect(row).toMatch(/<Show when=\{props\.brief && props\.brief\.trim\(\)\}>/);
+	});
+
+	test('consecutive tool ROUNDS each keep their own brief once settled', () => {
+		// Tool-loop rounds that stream narration append CONSECUTIVE tool
+		// rows (no separator when the round produced no reasoning), so a run
+		// can span multiple rounds. The settled renderer must thread each
+		// row's OWN brief — the old run-wide `run[0]?.brief` dropped every
+		// brief after the first tool message of the run (the "Wait more."
+		// narration vanished once the next bash box settled).
+		const history = read('./components/history.tsx');
+		const settled = history.slice(
+			history.indexOf('for (const row of renderToolRun(run, fillWidth))'),
+			history.indexOf('for (const row of renderToolRun(run, fillWidth))') + 400,
+		);
+		expect(settled).toMatch(/pushBlock\(row\.text, row\.blockKey, 'md', row\.brief\)/);
+		expect(history).not.toMatch(/runBrief = run\[0\]\?\.brief/);
+		// renderToolRun threads each block's OWN brief into its row, and a
+		// same-family tally breaks when a NEW narration starts (so compact
+		// groups never swallow a later round's brief either).
+		expect(history).toMatch(/brief = block\[0\]\?\.brief/);
+		expect(history).toMatch(/blockKey: key, brief/);
+		expect(history).toMatch(/sharesBatch/);
+	});
+
+	test('codex usage limits render in /status for codexAccount endpoints', () => {
+		// The `/status` modal must fetch live codex limits (`GET /wham/usage`)
+		// ONLY for the ChatGPT-account codex backend, and thread them into
+		// the status rows — the account's window (5h / weekly / monthly …)
+		// decides the label, and every window gets its own row.
+		const app = read('./app.tsx');
+		expect(app).toMatch(/fetchCodexLimits\(endpoint\.baseUrl\)/);
+		expect(app).toMatch(/codexLimitRows: rows/);
+		expect(app).toMatch(/endpoint\.codexAccount/);
+		const rows = read('./status-rows.ts');
+		expect(rows).toMatch(/codexLimitRows\?: StatusRow\[\]/);
+		expect(rows).toMatch(/\.\.\.\(data\.codexLimitRows \?\? \[\]\)/);
+		const limits = read('./codex-limits.ts');
+		expect(limits).toMatch(/\/wham\/usage/);
+		expect(limits).toMatch(/codexLimitLabel\(window\.limit_window_seconds/);
 	});
 
 	test('file tools carry model-facing descriptions + argument schemas', () => {

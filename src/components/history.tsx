@@ -577,16 +577,15 @@ export function History(props: {
 					run.push(all[i + 1]!);
 					i++;
 				}
-				const runBrief = run[0]?.brief;
-				for (const [rowIndex, row] of renderToolRun(run, fillWidth).entries()) {
-					// The brief renders ONCE, on the FIRST tool entry of the
-					// batch (never repeated per concurrent call).
-					pushBlock(
-						row.text,
-						row.blockKey,
-						'md',
-						rowIndex === 0 ? runBrief : runBrief ? ' ' : undefined,
-					);
+				// Every tool row keeps its OWN brief: tool-loop rounds that
+				// stream narration append CONSECUTIVE tool messages (no
+				// separator when the round produced no reasoning), so a run
+				// can span multiple rounds. Threading each rendered row's own
+				// brief keeps every round's narration visible once settled —
+				// the old run-wide `run[0]?.brief` dropped every brief after
+				// the first tool message of the run.
+				for (const row of renderToolRun(run, fillWidth)) {
+					pushBlock(row.text, row.blockKey, 'md', row.brief);
 				}
 			} else if (message.kind === 'info') {
 				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
@@ -1552,15 +1551,20 @@ function wordWrapForBackground(text: string, width: number): string[] {
 }
 
 /**
- * Render a run of consecutive tool calls: same-family calls collapse into ONE
- * compact block (`✦ Ran Bash ×3` / `✦ Ran WebSearch ×2 and WebFetch`), while
- * unrelated tools and file-write tools keep their own rows. Ctrl+O toggles
- * between the compacted header and the individual call entries.
+ * Group a run of consecutive tool calls into render blocks: file-write
+ * tools, agents and every bash call keep their OWN block (bash compaction
+ * would hide the command — the command line IS the useful content), while
+ * same-family calls collapse into ONE compact tally (`✦ Ran WebSearch ×2
+ * and WebFetch`). Ctrl+O toggles between the compacted header and the
+ * individual call entries.
+ *
+ * A same-family block stays ONE batch only while it shares a single brief:
+ * within one round the first call carries the real brief and later calls
+ * carry the ' ' batch marker, but a tool message with its OWN real brief
+ * belongs to a NEW round — grouping it into the previous round's tally
+ * would silently drop that narration from the settled transcript.
  */
-function renderToolRun(
-	run: ChatMessage[],
-	width: number,
-): Array<{text: string; blockKey?: string}> {
+function groupToolRun(run: ChatMessage[]): ChatMessage[][] {
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';
@@ -1581,18 +1585,51 @@ function renderToolRun(
 		const last = blocks[blocks.length - 1];
 		const lastFamily =
 			last && last[0]?.tool ? toolFamily(last[0].tool.name) : null;
+		const incomingBrief = message.brief;
+		const groupBrief = last?.[0]?.brief;
+		const sharesBatch =
+			!incomingBrief ||
+			incomingBrief === ' ' ||
+			(groupBrief !== undefined && incomingBrief === groupBrief);
 		if (
 			last &&
 			lastFamily === family &&
 			!isFileWriteTool(last[0]?.tool?.name ?? '') &&
-			last[0]?.tool?.name !== 'agent'
+			last[0]?.tool?.name !== 'agent' &&
+			sharesBatch
 		) {
 			last.push(message);
 		} else {
 			blocks.push([message]);
 		}
 	}
-	return blocks.flatMap(block => {
+	return blocks;
+}
+
+/**
+ * Per-row briefs for a settled tool run, mirroring `groupToolRun` exactly:
+ * every row carries the brief of its own block, so briefs from CONSECUTIVE
+ * ROUNDS all survive into the settled transcript (the ' ' batch marker and
+ * undefined pass through for rows without their own narration). Exported
+ * for the regression spec — the old run-wide `run[0]?.brief` dropped every
+ * brief after the first tool message of a run.
+ */
+export function toolRunBriefs(run: ChatMessage[]): Array<string | undefined> {
+	return groupToolRun(run).map(block => block[0]?.brief);
+}
+
+/**
+ * Render a run of consecutive tool calls. Each rendered row carries its
+ * OWN block's brief (for a compacted same-round batch that is the batch's
+ * single brief; for single-call rows it is that call's brief), so later
+ * rounds' narration is never swallowed by the first row of the run.
+ */
+function renderToolRun(
+	run: ChatMessage[],
+	width: number,
+): Array<{text: string; blockKey?: string; brief?: string}> {
+	return groupToolRun(run).flatMap(block => {
+		const brief = block[0]?.brief;
 		if (block.length === 1) {
 			const key = block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
 			// Expanded details for the modal (collapsed output caps at 3
@@ -1613,7 +1650,7 @@ function renderToolRun(
 					),
 				);
 			}
-			return [{text: singleToolRow(block[0]!, key, width), blockKey: key}];
+			return [{text: singleToolRow(block[0]!, key, width), blockKey: key, brief}];
 		}
 		const key =
 			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
@@ -1636,7 +1673,7 @@ function renderToolRun(
 				)
 				.join('\n\n'),
 		);
-		return [{text: compactToolBlock(block, key, width), blockKey: key}];
+		return [{text: compactToolBlock(block, key, width), blockKey: key, brief}];
 	});
 }
 
