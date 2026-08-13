@@ -44,6 +44,21 @@ export function colorDetailLine(
 }
 
 /**
+ * Details-card height: fits SHORT content (a 3-line tool row must not open
+ * a full-screen card) but caps at the terminal height so LONG details still
+ * minimize scrolling. `lines + 6` accounts for the header row, the gap, the
+ * content box borders and the card padding. Pure, unit-tested.
+ */
+export function detailsCardHeight(
+	content: string,
+	terminalHeight: number,
+): number {
+	const available = Math.max(8, terminalHeight - 2);
+	const lines = content.replace(/\s+$/, '').split('\n').length;
+	return Math.min(available, Math.max(6, lines + 6));
+}
+
+/**
  * Compact-block DETAILS modal. Clicking an expandable compact tally (e.g.
  * `✦ Ran Bash ×10`) opens this scrollable card with the individual call
  * entries, so the user can read the information without the in-place toggle
@@ -59,13 +74,7 @@ export function DetailsModal(props: {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const cardWidth = () => Math.min(96, Math.max(60, dims().width - 4));
-	const cardHeight = () => {
-		// RESPONSIVE: use nearly the whole terminal height (like the
-		// commands modal) so long details need less scrolling — only the
-		// screen bounds it, never a fixed 30-row cap.
-		const available = Math.max(8, dims().height - 2);
-		return available;
-	};
+	const cardHeight = () => detailsCardHeight(props.content, dims().height);
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -73,8 +82,11 @@ export function DetailsModal(props: {
 	const [scroll, setScroll] = createSignal(0);
 	// AUTO-CLOSE GUARD: the modal opens on the row's mouse-DOWN; the SAME
 	// click's mouse-UP lands on the backdrop and would close it instantly.
-	// Ignore the first mouse-up after mount (the opening click's release).
-	let suppressFirstMouseUp = true;
+	// Only that opening release is ignored — a time window, NOT a one-shot
+	// boolean: a one-shot flag gets consumed by the opening release and then
+	// swallows the user's FIRST real outside click (click-twice-to-close).
+	const mountedAt = Date.now();
+	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
 	// Color each line like the tool rows: `✦ Name(detail)` headers primary,
 	// `└`/indented output + `⎿` summaries secondary, everything else text.
@@ -129,7 +141,7 @@ export function DetailsModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
-					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
+					if (isOpeningRelease()) return;
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

@@ -51,6 +51,7 @@ export const BASE_COMMAND_NAMES = [
 	'innerdaemon',
 	'schedule',
 	'update',
+	'undo',
 	'export',
 	'context-max',
 	'setup-config',
@@ -121,6 +122,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	compact: 'Compact the conversation',
 	resume: 'Resume a session',
 	retry: 'Retry the last turn',
+	undo: 'Undo the last message',
 	rename: 'Rename the current session',
 	sessions: 'List sessions',
 	usage: 'Show token usage',
@@ -216,6 +218,7 @@ export interface CommandContext {
 	clear: () => void;
 	compact: () => void;
 	retry: () => void;
+	undo: () => void;
 	resume: (ref?: string) => void;
 	rename: (name: string) => void;
 	usage: () => void;
@@ -356,6 +359,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'retry':
 			ctx.retry();
+			return true;
+		case 'undo':
+			ctx.undo();
 			return true;
 		case 'resume':
 			ctx.resume(args || undefined);

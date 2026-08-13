@@ -77,6 +77,18 @@ describe('built-in caveman skill (harness-shipped)', () => {
 		expect(caveman!.body).toContain('respond terse like smart caveman');
 	});
 
+	test('keeps the narration ban but EXEMPTS tools whose description requires a pre-tool line', () => {
+		// REGRESSION: caveman forbids tool-call narration, but execute_bash
+		// (and the system prompt) REQUIRE a one-line pre-tool brief. Without
+		// an explicit exemption the two rules contradict each other and MiMo/
+		// DeepSeek fire bash bare. Both sides must stay in the injected body.
+		const caveman = loadSkills().find(skill => skill.name === 'caveman');
+		expect(caveman).toBeDefined();
+		expect(caveman!.body).toMatch(/no tool-call narration/i);
+		expect(caveman!.body).toMatch(/tool's OWN description/i);
+		expect(caveman!.body).toMatch(/execute_bash/i);
+	});
+
 	test('a project caveman.md overrides the built-in (no duplicate)', () => {
 		write('.nanocoder/skills/caveman.md', '---\nname: caveman\n---\nproject body');
 		const caveman = loadSkills().filter(skill => skill.name === 'caveman');

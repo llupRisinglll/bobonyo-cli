@@ -75,8 +75,11 @@ export function SettingsListModal(props: {
 	const [index, setIndex] = createSignal(0);
 	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
 	// click's mouse-UP on the backdrop, which would close them instantly.
-	// Ignore the first mouse-up after mount (the opening click's release).
-	let suppressFirstMouseUp = true;
+	// Only that opening release is ignored — a time window, NOT a one-shot
+	// boolean (the flag got consumed by the opening release and swallowed
+	// the user's first real outside click: click-twice-to-close).
+	const mountedAt = Date.now();
+	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
 	const [query, setQuery] = createSignal('');
 	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
@@ -179,7 +182,7 @@ export function SettingsListModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
-					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
+					if (isOpeningRelease()) return;
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

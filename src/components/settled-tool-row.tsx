@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {For} from 'solid-js';
+import {For, Show} from 'solid-js';
 import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
@@ -24,9 +24,14 @@ export function SettledToolRow(props: {
 	glyph?: '✦' | '⚙';
 	hovered: boolean;
 	width: number;
+	/** Model brief rendered ONCE above the row (part of this tool entry). */
+	brief?: string;
+	/** Batch marker: part of a briefed batch (share the glyph/indent). */
+	batchBriefed?: boolean;
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
+	const briefed = () => Boolean(props.brief && props.brief.trim());
 	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
 	// follow the status (done = success green). The gear never turns green.
 	const glyph = settledGlyphColor(
@@ -41,22 +46,61 @@ export function SettledToolRow(props: {
 			{/* Leading breakline: parity with the settled blank rows between
 			    blocks (user msg → blank → tool row). */}
 			<box height={1} />
-			{/* HEADER line: status-colored glyph + name/detail chunks. The
-			    header NEVER carries the hover background. */}
-			<box flexDirection="row">
-				<text
-					fg={glyph}
-					attributes={props.glyph === '⚙' ? dim() : undefined}
+			{/* Pre-tool brief, integrated with the row: `✦ I will check X`
+			    above the header — same entry, same hover region. */}
+			<Show when={briefed()}>
+				<box
+					flexDirection="row"
+					width={props.width}
+					backgroundColor={props.hovered ? hoverBg : undefined}
 				>
-					{(props.glyph ?? '✦') + ' '}
+					<text fg={glyph}>✦ </text>
+					<text>{props.brief}</text>
+				</box>
+			</Show>
+			{/* HEADER line: status-colored glyph + name/detail chunks. The
+			    header carries the SAME hover background as the body (the
+			    whole bordered Bash entry is ONE hoverable/clickable region);
+			    text colors stay untouched so readability is preserved. */}
+			<box
+				flexDirection="row"
+				width={props.width}
+				backgroundColor={props.hovered ? hoverBg : undefined}
+			>
+				{/* With a brief, the brief line carries the entry's single
+				    glyph; the header indents to the brief's text column. */}
+				<Show when={!briefed() && !props.batchBriefed}>
+					<text
+						fg={glyph}
+						attributes={props.glyph === '⚙' ? dim() : undefined}
+					>
+						{(props.glyph ?? '✦') + ' '}
+					</text>
+				</Show>
+				<Show when={briefed() || props.batchBriefed}>
+					<box width={2} />
+				</Show>
+				{/* ONE text renderable for the whole header, styled SPANS for
+				    the per-chunk colors. A per-cell <text> would give every
+				    chunk its own native TextBuffer/TextBufferView/SyntaxStyle
+				    handle set — with hundreds of settled rows that exhausts
+				    OpenTUI's handle table and "Failed to create SyntaxStyle"
+				    crashes the render after /undo. Same pixels, ~10x fewer
+				    native handles. */}
+				<text>
+					<For each={props.segments.header}>
+						{(c) => (
+							<span
+								style={{
+									fg: c.fg as never,
+									attributes: c.attributes,
+								}}
+							>
+								{c.text}
+							</span>
+						)}
+					</For>
 				</text>
-				<For each={props.segments.header}>
-					{(c) => (
-						<text fg={c.fg as never} attributes={c.attributes}>
-							{c.text}
-						</text>
-					)}
-				</For>
 			</box>
 			{/* BODY rows: full-width background when hovered (parity: the
 			    settings rows highlight the WHOLE row, not just the text). */}
@@ -67,16 +111,20 @@ export function SettledToolRow(props: {
 						width={props.width}
 						backgroundColor={props.hovered ? hoverBg : undefined}
 					>
-						<For each={line}>
-							{(c) => (
-								<text
-									fg={c.fg as never}
-									attributes={c.attributes}
-								>
-									{c.text}
-								</text>
-							)}
-						</For>
+						<text>
+							<For each={line}>
+								{(c) => (
+									<span
+										style={{
+											fg: c.fg as never,
+											attributes: c.attributes,
+										}}
+									>
+										{c.text}
+									</span>
+								)}
+							</For>
+						</text>
 					</box>
 				)}
 			</For>

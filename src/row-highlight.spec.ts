@@ -5,6 +5,7 @@ import {
 	tokenizeAgentRow,
 	tokenizeBanner,
 	tokenizeFileDiff,
+	tokenizeFileRow,
 	tokenizeStatusRow,
 	tokenizeToolRow,
 	tokenizeUserMessage,
@@ -101,10 +102,10 @@ describe('tokenizeFileDiff', () => {
 	const DIFF_TEXT = [
 		'✦ Edit src/foo.ts',
 		' ⎿ 12 lines → 10 lines',
-		'   -   2  return `Hello, ${name.toUpperCase()}!`;',
-		'   +   2  return `Hi, ${name.toUpperCase()}!`;',
-		'   -   6  const alpha = compute(firstArgument, secondArgument);',
-		'   +   6  const result = await loadEverythingFromScratch();',
+		'   2 - return `Hello, ${name.toUpperCase()}!`;',
+		'   2 + return `Hi, ${name.toUpperCase()}!`;',
+		'   6 - const alpha = compute(firstArgument, secondArgument);',
+		'   6 + const result = await loadEverythingFromScratch();',
 	].join('\n');
 
 	test('changed rows get a full-width row background', () => {
@@ -151,9 +152,9 @@ describe('tokenizeFileDiff', () => {
 		const deleteOnly = [
 			'✦ Edit scratch/mock-delete.ts',
 			' ⎿ 8 lines → 0 lines',
-			'   -   1 /**',
-			'   -   2  * Legacy string utilities.',
-			'   -   8 }',
+			'   1 - /**',
+			'   2 -  * Legacy string utilities.',
+			'   8 - }',
 		].join('\n');
 		const chunks = tokenizeFileDiff(deleteOnly, 'scratch/mock-delete.ts', 'done', THEME, 80);
 		const lines = perLine(chunks);
@@ -173,6 +174,98 @@ describe('tokenizeFileDiff', () => {
 		for (const line of lines.slice(2, 6)) {
 			expect(line.some(c => bg(c))).toBe(true);
 		}
+	});
+
+	test('.txt diffs never get keyword syntax colors (plain text)', () => {
+		const txtDiff = [
+			'✦ Edit scratch/mock-edit.txt',
+			' ⎿ 1 line → 1 line',
+			'   1 - old text',
+			'   1 + new text',
+		].join('\n');
+		const chunks = tokenizeFileDiff(
+			txtDiff,
+			'scratch/mock-edit.txt',
+			'done',
+			THEME,
+			80,
+		);
+		const lines = perLine(chunks);
+		// `new` is a JS keyword — on a .txt file it must NOT render primary;
+		// it keeps the diff row foreground (success green) instead.
+		const primary = themeRgb(colors().primary);
+		const addText = lines[3]?.find(c => c.text.includes('new'));
+		expect(addText).toBeDefined();
+		expect(rgb(addText!)).not.toBe(primary);
+		expect(rgb(addText!)).toBe(themeRgb(colors().diffAddedText));
+	});
+
+	test('.txt file previews stay plain (no keyword tint)', () => {
+		const chunks = tokenizeFileRow(
+			'✦ Write scratch/readme.txt\n ⎿ Write: 1 line\n   1 new text',
+			'scratch/readme.txt',
+			'done',
+			THEME,
+		);
+		const primary = themeRgb(colors().primary);
+		const bodyText = chunks.find(c => c.text.includes('new text'));
+		expect(bodyText).toBeDefined();
+		expect(rgb(bodyText!)).not.toBe(primary);
+	});
+
+	test('every diff text chunk stays readable on its background', () => {
+		const jsDiff = [
+			'✦ Edit src/foo.ts',
+			' ⎿ 1 line → 1 line',
+			'   1 - const x = compute(a, b);',
+			'   1 + const x = compute(c, b);',
+		].join('\n');
+		const chunks = tokenizeFileDiff(jsDiff, 'src/foo.ts', 'done', THEME, 80);
+		const lum = (v: RGBA): number =>
+			0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
+		for (const line of perLine(chunks).slice(2)) {
+			for (const c of line) {
+				if (!c.bg || !c.fg || c.text.trim() === '') continue;
+				// The readableOn guard keeps the fg at least 0.35 luminance
+				// away from the row/word background — never unreadable.
+				expect(Math.abs(lum(c.fg) - lum(c.bg))).toBeGreaterThanOrEqual(
+					0.35,
+				);
+			}
+		}
+	});
+
+	test('word-diff spans swap the fg when the diff color fails the bar', () => {
+		// `old text` → `new text`: the paired WORD span (`old`/`new`) sits
+		// on the darker word background. The red/error fg does NOT clear the
+		// 0.35 luminance bar there, so readableOn must swap it — the exact
+		// "hard to read" case that regressed before the guard existed.
+		const txtDiff = [
+			'✦ Edit scratch/mock-edit.txt',
+			' ⎿ 1 line → 1 line',
+			'   1 - old text',
+			'   1 + new text',
+		].join('\n');
+		const chunks = tokenizeFileDiff(
+			txtDiff,
+			'scratch/mock-edit.txt',
+			'done',
+			THEME,
+			80,
+		);
+		const lines = perLine(chunks);
+		const error = themeRgb(colors().error);
+		const removeWord = lines[2]?.find(c => c.text.trim() === 'old');
+		expect(removeWord).toBeDefined();
+		// The word span on the word background must NOT keep the error fg…
+		expect(rgb(removeWord!)).not.toBe(error);
+		// …and it must still clear the contrast bar against its background.
+		const lum = (v: RGBA): number =>
+			0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
+		expect(removeWord!.bg).toBeDefined();
+		expect(Math.abs(lum(removeWord!.fg!) - lum(removeWord!.bg!))).toBeGreaterThanOrEqual(
+			0.35,
+		);
 	});
 });
 

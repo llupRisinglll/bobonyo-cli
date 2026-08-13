@@ -5,7 +5,7 @@
  * errors without crashing the loop.
  */
 
-import {readFileSync} from 'node:fs';
+import {readFileSync, statSync, unlinkSync} from 'node:fs';
 import {
 	streamChat,
 	type ChatMessageLike,
@@ -108,6 +108,7 @@ const PLAN_EXCLUDED = new Set([
 	'write_file',
 	'string_replace',
 	'diff_edit',
+	'delete_file',
 	'file_op',
 	'execute_bash',
 	'monitor',
@@ -146,6 +147,7 @@ const NANO_TOOLS = new Set([
 	'read_file',
 	'diff_edit',
 	'write_file',
+	'delete_file',
 	'execute_bash',
 	'monitor',
 	'web_search',
@@ -158,6 +160,7 @@ const MINIMAL_TOOLS = new Set([
 	'write_file',
 	'string_replace',
 	'diff_edit',
+	'delete_file',
 	'monitor',
 	'search_file_contents',
 	'find_files',
@@ -217,6 +220,7 @@ const CLAUDE_CODE_NAMES: Record<string, string> = {
 	write_file: 'Write',
 	string_replace: 'Edit',
 	diff_edit: 'Edit',
+	delete_file: 'Delete',
 	find_files: 'Find',
 	search_file_contents: 'Grep',
 	list_directory: 'LS',
@@ -380,6 +384,29 @@ registerTool('read_file', {
 });
 
 registerTool('execute_bash', {
+	description:
+		'Run a shell command in the terminal (builds, tests, git, process ' +
+		'management, file inspection — anything no dedicated file tool ' +
+		'covers; prefer write_file/string_replace/diff_edit for editing ' +
+		'files and delete_file for deleting them). ' +
+		'ALWAYS write a one-line PRE-TOOL BRIEF before calling this tool — ' +
+		'what you are about to run and why, ≤8 words (e.g. "run tests to ' +
+		'verify") — THEN call it in the same message; this requirement ' +
+		'overrides any general "no narration" style rules. The brief is ' +
+		'MANDATORY when the previous bash call had no explanation, or when ' +
+		'this call starts a NEW action or goal. Keep it terse ONLY when ' +
+		'this exact call continues the same goal you already explained in ' +
+		'the previous message.',
+	parameters: {
+		type: 'object',
+		properties: {
+			command: {
+				type: 'string',
+				description: 'The shell command to execute.',
+			},
+		},
+		required: ['command'],
+	},
 	async execute(args, ctx) {
 		const command = text(args, 'command') || 'true';
 		const result = await runBash(command, ctx.onProgress);
@@ -399,6 +426,24 @@ registerTool('monitor', {
 });
 
 registerTool('write_file', {
+	description:
+		'Create or fully overwrite a file with new content. For small edits ' +
+		'prefer string_replace (targeted) or diff_edit (patch) so the change ' +
+		'is visible as a diff.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {
+				type: 'string',
+				description: 'Absolute or cwd-relative path of the file to write.',
+			},
+			content: {
+				type: 'string',
+				description: 'The full new file content.',
+			},
+		},
+		required: ['path', 'content'],
+	},
 	async execute(args) {
 		const path = text(args, 'path') || 'scratch/mock-write.txt';
 		const body = text(args, 'content') ?? '';
@@ -408,6 +453,28 @@ registerTool('write_file', {
 });
 
 registerTool('string_replace', {
+	description:
+		'Replace one exact substring in a file with new text (a targeted edit, ' +
+		'keeps the rest of the file intact).',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {
+				type: 'string',
+				description: 'Absolute or cwd-relative path of the file to edit.',
+			},
+			old_string: {
+				type: 'string',
+				description:
+					'The exact existing text to replace (must match verbatim).',
+			},
+			new_string: {
+				type: 'string',
+				description: 'The replacement text.',
+			},
+		},
+		required: ['path', 'old_string', 'new_string'],
+	},
 	async execute(args) {
 		const path = text(args, 'path') || 'scratch/mock-edit.txt';
 		const oldString = text(args, 'old_string') ?? '';
@@ -430,6 +497,24 @@ registerTool('string_replace', {
 });
 
 registerTool('diff_edit', {
+	description:
+		'Apply a unified diff (patch -p1 --forward) to the repository. Use for ' +
+		'multi-hunk edits where the change should be shown as a diff.',
+	parameters: {
+		type: 'object',
+		properties: {
+			diff: {
+				type: 'string',
+				description:
+					'A unified diff (---/+++ headers with @@ hunks) applied with patch -p1.',
+			},
+			cwd: {
+				type: 'string',
+				description: 'Working directory to apply the patch in (default: cwd).',
+			},
+		},
+		required: ['diff'],
+	},
 	async execute(args) {
 		const diff = text(args, 'diff') ?? '';
 		const cwd = text(args, 'cwd') || process.cwd();
@@ -440,6 +525,40 @@ registerTool('diff_edit', {
 		const out = (result.stdout?.toString() ?? '').trim();
 		const err = (result.stderr?.toString() ?? '').trim();
 		return `EXIT_CODE: ${result.exitCode}\n${out}${err ? `\n${err}` : ''}\n${diff}`;
+	},
+});
+
+registerTool('delete_file', {
+	description:
+		'Permanently delete a single file. Prefer this over `rm` in bash: ' +
+		'deletions flow through the harness (approval in normal mode, and ' +
+		'the hook point for file-protection rules) instead of a raw shell ' +
+		'command. Directories are NOT supported — use bash for those.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {
+				type: 'string',
+				description:
+					'Absolute or cwd-relative path of the file to delete.',
+			},
+		},
+		required: ['path'],
+	},
+	async execute(args) {
+		const path = text(args, 'path') || 'scratch/mock-delete.txt';
+		try {
+			const stat = statSync(path);
+			if (stat.isDirectory()) {
+				return `Error: ${path} is a directory — delete_file only removes files (use bash for directories).`;
+			}
+			unlinkSync(path);
+			return `Deleted ${path}`;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT') return `Error: ${path} does not exist`;
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
 	},
 });
 

@@ -78,13 +78,37 @@ export function liveRowSegments(
 	// them as a single row would miscolor the fence markers. They complete in
 	// one call and barely stream, so fall back to plain dim lines.
 	if (/^```/.test(trimmed.trimStart())) {
-		chunks = trimmed
+		// File-write/edit rows (filerow/filediff) carry a NESTED header fence
+		// plus the numbered code / diff body. Strip the outer fence markers
+		// and tokenize the INNER content so the component path keeps the
+		// file/diff syntax colors (the same chunks markdown produced).
+		const inner = trimmed
 			.split('\n')
-			.map(line => ({
-				__isChunk: true as const,
-				text: line,
-				fg: themeColors(colors).fg.secondary,
-			}));
+			.filter(line => !/^\s*```/.test(line))
+			.join('\n');
+		chunks =
+			lang === 'filerow'
+				? tokenizeFileRow(
+						inner,
+						rowPath(inner),
+						status,
+						colors,
+					)
+				: lang === 'filediff'
+					? tokenizeFileDiff(
+							inner,
+							rowPath(inner),
+							status,
+							colors,
+							width,
+						)
+					: trimmed
+							.split('\n')
+							.map(line => ({
+								__isChunk: true as const,
+								text: line,
+								fg: themeColors(colors).fg.secondary,
+							}));
 	} else {
 		switch (lang) {
 			case 'bashrow':

@@ -36,6 +36,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const src = read('./components/live-tool-rows.tsx');
 		expect(src).not.toMatch(/<markdown|MarkdownRenderable/i);
 		expect(src).toMatch(/<text/);
+		// Chunk colors ride as SPANS inside ONE <text> per line, never as a
+		// per-cell <text> (each <text> is a native TextBufferRenderable with
+		// its own TextBuffer/TextBufferView/SyntaxStyle handle set — per-cell
+		// texts exhaust OpenTUI's handle table on big sessions and /undo).
+		expect(src).toMatch(/<span\s+style=\{\{/);
 	});
 
 	test('history renders running tool rows ONLY via LiveToolRows', () => {
@@ -77,6 +82,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The component itself is plain boxes/text — no markdown anywhere.
 		const component = read('./components/settled-tool-row.tsx');
 		expect(component).not.toMatch(/<markdown|MarkdownRenderable/i);
+		// Same handle budget rule as the live rows: per-line <text> with
+		// styled spans, never a per-cell <text>.
+		expect(component).toMatch(/<span\s+style=\{\{/);
 		// Hover must be a per-row BACKGROUND (settings-row parity), with the
 		// header excluded by construction (the bg is only on body rows).
 		expect(component).toMatch(/backgroundColor/);
@@ -240,6 +248,279 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The spacer keeps the status line pinned at the bottom while the
 		// conversation is short.
 		expect(app).toMatch(/<box flexGrow=\{1\} \/>/);
+	});
+
+	test('startup gate keeps the typed message (Enter never silently eats it)', () => {
+		const app = read('./app.tsx');
+		// The cache-head gate must NOT clear the input: a message typed right
+		// after `--resume` while tools are still loading would vanish and
+		// look exactly like "Enter doesn't work".
+		const gate = app.slice(
+			app.indexOf('!startupReadyRef'),
+			app.indexOf('return;', app.indexOf('!startupReadyRef')),
+		);
+		expect(gate).toMatch(/Still loading tools/);
+		expect(gate).not.toMatch(/setInput\(/);
+	});
+
+	test('the resume notice breakline is counted in the layout cap', () => {
+		const app = read('./app.tsx');
+		// The success notice renders TWO rows above the input (breakline +
+		// message); the history cap must subtract both or the status line
+		// overlaps the input box while the notice is visible.
+		expect(app).toMatch(
+			/completionMessageRows\(\s*completionMessage\(\),\s*completionTone\(\),\s*\)/,
+		);
+		const input = read('./components/input-box.tsx');
+		expect(input).toMatch(/tone === 'success' \? 2 : 1/);
+	});
+
+	test('content-height measurement never crashes mid-resume', () => {
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/const measureContentHeight[\s\S]*?try \{/);
+	});
+
+	test('resume modal isolates its keys like the other modals', () => {
+		const resume = read('./components/resume-modal.tsx');
+		expect(resume).toMatch(
+			/useKeyboard\(event => \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+	});
+
+	test('/undo is wired and truncates at the last user message', () => {
+		const app = read('./app.tsx');
+		const commands = read('./commands.ts');
+		expect(commands).toMatch(/'undo',/);
+		expect(commands).toMatch(/undo: 'Undo the last message'/);
+		expect(app).toMatch(/undo: undoLast/);
+		expect(app).toMatch(/export function undoExchange/);
+		// The provider context must be a TRUNCATION, never a reorder/inline
+		// mutation — otherwise the cache head changes and every later turn
+		// misses the prompt cache.
+		expect(app).toMatch(/keptContext = healResumedContext/);
+		// The "Undid the last message." notice uses the SUCCESS completion
+		// slot (green, leading breakline, auto-expires), never a permanent
+		// transcript row.
+		expect(app).toMatch(/setCompletionTone\('success'\)/);
+		expect(app).toMatch(/setCompletionMessage\('Undid the last message\.'\)/);
+		expect(app).not.toMatch(/appendInfo\('Undid the last message\.'\)/);
+	});
+
+	test('typed keys are claimed so the history scrollbox never scrolls', () => {
+		// OpenTUI dispatches GLOBAL key listeners (the InputBox) before
+		// RENDERABLE handlers (the history ScrollBox's native ScrollBar,
+		// which maps `k`/`j`/`h`/`l` to scroll). Every key the input box
+		// consumes must call preventDefault() or typing `k` scrolls the chat
+		// history behind the prompt.
+		const input = read('./components/input-box.tsx');
+		// Character insertion (the path `k`/`j`/`h`/`l`/any letter takes):
+		// preventDefault must sit between the guarded branch and the insert.
+		expect(input).toMatch(
+			/if \(char && !event\.ctrl && !event\.meta\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}insertAtCursor\(char\);/,
+		);
+		// Space, backspace/delete, navigation, Tab and Return are claimed too.
+		expect(input).toMatch(
+			/if \(event\.name === 'space'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		expect(input).toMatch(
+			/if \(isDeleteKey\(event\.name\)\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		expect(input).toMatch(
+			/if \(isReturnKey\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		expect(input).toMatch(
+			/if \(event\.name === 'tab'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		expect(input).toMatch(
+			/if \(event\.name === 'left'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		expect(input).toMatch(
+			/if \(event\.name === 'right'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+		);
+		// Popup escape branches claim the key too: without preventDefault the
+		// App's global Esc handler would ALSO see it and arm the exit
+		// confirmation while the popup is open.
+		expect(input).toMatch(
+			/if \(event\.name === 'escape'\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}setInputAt\(input\(\)\.replace\(\/@\[\^\\s\]\*\$\/, ''\)\);/,
+		);
+		expect(input).toMatch(
+			/if \(event\.name === 'escape'\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}setInputAt\(''\);/,
+		);
+	});
+
+	test('settled blocks keep STABLE identity across memo recomputes', () => {
+		// Solid's <For> re-renders every child whose item reference changed
+		// (mapArray reference equality). If the settled-blocks memo returns
+		// fresh block objects on every recompute, the WHOLE transcript
+		// repaints whenever messages() changes (e.g. every bash row that
+		// settles) — the post-bash blink. The memo must reuse unchanged
+		// blocks by reference via a content-keyed cache.
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/stableSettledBlocks\(settledBlockCache, blocks\)/);
+		const cache = read('./settled-block-cache.ts');
+		expect(cache).toMatch(/export function stableSettledBlocks/);
+		expect(cache).toMatch(/const cached = cache\.get\(key\)/);
+		// The cache key must cover EVERYTHING the block renders (content,
+		// status/glyph and the tokenized segments) so a theme or width
+		// change still rebuilds the block instead of showing stale colors.
+		expect(cache).toMatch(/JSON\.stringify\(block\.segments\)/);
+		expect(cache).toMatch(/block\.part\.text/);
+	});
+
+	test('bash calls render STANDALONE, never compacted into a ×N tally', () => {
+		// `✦ Ran Bash ×2` hides the actual commands — the command line IS the
+		// useful content. Every bash call must keep its own `✦ Bash(cmd)`
+		// row (same rule as file-write tools and agents).
+		const history = read('./components/history.tsx');
+		const renderToolRun = history.slice(
+			history.indexOf('function renderToolRun'),
+			history.indexOf('function renderToolRun') + 1400,
+		);
+		expect(renderToolRun).toMatch(/name === 'execute_bash'/);
+		expect(renderToolRun).toMatch(/name === 'execute_bash:user'/);
+		expect(renderToolRun).toMatch(/blocks\.push\(\[message\]\);/);
+	});
+
+	test('bash command/body wrap to the REAL render width, never a fixed 72', () => {
+		// A hardcoded wrap width diverges from the render width on wide
+		// terminals: the bash header breaks mid-path even though it fits,
+		// and the pre-wrapped line count differs from the rendered rows —
+		// which shifts blockRanges and breaks hover/click hit-targets.
+		const display = read('./tool-display.ts');
+		// The command wrap is derived from the caller-provided width.
+		expect(display).toMatch(/width - COMMAND_PROMPT_WIDTH/);
+		expect(display).toMatch(/width - BOX_EDGE_WIDTH/);
+		expect(display).not.toMatch(/COMMAND_WRAP_WIDTH/);
+		const history = read('./components/history.tsx');
+		// Settled rows thread the real width through the tool formatter.
+		expect(history).toMatch(/renderToolRun\(run, fillWidth\)/);
+		expect(history).toMatch(/singleToolRow\(block\[0\]!, key, width\)/);
+		// The LIVE path passes the same render width.
+		expect(history).toMatch(/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\),/);
+	});
+
+	test('bash entries render as ONE native bordered box (component, not text)', () => {
+		// The bash execution is a single bordered entry: the `✦` glyph sits
+		// OUTSIDE the box, and OpenTUI draws the border (so wrapped lines
+		// always stay inside — a hand-drawn text border misaligns). The
+		// same box is used for LIVE streaming and SETTLED rows.
+		const row = read('./components/bash-tool-row.tsx');
+		expect(row).toMatch(/export function BashToolRow/);
+		expect(row).toMatch(/borderStyle="rounded"/);
+		// Glyph outside the border: the glyph <text> is a SIBLING of the
+		// bordered <box>, never inside it.
+		expect(row).toMatch(/<text fg=\{glyph\}/);
+		expect(row).toMatch(/border\s*$/m);
+		// The `$` prompt is part of the header chunks (never duplicated).
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/isBashBlock\(block\)/);
+		expect(history).toMatch(/<BashToolRow/);
+		const live = read('./components/live-tool-rows.tsx');
+		expect(live).toMatch(/row\.lang === 'bashrow'/);
+		expect(live).toMatch(/<BashToolRow/);
+	});
+
+	test('the model brief before a tool call is rendered, never dropped', () => {
+		// claude code / openclaude render the model's "I'll check X"
+		// narration BEFORE the tool box, INTEGRATED with the tool entry.
+		// The brief attaches to the FIRST tool message of the batch (once,
+		// never repeated per concurrent call) and renders above the bash
+		// box — not as a separate assistant message.
+		const app = read('./app.tsx');
+		const toolTurn = app.slice(
+			app.indexOf('const briefText = result.text.trim()'),
+			app.indexOf('const assistantToolMsg: ChatMessageLike'),
+		);
+		expect(toolTurn).toMatch(/result\.text\.trim\(\)/);
+		expect(toolTurn).toMatch(/callIndex === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/);
+		expect(toolTurn).toMatch(/index === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/);
+		expect(toolTurn).not.toMatch(/appendAssistantMessage\(scrubberRef\.rehydrate\(result\.text\)\)/);
+		// The row component renders the brief ONCE above the box.
+		const row = read('./components/bash-tool-row.tsx');
+		expect(row).toMatch(/<Show when=\{props\.brief && props\.brief\.trim\(\)\}>/);
+	});
+
+	test('file tools carry model-facing descriptions + argument schemas', () => {
+		// The provider sees the catalog as OpenAI `tools`. Empty descriptions
+		// and an empty schema made the edit/write tools unusable — the model
+		// fell back to bash for every file change instead of using the tools
+		// that render the Diff preview. Each file tool must tell the model
+		// what it does and what arguments it takes.
+		const tools = read('./tools.ts');
+		for (const name of ['write_file', 'string_replace', 'diff_edit']) {
+			const block = tools.slice(
+				tools.indexOf(`registerTool('${name}'`),
+				tools.indexOf(`registerTool('${name}'`) + 900,
+			);
+			expect(block).toMatch(/description:/);
+			expect(block).toMatch(/parameters:/);
+			expect(block).toMatch(/type: 'object'/);
+			expect(block).toMatch(/properties:/);
+			expect(block).toMatch(/required:/);
+		}
+	});
+
+	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
+		// The tip must NOT ride the Working indicator line anymore; it
+		// renders INSIDE the transcript (breakline above, centered) and only
+		// while a turn runs with nothing painting (idle history, e.g. the
+		// model thinking in the background).
+		const input = read('./components/input-box.tsx');
+		expect(input).not.toMatch(/dynamicTip/);
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/historyTip/);
+		expect(history).toMatch(/justifyContent="center"/);
+		expect(history).toMatch(/Tip: Type \/ for commands/);
+		// Idle gate: tip shows only while running() and nothing is live.
+		expect(history).toMatch(/const idle =/);
+		expect(history).toMatch(/!liveToolRows\(\)\.length/);
+		expect(history).toMatch(/!liveReplyText\(\)/);
+		// hide-thinking ON means the live thought does NOT render, so the
+		// history is idle and the tip may take the stage.
+		expect(history).toMatch(/!\(!hideThinking\(\) && liveThoughtHeader\(\)\)/);
+		// Transient: breakline + centered row, inside the scrollbox.
+		expect(history).toMatch(/<Show when=\{historyTip\(\)\}>/);
+		expect(history).toMatch(/<box height=\{1\} \/>/);
+	});
+
+	test('the transcript scrollbox uses the opencode-style scroll speed', () => {
+		// opencode feels faster/smoother scrolling because its transcript
+		// scrollbox multiplies the wheel delta (CustomSpeedScroll default 3)
+		// instead of OpenTUI's linear 1×. Bobonyo mirrors that via the
+		// `scrollSpeed` setting; a future change must keep the wiring.
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/scrollAcceleration=\{resolveScrollAcceleration\(\)\}/);
+		const accel = read('./scroll-acceleration.ts');
+		expect(accel).toMatch(/class CustomSpeedScroll/);
+		expect(accel).toMatch(/return this\.speed/);
+		expect(accel).toMatch(/loadSettings\(\)\.scrollSpeed \?\? 3/);
+		const settings = read('./settings.ts');
+		expect(settings).toMatch(/scrollSpeed\?: number/);
+		expect(settings).toMatch(/scrollSpeed: 3/);
+	});
+
+	test('modals ignore ONLY the opening release, never a real outside click', () => {
+		// The old `suppressFirstMouseUp` one-shot boolean was consumed by the
+		// opening click's release, so the user's FIRST real outside click
+		// was swallowed too — click-twice-to-close. Every modal must use a
+		// short time window instead so an outside click closes on the first
+		// try.
+		for (const file of [
+			'./components/details-modal.tsx',
+			'./components/agents-modal.tsx',
+			'./components/commands-modal.tsx',
+			'./components/model-modal.tsx',
+			'./components/resume-modal.tsx',
+			'./components/settings-list-modal.tsx',
+			'./components/settings-panel.tsx',
+			'./components/status-modal.tsx',
+			'./components/trust-modal.tsx',
+		]) {
+			const src = read(file);
+			expect(src).not.toMatch(/suppressFirstMouseUp/);
+			expect(src).toMatch(/mountedAt = Date\.now\(\)/);
+			expect(src).toMatch(/isOpeningRelease/);
+		}
 	});
 
 	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {

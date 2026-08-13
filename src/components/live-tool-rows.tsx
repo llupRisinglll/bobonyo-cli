@@ -4,6 +4,8 @@ import {For, Show} from 'solid-js';
 import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {glyphBlinkOn, spinnerFrame} from '../state';
+import {BashToolRow} from './bash-tool-row';
+import {FileToolRow} from './file-tool-row';
 
 /**
  * FOOLPROOF live tool-row renderer — the ONLY way running tool rows render.
@@ -23,7 +25,11 @@ import {glyphBlinkOn, spinnerFrame} from '../state';
  * needs a different live row must change THIS file, and the regression
  * guards in `regression-guards.spec.ts` fail the build if it ever does.
  */
-export function LiveToolRows(props: {rows: LiveRowSegments[]}) {
+export function LiveToolRows(props: {
+	rows: Array<
+		LiveRowSegments & {lang?: string; brief?: string; batchBriefed?: boolean}
+	>;
+}) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	return (
@@ -33,43 +39,93 @@ export function LiveToolRows(props: {rows: LiveRowSegments[]}) {
 					{/* Leading breakline: parity with the settled blank rows
 					    between blocks (user msg → blank → tool row). */}
 					<box height={1} />
-					<box flexDirection="row">
-						{/* Blinking secondary glyph, width-stable (the hidden
-						    frame keeps a space). */}
-						<text
-							fg={colors().secondary}
-							attributes={dim()}
-						>
-							{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
-						</text>
-						<For each={row.header}>
-							{(c) => (
-								<text
-									fg={c.fg as never}
-									attributes={c.attributes}
-								>
-									{c.text}
-								</text>
-							)}
-						</For>
-					</box>
-					<For each={row.body}>
-						{(line) => (
-							<box flexDirection="row">
-								<For each={line}>
+					{/* RUNNING bash rows stream INSIDE the same bordered box
+					    the settled row uses (the border is drawn by OpenTUI,
+					    so streamed/wrapped content always stays inside). */}
+					<Show when={row.lang === 'bashrow'}>
+						<BashToolRow
+							header={row.header}
+							body={row.body}
+							status="running"
+							glyph="✦"
+							hovered={false}
+							brief={row.brief}
+							batchBriefed={row.batchBriefed}
+						/>
+					</Show>
+					<Show when={row.lang === 'filerow' || row.lang === 'filediff'}>
+						<FileToolRow
+							header={row.header}
+							body={row.body}
+							status="running"
+							glyph="✦"
+							hovered={false}
+							brief={row.brief}
+							batchBriefed={row.batchBriefed}
+						/>
+					</Show>
+					<Show
+						when={
+							row.lang !== 'bashrow' &&
+							row.lang !== 'filerow' &&
+							row.lang !== 'filediff'
+						}
+					>
+						<box flexDirection="row">
+							{/* Blinking secondary glyph, width-stable (the
+							    hidden frame keeps a space). */}
+							<text
+								fg={colors().secondary}
+								attributes={dim()}
+							>
+								{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
+							</text>
+							{/* ONE text renderable per header/body line,
+							    styled SPANS for the per-chunk colors. The
+							    old per-cell <text> gave every chunk its own
+							    native TextBuffer/TextBufferView/SyntaxStyle
+							    handle set — running rows stream updates that
+							    churn those handles, and with many settled
+							    rows the handle table exhausts ("Failed to
+							    create SyntaxStyle"). Same pixels, ~10x fewer
+							    handles. */}
+							<text>
+								<For each={row.header}>
 									{(c) => (
-										<text
-											fg={c.fg as never}
-											attributes={c.attributes}
+										<span
+											style={{
+												fg: c.fg as never,
+												attributes: c.attributes,
+											}}
 										>
 											{c.text}
-										</text>
+										</span>
 									)}
 								</For>
-							</box>
-						)}
-					</For>
-				</box>
+							</text>
+						</box>
+						<For each={row.body}>
+							{(line) => (
+								<box flexDirection="row">
+									<text>
+										<For each={line}>
+											{(c) => (
+												<span
+													style={{
+														fg: c.fg as never,
+														attributes: c.attributes,
+													}}
+												>
+													{c.text}
+												</span>
+											)}
+										</For>
+									</text>
+								</box>
+							)}
+						</For>
+					</Show>
+					</box>
 			)}
 		</For>
 	);

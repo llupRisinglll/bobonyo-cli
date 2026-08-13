@@ -16,8 +16,14 @@ import {tasks} from './state';
 export const PREVIEW_COLLAPSED_LINES = 3;
 export const PREVIEW_EXPANDED_LINES = 50;
 export const COMMAND_MAX_LINES = 3;
-/** Fixed wrap width for the command (nanocoder uses the live box width). */
-const COMMAND_WRAP_WIDTH = 72;
+/**
+ * Bordered-bash chrome. The command lives INSIDE the box on its own line
+ * (`│ $ cmd`), so the wrap width is the box width minus the `│ ` left edge
+ * and the `│` right edge.
+ */
+const BOX_EDGE_WIDTH = 3;
+/** Command prompt: `│ $ ` (4 chars) — the `$` is the command indicator. */
+const COMMAND_PROMPT_WIDTH = 4;
 
 export interface ToolDisplayData {
 	name: string;
@@ -45,8 +51,10 @@ export function formatToolEntry(
 	status: RowStatus = 'done',
 	plain = false,
 	blinkOn = true,
+	/** Available content width (bash command/body wrap target). */
+	width = 84,
 ): string {
-	let raw = formatToolEntryText(tool, expanded, status);
+	let raw = formatToolEntryText(tool, expanded, status, width);
 	// File previews return a MULTI-block text (a `filerow` header fence + a
 	// fenced code block with the built-in highlight), already fenced, so the
 	// outer wrap must be skipped.
@@ -77,23 +85,25 @@ function formatToolEntryText(
 	tool: ToolDisplayData,
 	expanded: boolean,
 	status: RowStatus,
+	width: number,
 ): string {
 	const canonical = resolveToolName(tool.name);
 	return canonical === 'execute_bash' || canonical === 'execute_bash:user'
-		? formatBashEntry(tool, expanded, status)
-		: formatGenericEntry(tool, expanded, status);
+		? formatBashEntry(tool, expanded, status, width)
+		: formatGenericEntry(tool, expanded, status, width);
 }
 
 function formatGenericEntry(
 	tool: ToolDisplayData,
 	expanded: boolean,
 	status: RowStatus,
+	width: number,
 ): string {
 	if (tool.name === 'write_file' || tool.name === 'string_replace' || tool.name === 'diff_edit') {
-		return formatFilePreview(tool, expanded, status);
+		return formatFilePreview(tool, expanded, status, width);
 	}
 	if (tool.name === 'git_diff') {
-		return formatDiffRow(tool, status);
+		return formatDiffRow(tool, status, width);
 	}
 	if (tool.name === 'skill' || tool.name === 'check_skill') {
 		return formatSkillRow(tool, status);
@@ -104,7 +114,7 @@ function formatGenericEntry(
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
 		: `✦ ${displayToolName(tool.name)}`;
-	const output = formatOutputTail(tool.output, expanded);
+	const output = formatOutputTail(tool.output, expanded, width);
 	return output ? `${header}\n${output}` : header;
 }
 
@@ -176,6 +186,7 @@ function formatFilePreview(
 	tool: ToolDisplayData,
 	expanded: boolean,
 	status: RowStatus,
+	width: number,
 ): string {
 	const path = textArg(tool.args, 'path') || tool.detail;
 	const displayName = tool.name === 'write_file' ? 'Write' : 'Edit';
@@ -185,7 +196,7 @@ function formatFilePreview(
 		// (e.g. `Declined by user.`) must fall back to the generic tail,
 		// otherwise the row would show the proposed content as if written.
 		if (!/^Wrote /.test(tool.output)) {
-			const tail = formatOutputTail(tool.output, expanded);
+			const tail = formatOutputTail(tool.output, expanded, width);
 			return tail ? `${displayName} ${path}\n${tail}` : `${displayName} ${path}`;
 		}
 		const body = textArg(tool.args, 'content') || stripResultPrefix(tool.output);
@@ -214,7 +225,7 @@ function formatFilePreview(
 	}
 	// string_replace / diff_edit: old → new diff with line numbers.
 	if (!/^Replaced /.test(tool.output)) {
-		const tail = formatOutputTail(tool.output, expanded);
+		const tail = formatOutputTail(tool.output, expanded, width);
 		const header = `✦ ${displayName} ${path}`;
 		return tail ? `${header}\n${tail}` : header;
 	}
@@ -257,12 +268,14 @@ function lineDiffText(oldStr: string, newStr: string): string {
 		.map(line => {
 			const text = line.text;
 			if (line.kind === 'add') {
-				return `   + ${String(line.newLineNo ?? '').padStart(3, ' ')} ${text}`;
+				return `${String(line.newLineNo ?? '').padStart(4, ' ')} + ${text}`;
 			}
 			if (line.kind === 'remove') {
-				return `   - ${String(line.oldLineNo ?? '').padStart(3, ' ')} ${text}`;
+				return `${String(line.oldLineNo ?? '').padStart(4, ' ')} - ${text}`;
 			}
-			return `     ${String(line.oldLineNo ?? '').padStart(3, ' ')} ${text}`;
+			// Context rows carry a SPACE in the sigil column so the numbers
+			// align with the +/- rows (`   3   text`).
+			return `${String(line.oldLineNo ?? '').padStart(4, ' ')}   ${text}`;
 		})
 		.join('\n');
 }
@@ -272,11 +285,15 @@ function lineDiffText(oldStr: string, newStr: string): string {
  * header, the output under a `└` container (EXIT_CODE head + stat/patch tail)
  * with a `+N more lines` footer when the collapsed cap hides lines.
  */
-function formatDiffRow(tool: ToolDisplayData, status: RowStatus): string {
+function formatDiffRow(
+	tool: ToolDisplayData,
+	status: RowStatus,
+	width: number,
+): string {
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
 		: `✦ ${displayToolName(tool.name)}`;
-	const output = formatOutputTail(tool.output, false);
+	const output = formatOutputTail(tool.output, false, width);
 	return output ? `${header}\n${output}` : header;
 }
 
@@ -284,28 +301,34 @@ function formatBashEntry(
 	tool: ToolDisplayData,
 	expanded: boolean,
 	status: RowStatus,
+	width: number,
 ): string {
-	const wrapped = wordWrap(tool.detail, COMMAND_WRAP_WIDTH);
+	// Plain content, NOT a hand-drawn border: the BashToolRow component
+	// wraps this in an OpenTUI bordered box (border is drawn by the layout
+	// engine, so wrapped lines always stay inside). The command is
+	// pre-wrapped here so the rendered line count matches the block ranges
+	// used for hover/click.
+	const wrapped = wordWrap(
+		tool.detail,
+		Math.max(1, width - COMMAND_PROMPT_WIDTH),
+	);
 	const visibleCount = expanded
 		? wrapped.length
 		: Math.min(wrapped.length, COMMAND_MAX_LINES);
 	const visible = wrapped.slice(0, visibleCount);
 	const hiddenCommand = wrapped.length - visibleCount;
 
-	const commandBlock = visible
-		.map((line, index) =>
-			index === 0
-				? `✦ ${displayToolName(tool.name)}(${line}`
-				: `   │ ${line}`,
-		)
-		.join('\n');
-	const commandBlockWithClose = `${commandBlock})`;
+	// First line carries the `$` prompt marker, continuations indent to the
+	// same column (the component renders them inside the box).
+	const commandLines = visible.map(
+		(command, index) => `${index === 0 ? '$' : ' '} ${command}`,
+	);
 	const commandHint =
 		hiddenCommand > 0
-			? `\n     … +${hiddenCommand} more line${hiddenCommand === 1 ? '' : 's'}`
+			? `\n… +${hiddenCommand} more line${hiddenCommand === 1 ? '' : 's'}`
 			: '';
-	const output = formatOutputTail(tool.output, expanded);
-	return `${commandBlockWithClose}${commandHint}${output ? `\n${output}` : ''}`;
+	const output = formatOutputTail(tool.output, expanded, width, '');
+	return `${commandLines.join('\n')}${commandHint}${output ? `\n${output}` : ''}`;
 }
 
 /**
@@ -313,7 +336,13 @@ function formatBashEntry(
  * `└   ` on the first row, `      ` on continuations, and a `+N lines`
  * footer below when the collapsed cap hides lines.
  */
-export function formatOutputTail(output: string, expanded: boolean): string {
+export function formatOutputTail(
+	output: string,
+	expanded: boolean,
+	width = 84,
+	/** Container prefix: `  └   ` for generic rows, `''` for the bordered box. */
+	prefix = '  └   ',
+): string {
 	// C5: error results strip the `Error: ` prefix from the visible tail.
 	const source = output.replace(/^Error:\s*/, '');
 	const lines = source
@@ -328,20 +357,17 @@ export function formatOutputTail(output: string, expanded: boolean): string {
 	// WRAP WITHIN THE CONTAINER: a raw output line longer than the indent
 	// width would spill past the `  └   ` edge (bash logs, URLs, test
 	// output). Pre-wrap each line so every continuation keeps the indent —
-	// the wrapped text can never escape the container (parity: the wrapped
-	// command lines use the same fixed width).
-	const WRAP = 84;
+	// the wrapped text can never escape the container.
+	const WRAP = Math.max(1, width - BOX_EDGE_WIDTH);
 	const wrappedLines: string[] = [];
 	for (const line of tail) {
 		for (const piece of wordWrap(line, WRAP)) wrappedLines.push(piece);
 	}
+	const contPrefix = prefix === '  └   ' ? '      ' : '';
 	const bodyWithWrap = wrappedLines
-		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
+		.map((line, index) => `${index === 0 ? prefix : contPrefix}${line}`)
 		.join('\n');
-	const footer =
-		hidden > 0
-			? `\n     … +${hidden} line${hidden === 1 ? '' : 's'}`
-			: '';
+	const footer = hidden > 0 ? `\n… +${hidden} line${hidden === 1 ? '' : 's'}` : '';
 	return `${bodyWithWrap}${footer}`;
 }
 

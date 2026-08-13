@@ -33,6 +33,8 @@ export interface Settings {
 	 * the toggle removes the caveman instructions from the system prompt.
 	 */
 	cavemanMode?: boolean;
+	/** Mouse-wheel scroll speed multiplier (parity: opencode scroll_speed, default 3). */
+	scrollSpeed?: number;
 	autoCompact: {enabled: boolean; threshold: number};
 	watchdogMs?: number;
 	streamGuard?: {maxOutputChars?: number; maxDurationMs?: number};
@@ -47,6 +49,7 @@ const DEFAULTS: Settings = {
 	maxMessages: 1000,
 	hideThinking: true,
 	cavemanMode: true,
+	scrollSpeed: 3,
 	autoCompact: {enabled: false, threshold: 75},
 	watchdogMs: 0,
 	streamGuard: {},
@@ -104,6 +107,11 @@ export function loadSettings(): Settings {
 	const statusLine = settings.statusLine !== false;
 	const hideThinking = settings.hideThinking !== false;
 	const cavemanMode = settings.cavemanMode !== false;
+	const scrollSpeed =
+		typeof settings.scrollSpeed === 'number' &&
+		Number.isFinite(settings.scrollSpeed)
+			? settings.scrollSpeed
+			: DEFAULTS.scrollSpeed;
 	return {
 		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode) ? mode : DEFAULTS.mode,
 		toolProfile: ['full', 'minimal', 'nano', 'auto'].includes(toolProfile)
@@ -115,6 +123,7 @@ export function loadSettings(): Settings {
 		statusLine,
 		hideThinking,
 		cavemanMode,
+		scrollSpeed,
 		autoCompact: {
 			enabled: rawAuto.enabled === true,
 			threshold,

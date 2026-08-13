@@ -72,6 +72,35 @@ export function workingLabel(hideThinking: boolean, thinking: boolean): string {
 }
 
 /**
+ * Whether an OpenTUI key event should count as the SUBMIT Enter.
+ *
+ * Real terminals deliver Enter as `\r` (`return`); herdr and some terminal
+ * multiplexers deliver it as `\n` (`linefeed`) instead. A bare linefeed must
+ * submit, NOT insert a literal newline — otherwise the typed prompt stays in
+ * the box and the user sees "Enter does nothing" until they exit and resume.
+ * Shift+Enter (multiline) is still handled separately before this check.
+ * Pure, unit-tested.
+ */
+export function isSubmitKey(event: {
+	name: string;
+	sequence?: string;
+	raw?: string;
+	shift?: boolean;
+	ctrl?: boolean;
+	meta?: boolean;
+}): boolean {
+	return (
+		event.name === 'return' ||
+		event.name === 'enter' ||
+		// herdr sends Enter as a bare linefeed (`\n`), never `\r`.
+		(event.name === 'linefeed' &&
+			!event.shift &&
+			!event.ctrl &&
+			!event.meta)
+	);
+}
+
+/**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
  * hint. ↑/↓ navigate prompt history (draft preserved), typing `/` opens a
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
@@ -421,19 +450,6 @@ export function InputBox(props: {
 	const cursorVisible = createMemo(
 		() => cursorForced() || (spinnerFrame() >> 2) % 2 === 0,
 	);
-	// Dynamic tips appear once a turn has been Working for a while (parity:
-	// codex/ rotate contextual hints instead of a static tip).
-	const dynamicTip = createMemo(() => {
-		const elapsed = turnElapsed();
-		const tips = [
-			'Tip: Type / for commands · @ to mention files',
-			'Tip: Press ctrl+p for settings & commands',
-			'Tip: Ctrl+C clears the input first, then exits',
-		];
-		const tip = elapsed < 10 ? '' : tips[Math.floor(elapsed / 8) % tips.length] ?? '';
-		return tip;
-	});
-
 	useKeyboard(event => {
 		// Any key pauses the caret blink (visible while typing, debounced).
 		forceCursorVisible();
@@ -442,6 +458,10 @@ export function InputBox(props: {
 		if (!isDeleteKey(event.name)) backspaceHold = 0;
 		const pendingText = prompt();
 		if (pendingText) {
+			// The wizard prompt owns the key; claim it so the history
+			// scrollbox's native vim keys (`k`/`j`/`h`/`l`) never scroll
+			// behind it.
+			event.preventDefault();
 			if (event.name === 'escape') {
 				// Esc cancels: value editors just dismiss, but prompts with an
 				// explicit onCancel (e.g. the first-run trust gate) must NOT
@@ -495,15 +515,20 @@ export function InputBox(props: {
 		// A6: Shift+Enter / Ctrl+J / a literal LF insert a newline AT THE
 		// CURSOR, handled BEFORE the suggestion popups so a popup never
 		// swallows the key (plain Enter still selects/completes/submits).
-		const isReturnKey =
-			event.name === 'return' || event.name === 'enter';
+		const isReturnKey = isSubmitKey(event);
+		// A bare `\n` from herdr's Enter is a SUBMIT (isSubmitKey above);
+		// only an unmodified LF that is NOT herdr's submit shape inserts a
+		// literal newline (paste chunks arrive through usePaste instead).
 		const isLiteralNewline =
-			(event.sequence === '\n' || event.raw === '\n') && !isReturnKey;
+			(event.sequence === '\n' || event.raw === '\n') &&
+			!isReturnKey &&
+			event.name !== 'linefeed';
 		if (
 			(event.shift && isReturnKey) ||
 			(event.ctrl && event.name === 'j') ||
 			isLiteralNewline
 		) {
+			event.preventDefault();
 			insertAtCursor('\n');
 			setSelectedCompletion(0);
 			setExitConfirm(false);
@@ -512,6 +537,7 @@ export function InputBox(props: {
 		// `@` file-mention popup: ↑/↓ navigate, Enter inserts, Esc dismisses.
 		const mentionMatches = mentionFiles();
 		if (mentionMatches.length > 0 && !event.ctrl && !event.meta) {
+			event.preventDefault();
 			if (event.name === 'up') {
 				setMentionSelected(prev => Math.max(0, prev - 1));
 				return;
@@ -539,6 +565,7 @@ export function InputBox(props: {
 				return;
 			}
 			if (event.name === 'escape') {
+				event.preventDefault();
 				setInputAt(input().replace(/@[^\s]*$/, ''));
 				setMentionSelected(0);
 				return;
@@ -547,6 +574,7 @@ export function InputBox(props: {
 		// Command-completion popup: ↑/↓ navigate, Enter selects, Esc dismisses.
 		const matches = completions();
 		if (matches.length > 0 && !event.ctrl && !event.meta) {
+			event.preventDefault();
 			if (event.name === 'up') {
 				// ↑ walks FORWARD through the list (bottom-anchored: the
 				// selected item is at the bottom, navigation goes up).
@@ -581,6 +609,7 @@ export function InputBox(props: {
 				return;
 			}
 			if (event.name === 'escape') {
+				event.preventDefault();
 				setInputAt('');
 				setSelectedCompletion(0);
 				return;
@@ -588,6 +617,7 @@ export function InputBox(props: {
 		}
 		const pending = approval();
 		if (pending) {
+			event.preventDefault();
 			if (event.name === 'y' || event.name === 'Y') {
 				pending.resolve(true);
 				setPendingApproval(null);
@@ -606,6 +636,7 @@ export function InputBox(props: {
 			pendingQueue().length > 0 &&
 			(event.name === 'up' || event.name === 'down')
 		) {
+			event.preventDefault();
 			const index = selectedQueued();
 			if (event.name === 'up') {
 				if (index < 0) {
@@ -623,6 +654,7 @@ export function InputBox(props: {
 			}
 		}
 		if (event.name === 'up') {
+			event.preventDefault();
 			// Multiline input: ↑ moves the caret up a VISUAL line; only on
 			// the FIRST line does it fall through to history (parity: the
 			// original's multiline PR + ink-text-input onEdgeArrow).
@@ -648,6 +680,7 @@ export function InputBox(props: {
 			return;
 		}
 		if (event.name === 'down') {
+			event.preventDefault();
 			// Multiline input: ↓ moves the caret down a VISUAL line; only on
 			// the LAST line does it fall through to history.
 			if (moveCursorVertical('down')) return;
@@ -670,6 +703,7 @@ export function InputBox(props: {
 		// (`[Image #N]` / `[Text #N]` / a leading `/command`) so the caret
 		// never lands inside a block; Home/End jump to the ends.
 		if (event.name === 'left') {
+			event.preventDefault();
 			// Ctrl+Left jumps WORD-WISE (parity: the original nanocoder
 			// text-input); plain ← still walks char-by-char over tokens.
 			if (event.ctrl) moveCursorPrevWord();
@@ -677,19 +711,23 @@ export function InputBox(props: {
 			return;
 		}
 		if (event.name === 'right') {
+			event.preventDefault();
 			if (event.ctrl) moveCursorNextWord();
 			else moveCursorRight();
 			return;
 		}
 		if (event.name === 'home') {
+			event.preventDefault();
 			setCursorPos(0);
 			return;
 		}
 		if (event.name === 'end') {
+			event.preventDefault();
 			setCursorPos(input().length);
 			return;
 		}
 		if (event.name === 'tab') {
+			event.preventDefault();
 			// Shift+Tab cycles the approval mode (yolo → normal → plan →
 			// auto-accept → yolo), parity with the original's mode toggle.
 			if (event.shift) {
@@ -735,6 +773,7 @@ export function InputBox(props: {
 			return;
 		}
 		if (isReturnKey) {
+			event.preventDefault();
 			// Enter on a selected queued item loads it back into the input
 			// for editing (and removes it from the queue).
 			const queuedIndex = selectedQueued();
@@ -751,6 +790,7 @@ export function InputBox(props: {
 			return;
 		}
 		if (isDeleteKey(event.name)) {
+			event.preventDefault();
 			// Del on a selected queued item removes it.
 			const queuedIndex = selectedQueued();
 			if (
@@ -774,12 +814,16 @@ export function InputBox(props: {
 			return;
 		}
 		if (event.name === 'space') {
+			event.preventDefault();
 			insertAtCursor(' ');
 			setExitConfirm(false);
 			return;
 		}
 		const char = typedChar(event);
 		if (char && !event.ctrl && !event.meta) {
+			// Claim every typed character so the history scrollbox's native
+			// vim keys (`k`/`j`/`h`/`l`) never scroll while the user types.
+			event.preventDefault();
 			insertAtCursor(char);
 			setExitConfirm(false);
 		}
@@ -808,11 +852,6 @@ export function InputBox(props: {
 							? ` · retrying (${retryingAttempt()})`
 							: ''}{' '}
 						· Esc to cancel
-						{/* ONE line: the rotating tip rides the SAME row as the
-						    Working/Esc indicator, no redundant second line,
-						    and the tips never mention Esc again (it's already
-						    on the line; duplication confuses). */}
-						{dynamicTip() ? ` · ${dynamicTip()}` : ''}
 					</text>
 				</box>
 			</Show>
@@ -1234,6 +1273,21 @@ export function computeInputBoxHeight(
 	// Cancelling row (`Press Esc to cancel` while the abort unwinds).
 	if (isCancelling && !isBusy) interior += 1;
 	return interior + 2; // top + bottom borders
+}
+
+/**
+ * Rows the completion notice occupies ABOVE the input. The resume notice
+ * (success tone) renders a leading breakline PLUS the message row; every
+ * other completion line is a single row. The App subtracts this from the
+ * history-height cap, so an unaccounted breakline pushes the status line
+ * onto the input box.
+ */
+export function completionMessageRows(
+	message: string,
+	tone: 'default' | 'success',
+): number {
+	if (!message) return 0;
+	return tone === 'success' ? 2 : 1;
 }
 
 /**

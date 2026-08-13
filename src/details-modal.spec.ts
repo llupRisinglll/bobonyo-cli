@@ -1,5 +1,8 @@
 import {describe, expect, test} from 'bun:test';
-import {colorDetailLine} from './components/details-modal';
+import {
+	colorDetailLine,
+	detailsCardHeight,
+} from './components/details-modal';
 import {colors} from './theme';
 
 const attrs = {bold: () => 1, dim: () => 2};
@@ -39,5 +42,27 @@ describe('colorDetailLine', () => {
 	test('plain text stays text-colored', () => {
 		const [seg] = colorDetailLine('Diagnostics: no issues found.', colors(), attrs);
 		expect(seg!.fg).toBe(colors().text);
+	});
+});
+
+describe('detailsCardHeight (fit short content, cap at terminal)', () => {
+	test('short content gets a compact card, not full-screen', () => {
+		// A 2-line tool row: card ≈ 8 rows on a 40-row terminal.
+		expect(detailsCardHeight('✦ Bash(ls)\n  └   out\n', 40)).toBe(8);
+	});
+
+	test('content grows the card up to the terminal height', () => {
+		expect(detailsCardHeight('a\nb\nc\nd\ne\n', 40)).toBe(11);
+	});
+
+	test('long content caps at the available terminal height', () => {
+		const long = Array.from({length: 200}, (_, i) => `line-${i}`).join('\n');
+		expect(detailsCardHeight(long, 40)).toBe(38); // 40 - 2
+		expect(detailsCardHeight(long, 24)).toBe(22);
+	});
+
+	test('never collapses below a readable minimum', () => {
+		expect(detailsCardHeight('', 40)).toBe(7);
+		expect(detailsCardHeight('x', 8)).toBe(7);
 	});
 });

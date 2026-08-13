@@ -81,6 +81,7 @@ import {
 import {History} from './components/history';
 import {
 	computeInputBoxHeight,
+	completionMessageRows,
 	completionPopupHeight,
 	mentionPopupHeight,
 	InputBox,
@@ -144,6 +145,7 @@ import {
 	context,
 	contextPercent,
 	completionMessage,
+	completionTone,
 	commandsOpen,
 	setCommandsOpen,
 	deepSeekBalance,
@@ -247,6 +249,7 @@ import {
 	toolProfile,
 	usageHistory,
 	workingTipVisible,
+	type ChatMessage,
 } from './state';
 
 const MAX_TURN_ROUNDS = 8;
@@ -695,6 +698,12 @@ export function App() {
 			// messages) — otherwise a resumed conversation looks empty to
 			// the model even though the transcript shows everything.
 			setContext(healResumedContext(resumed.context, resumed.messages));
+			// Arrow-up history parity: rebuild the prompt history from the
+			// resumed conversation so ↑/↓ recall the prompts this session
+			// actually sent (live sessions build the same list per turn,
+			// capped at 100, newest last).
+			setPromptHistory(promptHistoryFromMessages(resumed.messages));
+			setHistoryIndex(-1);
 			setSessionId(resumed.id);
 			setSessionName(resumed.name);
 			setUsageHistory([]);
@@ -1563,6 +1572,7 @@ export function App() {
 					void submit(prompt);
 				},
 				retry: retryLast,
+				undo: undoLast,
 				resume: resumeSession,
 				rename,
 				usage,
@@ -1612,7 +1622,6 @@ export function App() {
 		// the cache head; a mid-session tool arrival would change the prefix
 		// and miss the provider's prompt cache for every later turn).
 		if (!startupReadyRef) {
-			setInput('');
 			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
 			return;
 		}
@@ -2005,6 +2014,13 @@ export function App() {
 						durationSec: thoughtDuration(),
 					});
 				}
+				// Pre-tool BRIEF (parity: claude code / openclaude render the
+				// model's "I'll check X" narration BEFORE the tool box). It is
+				// attached to the FIRST tool message of the batch and renders
+				// once as part of the tool entry — never repeated per tool.
+				const briefText = result.text.trim()
+					? scrubberRef.rehydrate(result.text).trim()
+					: '';
 				const toolResults: Array<{
 					tool_call_id: string;
 					content: string;
@@ -2052,13 +2068,21 @@ export function App() {
 					),
 				);
 				if (allReadOnly) {
-					for (const call of calls) {
+					for (const [callIndex, call] of calls.entries()) {
 						const detail = toolDisplayDetail(call);
 						appendMessage({
 							role: 'tool',
 							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
 							running: true,
 							toolId: call.id,
+							// First message carries the brief TEXT; every
+							// message marks the batch so later boxes share
+							// the single glyph and indent to the brief column.
+							brief: briefText
+								? callIndex === 0
+									? briefText
+									: ' '
+								: undefined,
 							tool: {name: call.name, detail, output: '', args: call.arguments},
 						});
 					}
@@ -2090,6 +2114,11 @@ export function App() {
 							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
 							running: true,
 							toolId: call.id,
+							brief: briefText
+								? index === 0
+									? briefText
+									: ' '
+								: undefined,
 							tool: {name: call.name, detail, output: '', args: call.arguments},
 						});
 					}
@@ -2570,6 +2599,38 @@ export function App() {
 		setContext(snapshot.context);
 		setInput('');
 		void submit(snapshot.prompt);
+	};
+
+	const undoLast = () => {
+		if (busy()) {
+			appendInfo('Cannot undo while a turn is running.');
+			return;
+		}
+		const {keptMessages, keptContext, undonePrompt} = undoExchange(
+			messages(),
+			context(),
+		);
+		if (undonePrompt === null) {
+			appendInfo('Nothing to undo yet.');
+			return;
+		}
+		setMessages(keptMessages);
+		setContext(keptContext);
+		// opencode parity: the undone prompt comes back into the input so it
+		// can be edited and re-sent.
+		if (undonePrompt) setInput(undonePrompt);
+		persist();
+		// Success notice ABOVE the input (same slot as the resume notice):
+		// green, leading breakline, auto-expires a few seconds later or when
+		// the next turn starts (runTurn clears the completion slot). Never a
+		// permanent transcript row.
+		setCompletionTone('success');
+		setCompletionMessage('Undid the last message.');
+		if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+		resumeNoticeTimer = setTimeout(() => {
+			setCompletionMessage('');
+			setCompletionTone('default');
+		}, 6000);
 	};
 
 	const resumeSession = (ref?: string) => {
@@ -3245,7 +3306,10 @@ export function App() {
 					2 -
 					(running() ? 1 : 0) -
 					startupLoading().length -
-					(completionMessage() ? 1 : 0) -
+					completionMessageRows(
+						completionMessage(),
+						completionTone(),
+					) -
 					(exitConfirm() ? 1 : 0) -
 					(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
 					completionPopupHeight(input(), terminalDimensions().width) -
@@ -3581,6 +3645,76 @@ export function interruptedContext(
 	return partial.trim()
 		? [...history, {role: 'assistant' as const, content: partial}]
 		: [...history];
+}
+
+/**
+ * Rebuild the arrow-up prompt history from a session's transcript (used on
+ * resume so ↑ recalls the prompts this conversation actually sent). Pure,
+ * unit-tested: user messages only, `command.original` (the typed command)
+ * wins over the injected body, errors skipped, consecutive duplicates
+ * collapsed, newest last, capped at 100 like the live per-turn history.
+ */
+export function promptHistoryFromMessages(
+	messages: ChatMessage[],
+): string[] {
+	const history: string[] = [];
+	for (const message of messages) {
+		if (message.role !== 'user' || message.error) continue;
+		const prompt = message.command?.original ?? message.content ?? '';
+		if (!prompt) continue;
+		if (history[history.length - 1] === prompt) continue;
+		history.push(prompt);
+	}
+	return history.slice(-100);
+}
+
+/**
+ * `/undo` cut points (pure, unit-tested).
+ *
+ * Reverts the LAST exchange: both the transcript and the provider context
+ * truncate at the last user message, and the undone prompt is returned so
+ * the input can be restored for editing.
+ *
+ * CACHE INVARIANT: truncation makes the next request's message list a
+ * STRICT PREFIX of the previous one, so the provider's prefix cache for
+ * the retained history stays warm — undo must NEVER mutate earlier
+ * messages in place (that would change the head and miss the whole cache).
+ */
+export function undoExchange(
+	messages: ChatMessage[],
+	context: ChatMessageLike[],
+): {
+	keptMessages: ChatMessage[];
+	keptContext: ChatMessageLike[];
+	undonePrompt: string | null;
+} {
+	let lastUser = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i]?.role === 'user' && !messages[i]!.error) {
+			lastUser = i;
+			break;
+		}
+	}
+	if (lastUser === -1) {
+		return {keptMessages: messages, keptContext: context, undonePrompt: null};
+	}
+	let ctxCut = context.length;
+	for (let i = context.length - 1; i >= 0; i--) {
+		if (context[i]?.role === 'user') {
+			ctxCut = i;
+			break;
+		}
+	}
+	const keptMessages = messages.slice(0, lastUser);
+	// healResumedContext keeps the truncation when the user counts align and
+	// rebuilds from the transcript when the context ever lagged (resume-heal
+	// safety) — either way the result is a strict prefix of the old list.
+	const keptContext = healResumedContext(context.slice(0, ctxCut), keptMessages);
+	return {
+		keptMessages,
+		keptContext,
+		undonePrompt: messages[lastUser]!.content ?? null,
+	};
 }
 
 function capMessages(

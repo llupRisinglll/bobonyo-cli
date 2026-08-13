@@ -1,8 +1,10 @@
 import {describe, expect, test} from 'bun:test';
 import {
 	atomicTokens,
+	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
+	isSubmitKey,
 	moveToNextWord,
 	moveToPrevWord,
 	offsetForLine,
@@ -44,6 +46,34 @@ describe('workingLabel (hide-thinking indicator phase)', () => {
 	});
 });
 
+describe('isSubmitKey (herdr Enter is a linefeed)', () => {
+	test('return and enter keys submit', () => {
+		expect(isSubmitKey({name: 'return'})).toBe(true);
+		expect(isSubmitKey({name: 'enter'})).toBe(true);
+	});
+
+	test('herdr delivers Enter as a bare linefeed -> submit', () => {
+		expect(
+			isSubmitKey({
+				name: 'linefeed',
+				sequence: '\n',
+				raw: '\n',
+			}),
+		).toBe(true);
+	});
+
+	test('modified linefeeds are NOT submits (multiline still possible)', () => {
+		expect(isSubmitKey({name: 'linefeed', shift: true})).toBe(false);
+		expect(isSubmitKey({name: 'linefeed', ctrl: true})).toBe(false);
+		expect(isSubmitKey({name: 'linefeed', meta: true})).toBe(false);
+	});
+
+	test('ordinary characters are never submits', () => {
+		expect(isSubmitKey({name: 'a'})).toBe(false);
+		expect(isSubmitKey({name: 'space'})).toBe(false);
+	});
+});
+
 describe('computeInputBoxHeight', () => {
 	test('grows with the wrapped input lines (no single-row limit)', () => {
 		const wrapped = wrapText('x'.repeat(200), 40).length;
@@ -52,6 +82,21 @@ describe('computeInputBoxHeight', () => {
 
 	test('idle box stays one interior row', () => {
 		expect(computeInputBoxHeight('', 80, false)).toBe(3);
+	});
+});
+
+describe('completionMessageRows (resume notice height)', () => {
+	test('empty message takes no rows', () => {
+		expect(completionMessageRows('', 'default')).toBe(0);
+		expect(completionMessageRows('', 'success')).toBe(0);
+	});
+
+	test('normal completion lines occupy one row', () => {
+		expect(completionMessageRows('✦ Worked for a brisk 42s.', 'default')).toBe(1);
+	});
+
+	test('the success resume notice occupies TWO rows (breakline + message)', () => {
+		expect(completionMessageRows('✔ Resumed session x.', 'success')).toBe(2);
 	});
 });
 

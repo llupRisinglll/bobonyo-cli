@@ -113,8 +113,11 @@ export function ResumeModal(props: {
 	const [rowIndex, setRowIndex] = createSignal(0);
 	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
 	// click's mouse-UP on the backdrop, which would close them instantly.
-	// Ignore the first mouse-up after mount (the opening click's release).
-	let suppressFirstMouseUp = true;
+	// Only that opening release is ignored — a time window, NOT a one-shot
+	// boolean (the flag got consumed by the opening release and swallowed
+	// the user's first real outside click: click-twice-to-close).
+	const mountedAt = Date.now();
+	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
 	const [query, setQuery] = createSignal('');
 	// Ctrl+A toggles between the CURRENT FOLDER's conversations (default)
@@ -236,6 +239,10 @@ export function ResumeModal(props: {
 	});
 
 	useKeyboard(event => {
+		// Same modal isolation as every other modal: the global handlers in
+		// App/History/InputBox already preventDefault while the modal is
+		// open; this keeps the history scrollbox from acting on modal keys.
+		event.preventDefault();
 		if (event.name === 'escape') {
 			props.onClose();
 			return;
@@ -291,7 +298,7 @@ export function ResumeModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
-					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
+					if (isOpeningRelease()) return;
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&

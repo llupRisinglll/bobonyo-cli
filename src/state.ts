@@ -36,6 +36,12 @@ export interface ChatMessage {
 	/** Tool-call id for live output updates (running rows). */
 	toolId?: string;
 	/**
+	 * The model's pre-tool BRIEF ("I'll check X") attached to the FIRST tool
+	 * message of a batch. Rendered once, integrated with the tool entry
+	 * (above the bash box), never repeated for concurrent calls.
+	 */
+	brief?: string;
+	/**
 	 * A triggered command/skill body sent to the LLM (custom commands,
 	 * skills, subscribe auto-triggers). The transcript renders it as a
 	 * tool-style `✦ Triggered a Command(name)` block instead of echoing the

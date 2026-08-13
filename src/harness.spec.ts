@@ -44,6 +44,16 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		expect(prompt).not.toContain('respond terse like smart caveman');
 	});
 
+	test('the system prompt mandates a pre-tool text line', () => {
+		// The pre-tool BRIEF is a hard UX rule: the model must write one
+		// short line before a tool call (rendered above the tool box).
+		// Guarding it in the STABLE prompt keeps the rule from silently
+		// regressing out of the cache head.
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).toMatch(/FIRST write one short line/i);
+		expect(prompt).toMatch(/never fire a tool with no accompanying text/i);
+	});
+
 	test('the request body always carries the tool catalog', () => {
 		const body = buildOpenAIRequestBody(
 			[{role: 'user', content: 'hi'}],
@@ -200,6 +210,31 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		expect(skill?.function.parameters.properties?.name).toBeDefined();
 		expect(check?.function.description.length).toBeGreaterThan(0);
 		expect(check?.function.parameters.properties?.name).toBeDefined();
+	});
+
+	test('execute_bash describes the mandatory pre-tool brief rule', () => {
+		// The model must narrate before a bash call (the harness renders the
+		// brief above the box). Without this rule in the tool description,
+		// bash calls fire bare — no pretool text — and the user has no idea
+		// what the command is about to do.
+		const body = buildOpenAIRequestBody(
+			[{role: 'user', content: 'hi'}],
+			toolCatalog(),
+			{id: 'x', model: 'm'},
+		);
+		const tools = (body.tools as Array<{
+			function: {name: string; description: string};
+		}>);
+		const bash = tools.find(tool => tool.function.name === 'execute_bash');
+		expect(bash).toBeDefined();
+		// The PURPOSE stays the lead of the description (what bash is FOR),
+		// with the brief rule following it — never the other way around.
+		expect(bash?.function.description).toMatch(
+			/^Run a shell command in the terminal/,
+		);
+		expect(bash?.function.description).toMatch(/ALWAYS write a one-line PRE-TOOL BRIEF/i);
+		expect(bash?.function.description).toMatch(/then call it in the same message/i);
+		expect(bash?.function.description).toMatch(/MANDATORY/i);
 	});
 
 	test('Anthropic tools carry ONE cache_control breakpoint (the 4-cap)', () => {

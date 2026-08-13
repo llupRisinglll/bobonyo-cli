@@ -3,6 +3,7 @@ import type {Colors} from './theme';
 import {commandNames, customCommandNames} from './commands';
 import {loadSkills} from './custom';
 import {
+	languageForPath,
 	tokenizeBash,
 	tokenizeCode,
 	themeColors,
@@ -262,19 +263,32 @@ export function tokenizeBashRow(
 	const lines = text.replace(/\n+$/, '').split('\n');
 	return emitLines(lines, (line, index, isHeader) => {
 		if (isHeader) {
-			return headerChunks(line, status, palette, defaultFg, inner =>
-				tokenizeBash(inner, palette, defaultFg),
-			);
+			// First content line is the COMMAND: `$ cmd` — the `$` prompt is
+			// secondary, the command keeps its bash syntax highlighting.
+			const cmd = line.match(/^\$\s?(.*)$/);
+			if (cmd) {
+				return [
+					chunk('$ ', palette.fg.secondary),
+					...tokenizeBash(cmd[1] ?? '', palette, defaultFg),
+				];
+			}
+			return [chunk(line, palette.fg.secondary, dim())];
 		}
-		// Wrapped command continuations: `   │ <bash>`, prefix secondary,
-		// the command itself bash-highlighted.
-		const cont = line.match(/^(\s*│\s*)(.*)$/);
-		if (cont) {
+		// Command continuation: `  cmd` (2-space indent, bash-highlighted).
+		const continuation = line.match(/^\s{2}(.*)$/);
+		if (continuation) {
 			return [
-				chunk(cont[1] ?? '', palette.fg.secondary),
-				...tokenizeBash(cont[2] ?? '', palette, defaultFg),
+				chunk('  ', palette.fg.secondary),
+				...tokenizeBash(continuation[1] ?? '', palette, defaultFg),
 			];
 		}
+		// `… +N more lines` footer inside the box: secondary dim.
+		if (line.startsWith('…')) {
+			return [
+				chunk(line, palette.fg.secondary, dim()),
+			];
+		}
+		// Output lines: secondary dim.
 		return [chunk(line, palette.fg.secondary, dim())];
 	}, defaultFg);
 }
@@ -288,7 +302,9 @@ export function tokenizeFileRow(
 ): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
-	const language = path.split('.').pop()?.toLowerCase() ?? '';
+	// Only real code files get syntax colors — .txt/unknown extensions stay
+	// plain text (a `.txt` preview must never read like JavaScript).
+	const language = languageForPath(path);
 	// The fenced token text carries a leading blank line after the opener,
 	// strip it so the header is line 0 and the body cursor stays aligned.
 	const lines = text.replace(/^\n+/, '').replace(/\n+$/, '').split('\n');
@@ -311,12 +327,9 @@ export function tokenizeFileRow(
 		}
 		const numbered = line.match(/^(\s*\d+\s+)(.*)$/);
 		if (numbered) {
-			const code = tokenizeCode(
-				numbered[2] ?? '',
-				language,
-				palette,
-				defaultFg,
-			);
+			const code = language
+				? tokenizeCode(numbered[2] ?? '', language, palette, defaultFg)
+				: [chunk(numbered[2] ?? '', defaultFg)];
 			return [chunk(numbered[1] ?? '', palette.fg.secondary), ...code];
 		}
 		return [chunk(line, palette.fg.secondary, dim())];
@@ -391,7 +404,9 @@ export function tokenizeFileDiff(
 ): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
-	const language = path.split('.').pop()?.toLowerCase() ?? '';
+	// Only real code files get syntax colors — .txt/unknown extensions stay
+	// plain text (a `.txt` diff must never highlight `new` as a keyword).
+	const language = languageForPath(path);
 	// The fenced token text carries a leading blank line after the opener,
 	// strip it so the header is line 0 and the body cursor stays aligned
 	// (the parse loop indexes body rows from the same `lines` array).
@@ -421,14 +436,16 @@ export function tokenizeFileDiff(
 		// ` ⎿ N lines → M lines` summary rows render through their own early
 		// branch in the emit callback (they never consume a body entry).
 		if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) continue;
-		const change = line.match(/^(\s*)([-+])(\s*\d+\s+)(.*)$/);
+		// Number-first gutter (parity: the reference DiffView):
+		// `   5 + function …` / `   5 - function …`.
+		const change = line.match(/^(\s*)(\d+\s+)([-+])\s+(.*)$/);
 		if (change) {
 			body.push({
 				raw: line,
-				kind: change[2] === '+' ? 'add' : 'remove',
+				kind: change[3] === '+' ? 'add' : 'remove',
 				indent: change[1] ?? '',
-				sigil: change[2],
-				number: change[3],
+				sigil: change[3],
+				number: change[2],
 				text: change[4] ?? '',
 			});
 			continue;
@@ -505,12 +522,17 @@ export function tokenizeFileDiff(
 		const code: TextChunk[] = [];
 		for (const part of parts) {
 			if (!part.text) continue;
-			const chunks = tokenizeCode(part.text, language, palette, defaultFg);
+			const chunks = language
+				? tokenizeCode(part.text, language, palette, defaultFg)
+				: [chunk(part.text, fg)];
+			const partBg = part.word ? wordBg : rowBg;
 			code.push(
 				...chunks.map(c => ({
 					...c,
-					fg: c.fg ?? fg,
-					bg: part.word ? wordBg : rowBg,
+					// Readability guard: the syntax color (or the row fg)
+					// must stay readable on the row/word background.
+					fg: readableDiffFg(partBg, c.fg ?? fg, colors),
+					bg: partBg,
 				})),
 			);
 		}
@@ -521,9 +543,9 @@ export function tokenizeFileDiff(
 			text.length;
 		return fill(
 			[
-				{...chunk(row.indent, defaultFg), bg: rowBg},
-				{...chunk(row.sigil ?? '', fg, bold()), bg: rowBg},
-				{...chunk(row.number ?? '', palette.fg.secondary), bg: rowBg},
+				{...chunk(row.indent, readableDiffFg(rowBg, defaultFg, colors)), bg: rowBg},
+				{...chunk(row.number ?? '', readableDiffFg(rowBg, palette.fg.secondary, colors)), bg: rowBg},
+				{...chunk(row.sigil ?? '', readableDiffFg(rowBg, fg, colors), bold()), bg: rowBg},
 				...code,
 			],
 			used,
@@ -565,7 +587,9 @@ export function tokenizeFileDiff(
 					return [
 						chunk(row.indent, defaultFg),
 						chunk(row.number, palette.fg.secondary),
-						...tokenizeCode(row.text, language, palette, defaultFg),
+						...(language
+							? tokenizeCode(row.text, language, palette, defaultFg)
+							: [chunk(row.text, defaultFg)]),
 					];
 				}
 				// Summary / opaque row.
@@ -578,7 +602,9 @@ export function tokenizeFileDiff(
 			return [
 				chunk(context[1] ?? '', defaultFg),
 				chunk(context[2] ?? '', palette.fg.secondary),
-				...tokenizeCode(context[3] ?? '', language, palette, defaultFg),
+				...(language
+					? tokenizeCode(context[3] ?? '', language, palette, defaultFg)
+					: [chunk(context[3] ?? '', defaultFg)]),
 			];
 		}
 		return fill([chunk(line, palette.fg.secondary, dim())], line.length);
@@ -1011,6 +1037,26 @@ export function readableOn(
 	const light = luminance(text) > luminance(base) ? text : base;
 	const dark = luminance(text) > luminance(base) ? base : text;
 	return bgLum < 0.5 ? light : dark;
+}
+
+/**
+ * Diff-row foreground: keep the preferred color (row/syntax fg) when it
+ * clears the contrast bar against the row/word background, otherwise fall
+ * back to a guaranteed-readable light/dark color. A diff can never render
+ * unreadable under any theme — this is the same guard activeRowPalette uses
+ * for hover tints, applied to every chunk that sits on a diff background.
+ */
+function readableDiffFg(
+	bg: RGBA,
+	preferred: RGBA | undefined,
+	colors: Colors,
+): RGBA {
+	return readableOn(
+		bg,
+		preferred,
+		RGBA.fromHex(colors.text),
+		RGBA.fromHex(colors.base),
+	);
 }
 
 /**

@@ -31,6 +31,7 @@ import {
 	spinnerFrame,
 	streaming,
 	thinkingElapsed,
+	turnElapsed,
 	settingsOpen,
 	commandsOpen,
 	statusOpen,
@@ -58,9 +59,16 @@ import {
 	rowLanguage,
 } from '../tool-display';
 import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
+import {
+	stableSettledBlocks,
+	type SettledBlock,
+} from '../settled-block-cache';
+import {resolveScrollAcceleration} from '../scroll-acceleration';
 import {formatCount, formatDuration} from '../format';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
+import {BashToolRow} from './bash-tool-row';
+import {FileToolRow} from './file-tool-row';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -100,6 +108,8 @@ const COMPONENT_ROW_LANGS = new Set([
 	'thought',
 	'taskrow',
 	'commandrow',
+	'filerow',
+	'filediff',
 ]);
 /**
  * Expanded per-call entries of every multi-call compact block, keyed by block
@@ -447,6 +457,7 @@ export function History(props: {
 	 * chatbox flashing with "christmas lights" was the settled blocks being
 	 * rebuilt every 100ms tick.
 	 */
+	const settledBlockCache = new Map<string, SettledBlock>();
 	const settledBlocks = createMemo(() => {
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
@@ -456,11 +467,13 @@ export function History(props: {
 			text: string;
 			key?: string;
 			kind: 'md' | 'reply';
+			brief?: string;
 		}> = [];
 		const pushBlock = (
 			text: string,
 			key?: string,
 			kind: 'md' | 'reply' = 'md',
+			brief?: string,
 		) => {
 			parts.push({
 				// Full-row-bg fences carry the current width in the opener,
@@ -475,6 +488,7 @@ export function History(props: {
 				),
 				key,
 				kind,
+				brief,
 			});
 		};
 		const all = messages();
@@ -533,7 +547,17 @@ export function History(props: {
 					run.push(all[i + 1]!);
 					i++;
 				}
-				for (const row of renderToolRun(run)) pushBlock(row.text, row.blockKey);
+				const runBrief = run[0]?.brief;
+				for (const [rowIndex, row] of renderToolRun(run, fillWidth).entries()) {
+					// The brief renders ONCE, on the FIRST tool entry of the
+					// batch (never repeated per concurrent call).
+					pushBlock(
+						row.text,
+						row.blockKey,
+						'md',
+						rowIndex === 0 ? runBrief : runBrief ? ' ' : undefined,
+					);
+				}
 			} else if (message.kind === 'info') {
 				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
 			} else if (message.kind === 'warning') {
@@ -577,23 +601,18 @@ export function History(props: {
 		// (hit-test changes on hover → the "hover doesn't stick" bug, and
 		// buffer backgrounds bleed into every row). Everything else groups
 		// into markdown nodes as before.
-		const blocks: Array<
-			| {kind: 'md'; parts: Array<{text: string; key?: string}>}
-			| {kind: 'reply'; parts: Array<{text: string; key?: string}>}
-			| {
-					kind: 'tool';
-					part: {text: string; key?: string};
-					segments: LiveRowSegments;
-					status: RowStatus;
-					glyph: '✦' | '⚙';
-			  }
-		> = [];
+		const blocks: SettledBlock[] = [];
 		for (const part of parts) {
 			if (part.kind === 'reply') {
 				blocks.push({kind: 'reply', parts: [part]});
 				continue;
 			}
-			const fenceMatch = /^```+([^:\n]+):([^:\n]+)\n+([\s\S]*?)\n+```+$/.exec(
+			// The opener may carry the full-row-bg WIDTH marker
+			// (`filediff:done:w84`) from pushBlock — tolerate it so the
+			// block still classifies as a component TOOL row. Without this,
+			// the Edit/diff row falls back to markdown and its nested
+			// ` ```filediff ` fences render as leaked literal lines.
+			const fenceMatch = /^```+([^:\n]+):([^:\n]+)(?::[^:\n]*)?\n+([\s\S]*?)\n+```+$/.exec(
 				part.text,
 			);
 			if (fenceMatch && COMPONENT_ROW_LANGS.has(fenceMatch[1] ?? '')) {
@@ -604,6 +623,8 @@ export function History(props: {
 					part,
 					status,
 					glyph: lang === 'thought' ? '⚙' : '✦',
+					brief: part.brief,
+					batchBriefed: part.brief === ' ',
 					// Same tokenizer path the LIVE rows use: identical colors,
 					// spacing and syntax highlighting while running and done.
 					segments: liveRowSegments(
@@ -617,7 +638,11 @@ export function History(props: {
 				continue;
 			}
 			const last = blocks[blocks.length - 1];
-			if (last?.kind === 'md') {
+			// File-write/diff parts get their OWN markdown block: merging them
+			// with the previous part (user message, reply…) collapses the
+			// inter-block blank line and the tool glues to the chat.
+			const fileRowPart = /^```+(filerow|filediff):/.test(part.text);
+			if (last?.kind === 'md' && !fileRowPart) {
 				last.parts.push(part);
 			} else {
 				blocks.push({kind: 'md', parts: [part]});
@@ -645,11 +670,15 @@ export function History(props: {
 				group.kind === 'tool' ? [group.part] : group.parts;
 			partList.forEach((part, index) => {
 				// A block is EXPANDABLE only when it actually hides content (a
-				// `+N more lines` footer) or is currently expanded.
+				// `+N more lines` footer) or is currently expanded. TOOL
+				// blocks are ALWAYS interactive: the whole bordered entry
+				// (Bash box, file diff, …) is one hoverable/clickable region,
+				// not just the rows with a footer.
 				const hasFooter = /\+(\d+) (more )?lines?/.test(part.text);
 				const expandable =
-					part.key !== undefined &&
-					(hasFooter || Boolean(expandedBlocks()[part.key]));
+					group.kind === 'tool' ||
+					(part.key !== undefined &&
+						(hasFooter || Boolean(expandedBlocks()[part.key])));
 				// NO hoveredBlock() read here: the hover marker is applied
 				// PER-ITEM in the For render below, so hovering never changes
 				// this array's identity (OpenTUI's For re-renders EVERY child
@@ -690,7 +719,11 @@ export function History(props: {
 				rows:
 					renderIndex.length -
 					start +
-					(group.kind === 'reply' || group.kind === 'tool' ? 1 : 0),
+					(group.kind === 'reply' || group.kind === 'tool' ? 1 : 0) +
+					// The bordered bash box draws a TOP and BOTTOM border
+					// around its content, so the click/hover range must span
+					// two extra rows (the border is part of the entry).
+					(group.kind === 'tool' && isBashBlock(group) ? 2 : 0),
 			});
 		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
@@ -698,7 +731,7 @@ export function History(props: {
 		blockRanges = ranges;
 		currentBlock = block;
 		baseRowCount = renderIndex.length;
-		return blocks;
+		return stableSettledBlocks(settledBlockCache, blocks);
 	});
 	/**
 	 * LIVE region, computed on the ticker signals ONLY so the settled blocks
@@ -759,7 +792,14 @@ export function History(props: {
 	const liveToolRows = createMemo(() => {
 		if (!running()) return [];
 		const outputs = throttledToolOutputs();
-		const rows: Array<LiveRowSegments & {toolId?: string}> = [];
+		const rows: Array<
+			LiveRowSegments & {
+				toolId?: string;
+				lang?: string;
+				brief?: string;
+				batchBriefed?: boolean;
+			}
+		> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
 				const streamed = message.toolId
@@ -776,9 +816,14 @@ export function History(props: {
 					false,
 					'running',
 					true,
+					true,
+					historyFillWidth(terminalDimensions().width ?? 80),
 				);
 				rows.push({
 					toolId: message.toolId,
+					lang: rowLanguage(message.tool.name),
+					brief: message.brief,
+					batchBriefed: message.brief === ' ',
 					...liveRowSegments(
 						raw,
 						rowLanguage(message.tool.name),
@@ -790,6 +835,36 @@ export function History(props: {
 			}
 		}
 		return rows;
+	});
+	/**
+	 * Idle-history tip: rendered INSIDE the transcript (centered, with a
+	 * leading breakline, transient) ONLY while a turn is running but nothing
+	 * is painting in the history — e.g. the model is thinking in the
+	 * background (hide-thinking on), or the provider is still warming up.
+	 * As soon as reasoning/reply/tool rows stream, the tip disappears and
+	 * the real content takes over.
+	 */
+	const historyTip = createMemo(() => {
+		// "Idle" = a turn is running but NOTHING is painting in the history:
+		// no tool rows, no streaming reply, and — when hide-thinking is on —
+		// no visible thought block either. (The live thought renders only
+		// when hideThinking is OFF; with it ON, thinking runs in the
+		// background and the history is visually idle — exactly when the tip
+		// should take the stage.)
+		const idle =
+			running() &&
+			!liveToolRows().length &&
+			!liveReplyText() &&
+			!(!hideThinking() && liveThoughtHeader());
+		if (!idle) return '';
+		const elapsed = turnElapsed();
+		if (elapsed < 10) return '';
+		const tips = [
+			'Tip: Type / for commands · @ to mention files',
+			'Tip: Press ctrl+p for settings & commands',
+			'Tip: Ctrl+C clears the input first, then exits',
+		];
+		return tips[Math.floor(elapsed / 8) % tips.length] ?? '';
 	});
 	const lines = createMemo(() => renderText);
 
@@ -978,13 +1053,18 @@ export function History(props: {
 	const measureContentHeight = (): void => {
 		const box = scrollRef;
 		if (!box || !props.onContentHeight) return;
-		let total = 0;
-		for (const child of box.content.getChildren()) {
-			total += child.height ?? 0;
-		}
-		if (total !== lastContentHeight) {
-			lastContentHeight = total;
-			props.onContentHeight(total);
+		try {
+			let total = 0;
+			for (const child of box.content.getChildren()) {
+				total += child.height ?? 0;
+			}
+			if (total !== lastContentHeight) {
+				lastContentHeight = total;
+				props.onContentHeight(total);
+			}
+		} catch {
+			// A destroyed/unlaid-out child mid-resume must never crash the
+			// app; the next tick re-measures.
 		}
 	};
 	createEffect(() => {
@@ -1018,6 +1098,10 @@ export function History(props: {
 			paddingRight={2}
 			stickyScroll
 			stickyStart="bottom"
+			// Mouse-wheel speed parity with opencode: 3× by default
+			// (settings → scrollSpeed), so wheel scrolling feels as fast and
+			// smooth as the reference CLI instead of the linear 1× default.
+			scrollAcceleration={resolveScrollAcceleration()}
 			{...({
 				onMouseDown: handleMouseDown,
 				onMouseUp: handleMouseUp,
@@ -1042,6 +1126,46 @@ export function History(props: {
 					// geometry to compute and the hit target never changes
 					// under the cursor — hover sticks.
 					if (block.kind === 'tool') {
+						// Bash entries render as ONE bordered box (native
+						// OpenTUI border, so wrapped lines stay inside).
+						if (block.status !== undefined && block.glyph === '✦' && isBashBlock(block)) {
+							return (
+								<BashToolRow
+									onRef={setRef}
+									header={block.segments.header}
+									body={block.segments.body}
+									status={block.status}
+									glyph={block.glyph}
+									hovered={
+										block.part.key === hoveredBlock()
+									}
+									brief={block.brief}
+									batchBriefed={block.batchBriefed}
+								/>
+							);
+						}
+						// File-write/edit rows (Write / Edit / diff previews):
+						// plain components with the leading breakline, so they
+						// never glue under the previous message.
+						if (
+							block.status !== undefined &&
+							isFileRowBlock(block)
+						) {
+							return (
+								<FileToolRow
+									onRef={setRef}
+									header={block.segments.header}
+									body={block.segments.body}
+									status={block.status}
+									glyph={block.glyph}
+									hovered={
+										block.part.key === hoveredBlock()
+									}
+									brief={block.brief}
+									batchBriefed={block.batchBriefed}
+								/>
+							);
+						}
 						return (
 							<SettledToolRow
 								onRef={setRef}
@@ -1051,6 +1175,8 @@ export function History(props: {
 								hovered={
 									block.part.key === hoveredBlock()
 								}
+								brief={block.brief}
+								batchBriefed={block.batchBriefed}
 								width={historyFillWidth(
 									terminalDimensions().width ?? 80,
 								)}
@@ -1181,6 +1307,21 @@ export function History(props: {
 								}}
 							/>
 						</box>
+					</box>
+				</box>
+			</Show>
+			{/* Idle-history tip: a TRANSIENT centered row at the bottom of the
+			    transcript (breakline above so it never glues to the last
+			    message), shown only while a turn runs but nothing streams.
+			    It lives INSIDE the scrollbox so it scrolls with the history
+			    and vanishes the moment real content renders. */}
+			<Show when={historyTip()}>
+				<box flexDirection="column">
+					<box height={1} />
+					<box flexDirection="row" justifyContent="center">
+						<text fg={colors().secondary} attributes={dim()}>
+							{historyTip()}
+						</text>
 					</box>
 				</box>
 			</Show>
@@ -1361,14 +1502,23 @@ function wordWrapForBackground(text: string, width: number): string[] {
  * unrelated tools and file-write tools keep their own rows. Ctrl+O toggles
  * between the compacted header and the individual call entries.
  */
-function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: string}> {
+function renderToolRun(
+	run: ChatMessage[],
+	width: number,
+): Array<{text: string; blockKey?: string}> {
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';
-		// File-write tools and AGENTS keep their own rows (nanocoder:
-		// subagents render one compact entry per delegated agent, never a
-		// single `×N` tally).
-		if (isFileWriteTool(name) || name === 'agent') {
+		// File-write tools, AGENTS and BASH keep their own rows. Bash
+		// compaction (`✦ Ran Bash ×2`) hides the actual commands — each
+		// command line IS the useful content, so every bash call renders as
+		// its own `✦ Bash(cmd)` row instead of a ×N tally.
+		if (
+			isFileWriteTool(name) ||
+			name === 'agent' ||
+			name === 'execute_bash' ||
+			name === 'execute_bash:user'
+		) {
 			blocks.push([message]);
 			continue;
 		}
@@ -1403,10 +1553,12 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 						true,
 						'done',
 						true,
+						true,
+						width,
 					),
 				);
 			}
-			return [{text: singleToolRow(block[0]!, key), blockKey: key}];
+			return [{text: singleToolRow(block[0]!, key, width), blockKey: key}];
 		}
 		const key =
 			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
@@ -1422,13 +1574,30 @@ function renderToolRun(run: ChatMessage[]): Array<{text: string; blockKey?: stri
 								true,
 								'done',
 								true,
+								true,
+								width,
 							)
 						: message.content,
 				)
 				.join('\n\n'),
 		);
-		return [{text: compactToolBlock(block, key), blockKey: key}];
+		return [{text: compactToolBlock(block, key, width), blockKey: key}];
 	});
+}
+
+/** Whether a settled tool block is a BASH row (rendered as a bordered box). */
+function isBashBlock(block: SettledBlock): boolean {
+	if (block.kind !== 'tool') return false;
+	const fenceMatch = /^```+([^:\n]+):/.exec(block.part.text);
+	return fenceMatch?.[1] === 'bashrow';
+}
+
+/** Whether a settled tool block is a FILE-WRITE/EDIT row (Write/Edit/diff). */
+function isFileRowBlock(block: SettledBlock): boolean {
+	if (block.kind !== 'tool') return false;
+	const fenceMatch = /^```+([^:\n]+):/.exec(block.part.text);
+	const lang = fenceMatch?.[1];
+	return lang === 'filerow' || lang === 'filediff';
 }
 
 /**
@@ -1489,7 +1658,7 @@ export function renderUserBlock(
 	};
 }
 
-function singleToolRow(message: ChatMessage, key: string): string {
+function singleToolRow(message: ChatMessage, key: string, width: number): string {
 	if (!message.tool) return message.content;
 	if (message.tool.name === 'agent') return agentRow(message);
 	const status: RowStatus = message.running
@@ -1501,13 +1670,23 @@ function singleToolRow(message: ChatMessage, key: string): string {
 	// owns the blink) — reading spinnerFrame here would re-run the whole
 	// settled memo every tick and re-render every block (the flicker loop).
 	const blinkOn = true;
-	return formatToolEntry(
+	const formatted = formatToolEntry(
 		{...message.tool, output: liveOutput(message)},
 		expandedBlocks()[key] ?? toolsExpanded(),
 		status,
 		false,
 		blinkOn,
+		width,
 	);
+	// File-write/edit previews (Write/Edit/diff) are ALREADY fenced by
+	// formatToolEntry (` ```filerow ` / ` ```filediff `) — the settled memo
+	// needs an OUTER fence to detect them as component tool rows (the gap +
+	// hover + click). Wrap them so they render like every other tool row.
+	return message.tool.name === 'write_file' ||
+		message.tool.name === 'string_replace' ||
+		message.tool.name === 'diff_edit'
+		? fence(rowLanguage(message.tool.name), status, formatted)
+		: formatted;
 }
 
 /**
@@ -1557,7 +1736,11 @@ function liveOutput(message: ChatMessage): string {
 	return message.tool?.output ?? '';
 }
 
-function compactToolBlock(calls: ChatMessage[], key: string): string {
+function compactToolBlock(
+	calls: ChatMessage[],
+	key: string,
+	width: number,
+): string {
 	const order: string[] = [];
 	const counts = new Map<string, number>();
 	for (const message of calls) {
@@ -1590,6 +1773,8 @@ function compactToolBlock(calls: ChatMessage[], key: string): string {
 							true,
 							'done',
 							true,
+							true,
+							width,
 						)
 					: message.content,
 			)
@@ -1599,7 +1784,7 @@ function compactToolBlock(calls: ChatMessage[], key: string): string {
 
 	const lastWithTool = [...calls].reverse().find(message => message.tool);
 	const tail = lastWithTool
-		? formatOutputTail(liveOutput(lastWithTool), false)
+		? formatOutputTail(liveOutput(lastWithTool), false, width)
 		: '';
 	// Universal footer: the collapsed tally hides the individual call
 	// entries behind `+N more lines` (no keyboard hint, the footer IS the

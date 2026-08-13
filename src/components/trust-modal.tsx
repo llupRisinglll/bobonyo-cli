@@ -22,7 +22,11 @@ export function TrustModal(props: {
 	const dims = () => terminalDimensions();
 	const [choice, setChoice] = createSignal<'yes' | 'no'>('yes');
 	// AUTO-CLOSE GUARD: ignore the opening click's mouse-UP on the backdrop.
-	let suppressFirstMouseUp = true;
+	// Time-window based, NOT a one-shot boolean — the flag got consumed by
+	// the opening release and swallowed the first real outside click
+	// (click-twice-to-close).
+	const mountedAt = Date.now();
+	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
@@ -113,7 +117,7 @@ export function TrustModal(props: {
 			backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
 			{...({
 				onMouseUp: (event: {x?: number; y?: number}) => {
-					if (suppressFirstMouseUp) { suppressFirstMouseUp = false; return; }
+					if (isOpeningRelease()) return;
 					if (
 						typeof event.x === 'number' &&
 						typeof event.y === 'number' &&
