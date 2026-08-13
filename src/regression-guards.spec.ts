@@ -195,6 +195,26 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(read('./config.ts')).toMatch(/modelEfforts\?: Record<string, string>/);
 	});
 
+	test('bare /effort opens the effort picker modal (never the input row)', () => {
+		const app = read('./app.tsx');
+		// No args must open the modal; a modal signal, not setPendingPrompt.
+		expect(app).toMatch(/if \(!level\) \{\n\s*setEffortOpen\(true\)/);
+		expect(app).toMatch(/<EffortModal/);
+		expect(app).toMatch(/onSelect=\{level => \{\n\s*applyEffort\(level\)/);
+		expect(read('./components/input-box.tsx')).toMatch(
+			/connectOpen\(\) \|\|\n\s*effortOpen\(\)/,
+		);
+		// Effort picker owns every key while open.
+		expect(app).toMatch(/connectOpen\(\) \|\|\n\s*effortOpen\(\)/);
+	});
+
+	test('DeepSeek fetchers use the RESOLVED key (env: never sent raw)', () => {
+		const deepseek = read('./deepseek.ts');
+		expect(deepseek).toMatch(
+			/provider\.apiKeyResolved \?\? provider\.apiKey \?\? ''/,
+		);
+	});
+
 	test('resume search covers the session id', () => {
 		const modal = read('./components/resume-modal.tsx');
 		// The filter must go through the pure helper that matches the id,

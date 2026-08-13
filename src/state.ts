@@ -354,6 +354,11 @@ export const [connectOpen, setConnectOpen] = createSignal<{
 	provider?: 'codex' | 'custom';
 	editId?: string;
 } | null>(null);
+/**
+ * Standalone EFFORT picker (bare `/effort`): choose Default or a reasoning
+ * tier for the ACTIVE model — never the chat input row.
+ */
+export const [effortOpen, setEffortOpen] = createSignal(false);
 /** Estimated context usage % (E7): tokens / provider context window. */
 export const [contextPercent, setContextPercent] = createSignal(0);
 /** Non-zero while the provider call is retrying (429/stall backoff). */

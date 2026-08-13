@@ -113,6 +113,7 @@ import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
 import {EFFORT_LEVELS} from './components/model-modal';
 import {ConnectProviderModal} from './components/connect-provider-modal';
+import {EffortModal} from './components/effort-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
@@ -164,6 +165,8 @@ import {
 	setCommandsOpen,
 	connectOpen,
 	setConnectOpen,
+	effortOpen,
+	setEffortOpen,
 	deepSeekBalance,
 	diagnosticsCount,
 	discoveredModels,
@@ -1076,7 +1079,8 @@ export function App() {
 			agentsOpen() ||
 			detailsOpen() ||
 			resumeOpen() ||
-			connectOpen()
+			connectOpen() ||
+			effortOpen()
 		) {
 			// All modal keys (tabs/rows/search/Enter/Esc) are owned by the
 			// modal's own useKeyboard, nothing may leak to the app outside.
@@ -3154,23 +3158,8 @@ export function App() {
 		showToast(`Model: ${name} · ${endpoint.id}`);
 	};
 
-	/**
-	 * `/effort <minimal|low|medium|high|default>` — reasoning effort for the
-	 * ACTIVE model, persisted per model (keyed provider\0model) so the model
-	 * modal, the status-line badge and the next selection all agree.
-	 * `default` clears the override and falls back to the catalog effort.
-	 */
-	const switchEffort = (args: string) => {
-		const level = args.trim().toLowerCase();
-		if (
-			level !== 'default' &&
-			!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])
-		) {
-			appendInfo(
-				`Invalid effort '${args}'. Use default, minimal, low, medium or high.`,
-			);
-			return;
-		}
+	/** Apply a chosen effort (or `default`) to the ACTIVE model. */
+	const applyEffort = (level: string) => {
 		const endpoint = activeEndpoint();
 		const effortKey = `${endpoint.id}\u0000${endpoint.model}`;
 		const prefs = loadPreferences();
@@ -3189,6 +3178,31 @@ export function App() {
 		showToast(
 			`Effort: ${level === 'default' ? 'default' : level} · ${endpoint.model}`,
 		);
+	};
+
+	/**
+	 * `/effort <minimal|low|medium|high|default>` — reasoning effort for the
+	 * ACTIVE model, persisted per model (keyed provider\0model) so the model
+	 * modal, the status-line badge and the next selection all agree.
+	 * `default` clears the override and falls back to the catalog effort.
+	 * A BARE `/effort` opens the effort picker modal instead.
+	 */
+	const switchEffort = (args: string) => {
+		const level = args.trim().toLowerCase();
+		if (!level) {
+			setEffortOpen(true);
+			return;
+		}
+		if (
+			level !== 'default' &&
+			!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])
+		) {
+			appendInfo(
+				`Invalid effort '${args}'. Use default, minimal, low, medium or high.`,
+			);
+			return;
+		}
+		applyEffort(level);
 	};
 
 	/**
@@ -3739,6 +3753,29 @@ export function App() {
 					editId={connectOpen()!.editId}
 					onConnect={saveConnectedProvider}
 					onClose={() => setConnectOpen(null)}
+				/>
+			</Show>
+			{/* Bare `/effort` opens the effort picker (opencode-style list of
+			    Default + reasoning tiers for the ACTIVE model). */}
+			<Show when={effortOpen()}>
+				<EffortModal
+					model={activeEndpoint().model}
+					provider={activeEndpoint().name}
+					currentEffort={
+						loadPreferences().modelEfforts?.[
+							`${activeEndpoint().id}\u0000${activeEndpoint().model}`
+						]
+					}
+					defaultEffort={
+						(activeEndpoint().modelEfforts ?? {})[
+							activeEndpoint().model
+						]
+					}
+					onSelect={level => {
+						applyEffort(level);
+						setEffortOpen(false);
+					}}
+					onClose={() => setEffortOpen(false)}
 				/>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference

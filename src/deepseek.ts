@@ -55,6 +55,13 @@ export interface DeepSeekEndpoint {
 	name?: string;
 	baseUrl: string;
 	apiKey?: string;
+	/**
+	 * RESOLVED key (env: references expanded). The live fetchers must send
+	 * THIS, never the raw `apiKey` — an `env:VAR` config otherwise sends the
+	 * literal "env:VAR" as the bearer token, the /models fetch fails with
+	 * 401, and the catalog silently falls back to the static seeds.
+	 */
+	apiKeyResolved?: string;
 	models?: string[];
 }
 
@@ -290,7 +297,7 @@ export async function refreshDeepSeekModels(
 		try {
 			const ids = await fetchDeepSeekModels(
 				provider.baseUrl,
-				provider.apiKey ?? '',
+				provider.apiKeyResolved ?? provider.apiKey ?? '',
 			);
 			if (ids.length === 0) return provider.models ?? [];
 			const entries = loadDeepSeekCache();
@@ -335,7 +342,7 @@ export async function refreshProviderModels(
 		try {
 			const ids = await fetchProviderModels(
 				modelsUrl,
-				provider.apiKey ?? '',
+				provider.apiKeyResolved ?? provider.apiKey ?? '',
 			);
 			if (ids.length === 0) return provider.models ?? [];
 			const entries = loadDeepSeekCache();

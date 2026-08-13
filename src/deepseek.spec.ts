@@ -303,6 +303,38 @@ describe('disk cache (TTL + atomic write + multi-instance freshness)', () => {
 		).toEqual(['deepseek-v4-flash']);
 	});
 
+	test('env: keys are RESOLVED before the /models fetch', async () => {
+		// The live fetchers must send apiKeyResolved, never the raw
+		// `env:VAR` string — a literal env:VAR bearer makes the fetch 401
+		// and the catalog silently falls back to the static seeds (the
+		// "DeepSeek shows deepseek-chat instead of v4" regression).
+		let auth = '';
+		stubFetch(async (_input, init) => {
+			auth =
+				(
+					(init?.headers as Record<string, string> | undefined) ??
+					{}
+				).authorization ?? '';
+			return new Response(
+				JSON.stringify({
+					data: [
+						{id: 'deepseek-v4-flash'},
+						{id: 'deepseek-v4-pro'},
+					],
+				}),
+				{status: 200},
+			);
+		});
+		const models = await refreshDeepSeekModels({
+			id: 'DeepSeek',
+			baseUrl: 'https://api.deepseek.com',
+			apiKey: 'env:DEEPSEEK_KEY',
+			apiKeyResolved: 'sk-real',
+		});
+		expect(models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+		expect(auth).toBe('Bearer sk-real');
+	});
+
 	test('balance TTL is independent and shorter', async () => {
 		const at = Date.now();
 		saveDeepSeekCache({

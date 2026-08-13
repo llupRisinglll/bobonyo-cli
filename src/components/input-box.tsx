@@ -43,6 +43,7 @@ import {
 	detailsOpen,
 	resumeOpen,
 	connectOpen,
+	effortOpen,
 	sessionId,
 	spinnerFrame,
 	SPINNER_FRAMES,
@@ -509,7 +510,8 @@ export function InputBox(props: {
 			agentsOpen() ||
 			detailsOpen() ||
 			resumeOpen() ||
-			connectOpen()
+			connectOpen() ||
+			effortOpen()
 		) {
 			event.preventDefault();
 			return;
