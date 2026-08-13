@@ -899,7 +899,8 @@ async function runSubagent(
 	description: string,
 	onProgress?: (output: string) => void,
 ): Promise<string> {
-	// Custom agents (`.nanocoder/agents/*.md`, user agents) carry their own
+	// Custom agents (`.bobonyo/agents/*.md` or legacy `.nanocoder`, user
+	// agents) carry their own
 	// system prompt; built-ins fall back to the registry instructions.
 	const customPrompt = subagentSystemPrompt(subagentType);
 	let history: ChatMessageLike[] = [

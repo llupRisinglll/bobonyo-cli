@@ -1,8 +1,9 @@
 /**
  * Session lifecycle (parity: nanocoder's session-manager + resolve-session).
  *
- * Each conversation is persisted to `$NANOCODER_CONFIG_DIR/sessions/<id>.json`
- * (or `~/.local/share/bobonyo/sessions`) immediately on creation
+ * Each conversation is persisted to `~/.local/share/bobonyo/sessions/<id>.json`
+ * (legacy `~/.local/share/nanocoder/sessions` is migrated on first run)
+ * immediately on creation
  * and after every committed turn, so a crash never loses a conversation.
  * `/resume last|<index>|<id>` resolves and loads a session.
  */
@@ -16,7 +17,7 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import {join} from 'node:path';
-import {nanocoderDataDir} from './nanocoder-paths';
+import {bobonyoDataDir} from './bobonyo-paths';
 import {displayToolName, toolArgsSummary} from './tools';
 import type {ChatMessageLike, MockToolCall} from './client';
 import type {ChatMessage} from './state';
@@ -57,14 +58,14 @@ function toEpoch(value: unknown): number {
 }
 
 function sessionsDir(): string {
-	// Sessions live in the NANOCODER DATA dir (`~/.local/share/nanocoder`),
-	// NOT the config dir, resume must find the real nanocoder sessions.
-	const base = nanocoderDataDir();
+	// Sessions live in the BOBONYO DATA dir (`~/.local/share/bobonyo`),
+	// NOT the config dir; the legacy nanocoder sessions are migrated once.
+	const base = bobonyoDataDir();
 	return join(base, 'sessions');
 }
 
 function checkpointsDir(): string {
-	const base = nanocoderDataDir();
+	const base = bobonyoDataDir();
 	return join(base, 'checkpoints');
 }
 

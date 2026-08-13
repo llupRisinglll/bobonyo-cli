@@ -44,7 +44,7 @@ export interface MonthlyUsage {
 	at: number;
 }
 
-/** Shape persisted in `~/.config/nanocoder/provider-usage.json`. */
+/** Shape persisted in `~/.config/bobonyo/provider-usage.json`. */
 export interface ProviderUsageFile {
 	entries: Record<string, Record<string, MonthlyUsage>>;
 }

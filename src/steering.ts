@@ -14,8 +14,8 @@
  */
 
 import {existsSync, readFileSync} from 'node:fs';
-import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {bobonyoConfigDir} from './bobonyo-paths';
 
 export interface SteeringRule {
 	id: string;
@@ -40,8 +40,9 @@ export interface SteeringFacts {
 
 export function loadSteeringConfig(): SteeringConfig {
 	const base =
+		process.env.BOBONYO_CONFIG_DIR ??
 		process.env.NANOCODER_CONFIG_DIR ??
-		join(homedir(), '.local', 'share', 'bobonyo');
+		bobonyoConfigDir();
 	try {
 		const file = join(base, 'steering.json');
 		if (existsSync(file)) {

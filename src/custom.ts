@@ -2,14 +2,15 @@
  * Custom commands (F4), custom tools (F5) and skills (F6), docs-as-code.
  *
  * Files are markdown with optional YAML frontmatter (`---` … `---`); a file
- * without frontmatter is treated as content. Sources: `$NANOCODER_CONFIG_DIR`
+ * without frontmatter is treated as content. Sources: `$BOBONYO_CONFIG_DIR`
  * subfolders (`commands/`, `tools/`, `skills/`) plus the project-local
- * `.nanocoder` equivalents (project wins on name conflict).
+ * `.bobonyo` equivalents (legacy `.nanocoder` still loads; project wins on
+ * name conflict).
  */
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
-import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {bobonyoConfigDir} from './bobonyo-paths';
 import {cavemanMode} from './state';
 
 export interface ParsedFrontmatter {
@@ -80,10 +81,15 @@ export interface Skill {
 function baseDirs(): string[] {
 	const dirs: string[] = [];
 	const configBase =
+		process.env.BOBONYO_CONFIG_DIR ??
 		process.env.NANOCODER_CONFIG_DIR ??
-		join(homedir(), '.local', 'share', 'bobonyo');
+		bobonyoConfigDir();
 	dirs.push(join(configBase));
-	dirs.push(join(process.cwd(), '.nanocoder'));
+	dirs.push(join(process.cwd(), '.bobonyo'));
+	// Legacy project layout still loads when the bobonyo one is absent.
+	if (!existsSync(join(process.cwd(), '.bobonyo'))) {
+		dirs.push(join(process.cwd(), '.nanocoder'));
+	}
 	return dirs;
 }
 

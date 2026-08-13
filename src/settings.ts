@@ -8,7 +8,7 @@
 
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {nanocoderConfigDir} from './nanocoder-paths';
+import {bobonyoConfigDir} from './bobonyo-paths';
 
 export type Mode = 'yolo' | 'auto-accept' | 'normal' | 'plan';
 export type ToolProfile = 'full' | 'minimal' | 'nano' | 'auto';
@@ -72,8 +72,10 @@ const DEFAULTS: Settings = {
 };
 
 function settingsPath(): string {
-	// Still the NANOCODER config dir, the rename happens when stable.
-	const base = process.env.NANOCODER_CONFIG_DIR ?? nanocoderConfigDir();
+	const base =
+		process.env.BOBONYO_CONFIG_DIR ??
+		process.env.NANOCODER_CONFIG_DIR ??
+		bobonyoConfigDir();
 	return join(base, 'settings.json');
 }
 
@@ -87,8 +89,14 @@ export function loadSettings(): Settings {
 	} catch {
 		// corrupt settings, defaults
 	}
-	const mode = (process.env.NANOCODER_MODE ?? settings.mode ?? DEFAULTS.mode) as Mode;
+	const mode = (
+		process.env.BOBONYO_MODE ??
+		process.env.NANOCODER_MODE ??
+		settings.mode ??
+		DEFAULTS.mode
+	) as Mode;
 	const toolProfile = (
+		process.env.BOBONYO_PROFILE ??
 		process.env.NANOCODER_PROFILE ??
 		settings.toolProfile ??
 		DEFAULTS.toolProfile
@@ -177,7 +185,10 @@ export function loadSettings(): Settings {
 }
 
 export function saveSettings(settings: Settings): void {
-	const base = process.env.NANOCODER_CONFIG_DIR ?? nanocoderConfigDir();
+	const base =
+		process.env.BOBONYO_CONFIG_DIR ??
+		process.env.NANOCODER_CONFIG_DIR ??
+		bobonyoConfigDir();
 	mkdirSync(base, {recursive: true});
 	writeFileSync(
 		join(base, 'settings.json'),

@@ -5,15 +5,15 @@
  * optional `model` / `tools`), the body being the agent's system prompt.
  * Sources, lowest to highest priority:
  *   1. built-ins (General / Explore, from the tool registry)
- *   2. user level: `$NANOCODER_CONFIG_DIR/agents/*.md`
- *   3. project level: `.nanocoder/agents/*.md`
+ *   2. user level: `$BOBONYO_CONFIG_DIR/agents/*.md`
+ *   3. project level: `.bobonyo/agents/*.md` (legacy `.nanocoder` too)
  * Project wins on name conflict. The discovered set is what the agents
  * modal lists and the `agent` tool can delegate to.
  */
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
-import {homedir} from 'node:os';
 import {join} from 'node:path';
+import {bobonyoConfigDir} from './bobonyo-paths';
 import {parseCommandFile} from './custom';
 
 export interface Subagent {
@@ -30,11 +30,17 @@ export interface Subagent {
 
 function subagentDirs(): Array<{dir: string; source: Subagent['source']}> {
 	const configBase =
+		process.env.BOBONYO_CONFIG_DIR ??
 		process.env.NANOCODER_CONFIG_DIR ??
-		join(homedir(), '.local', 'share', 'bobonyo');
+		bobonyoConfigDir();
+	// Exactly TWO dirs (the loader reads [0] and [1]): project agents live in
+	// `.bobonyo/agents`, falling back to the legacy `.nanocoder/agents`.
+	const projectDir = existsSync(join(process.cwd(), '.bobonyo', 'agents'))
+		? join(process.cwd(), '.bobonyo', 'agents')
+		: join(process.cwd(), '.nanocoder', 'agents');
 	return [
 		{dir: join(configBase, 'agents'), source: 'user'},
-		{dir: join(process.cwd(), '.nanocoder', 'agents'), source: 'project'},
+		{dir: projectDir, source: 'project'},
 	];
 }
 

@@ -558,7 +558,10 @@ export function App() {
 	}
 	// A2: first-run trust gate. Only prompts when using the DEFAULT config dir
 	//, isolated configs (parity runs, tests) are implicitly trusted.
-	if (!process.env.NANOCODER_CONFIG_DIR) {
+	if (
+		!process.env.BOBONYO_CONFIG_DIR &&
+		!process.env.NANOCODER_CONFIG_DIR
+	) {
 		const cwd = process.cwd();
 		const trusted = (loadSettings().trustedDirs ?? []).includes(cwd);
 		if (!trusted) {
@@ -1510,7 +1513,9 @@ export function App() {
 				provider => provider.id.toLowerCase() !== idArg.toLowerCase(),
 			);
 			saveConfig(config);
-			appendInfo(`Provider '${idArg}' deleted.`);
+			// One-off confirmations are TOASTS — never transcript rows (the
+			// chat history must only ever contain actual conversation).
+			showToast(`Provider '${idArg}' deleted`);
 			return;
 		}
 		if (action === 'edit' && idArg) {
@@ -1578,9 +1583,6 @@ export function App() {
 		}
 		setConnectOpen(null);
 		showToast(`Provider '${provider.id}' connected`);
-		appendInfo(
-			`Provider '${provider.id}' saved. Switch to it with /model.`,
-		);
 		if (!wasEdit) {
 			setModelModalInherit(false);
 			setFallbackTarget(null);
@@ -2931,8 +2933,8 @@ export function App() {
 	const credits = () =>
 		openInfoModal(
 			'Credits',
-			'bobonyo, a NanoCollective OpenTUI rewrite of nanocoder.\n' +
-				'Reference: Nano-Collective/nanocoder (MIT).',
+			'bobonyo — NanoCollective OpenTUI terminal agent.\n' +
+				'Rooted in Nano-Collective/nanocoder (MIT).',
 		);
 	const doctor = () =>
 		openInfoModal(

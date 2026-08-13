@@ -46,12 +46,12 @@ if (providerIndex !== -1) {
 const modeIndex = cliArgs.indexOf('--mode');
 if (modeIndex !== -1) {
 	const ref = cliArgs[modeIndex + 1];
-	if (ref && !ref.startsWith('-')) process.env.NANOCODER_MODE = ref;
+	if (ref && !ref.startsWith('-')) process.env.BOBONYO_MODE = ref;
 }
 const profileIndex = cliArgs.indexOf('--profile');
 if (profileIndex !== -1) {
 	const ref = cliArgs[profileIndex + 1];
-	if (ref && !ref.startsWith('-')) process.env.NANOCODER_PROFILE = ref;
+	if (ref && !ref.startsWith('-')) process.env.BOBONYO_PROFILE = ref;
 }
 // GAP-21: `bun run dev --preview tui` (or `preview tui`) boots the app against
 // the local keyword mock so all /mock:* scenarios can be reviewed without
@@ -60,18 +60,18 @@ import {isPreviewTui} from './preview';
 const PREVIEW_TUI = isPreviewTui();
 if (PREVIEW_TUI) {
 	process.env.MOCK_URL ??= 'http://127.0.0.1:4123';
-	process.env.NANOCODER_CONFIG_DIR ??= '/tmp/bobonyo-preview';
+	process.env.BOBONYO_CONFIG_DIR ??= '/tmp/bobonyo-preview';
 	// Preview mocks exercise the FULL tool surface, never let a persisted
 	// `minimal`/`nano` profile truncate the mock batches (e.g.
 	// `/mock:compact10` must stream all TEN bash calls into `✦ Ran Bash ×10`
 	// instead of slicing to one). loadSettings() prefers NANOCODER_PROFILE
 	// over the saved settings file, so this always wins in preview.
-	process.env.NANOCODER_PROFILE ??= 'full';
+	process.env.BOBONYO_PROFILE ??= 'full';
 	// Preview seed: EFFORT IS PER MODEL, give the mock model a catalog
 	// effort (data-driven, mirrors how a real provider config declares
 	// `{name, effort}`) so the `model[effort]` badge renders in previews
 	// without any environment-variable hack.
-	const cfgDir = process.env.NANOCODER_CONFIG_DIR;
+	const cfgDir = process.env.BOBONYO_CONFIG_DIR;
 	const providersFile = join(cfgDir ?? '/tmp/bobonyo-preview', 'providers.json');
 	if (!existsSync(providersFile)) {
 		mkdirSync(cfgDir ?? '/tmp/bobonyo-preview', {recursive: true});

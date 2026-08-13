@@ -10,8 +10,9 @@
 **bobonyo** is a coding agent that runs in your terminal. It is built on
 [OpenTUI](https://github.com/opentui/opentui), a fast rendering library for
 terminal apps. It continues the work of the
-[nanocoder](https://github.com/Nano-Collective/nanocoder) fork, but rewrites it
-so the interface feels fast and interactive.
+[nanocoder](https://github.com/Nano-Collective/nanocoder), but rewrites it so
+the interface feels fast and interactive — bobonyo now owns its own config,
+sessions and storage (legacy nanocoder folders are migrated on first run).
 
 bobonyo is a direct alternative to Codex and Claude Code. It exists so you can
 run **other models, especially Chinese models** (DeepSeek, Mimo, GLM, Qwen,
@@ -223,8 +224,8 @@ the fallback model does that part, and the chat tells you who did what:
 
 ## Privacy
 
-Config and sessions stay in `~/.config/nanocoder` and
-`~/.local/share/nanocoder`. Nothing leaves your machine except the provider
+Config and sessions stay in `~/.config/bobonyo` and
+`~/.local/share/bobonyo`. Nothing leaves your machine except the provider
 request itself. `@` file mentions and `[Image #N]` or `[Text #N]` pastes stay
 local until you submit. Steering rules in `steering.json` can block, inject,
 or stop turns before they reach the model.
@@ -233,8 +234,9 @@ or stop turns before they reach the model.
 
 Agents are markdown files with YAML frontmatter. bobonyo discovers them
 exactly like the original nanocoder: built-in personalities (General,
-Explore), your user agents (`~/.config/nanocoder/agents/`), and project
-agents (`.nanocoder/agents/`, project wins on name conflict). **Settings,
+Explore), your user agents (`~/.config/bobonyo/agents/`), and project
+agents (`.bobonyo/agents/` or legacy `.nanocoder/agents/`, project wins on
+name conflict). **Settings,
 Capabilities, Agents** lists every discoverable agent with a search box;
 Enter opens the full system prompt. The `agent` tool lets the main model
 delegate to any of them, using the agent's own prompt.

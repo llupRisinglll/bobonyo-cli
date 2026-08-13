@@ -1,14 +1,14 @@
 /**
  * MCP (Model Context Protocol), parity flavor of nanocoder's E8 config +
- * client. Servers come from `$NANOCODER_CONFIG_DIR/mcp.json` or the
- * `NANOCODER_MCPSERVERS` env (JSON, highest precedence). Each server speaks
+ * client. Servers come from `$BOBONYO_CONFIG_DIR/mcp.json` or the
+ * `BOBONYO_MCPSERVERS` env (JSON, highest precedence). Each server speaks
  * JSON-RPC over stdio (initialize → tools/list → tools/call) and its tools
  * register into the shared registry with a live executor.
  */
 
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {nanocoderConfigDir} from './nanocoder-paths';
+import {bobonyoConfigDir} from './bobonyo-paths';
 
 export interface MCPServerConfig {
 	id: string;
@@ -35,7 +35,10 @@ export function loadMCPConfig(): MCPServerConfig[] {
 			// fall through to the file
 		}
 	}
-	const base = process.env.NANOCODER_CONFIG_DIR ?? nanocoderConfigDir();
+	const base =
+		process.env.BOBONYO_CONFIG_DIR ??
+		process.env.NANOCODER_CONFIG_DIR ??
+		bobonyoConfigDir();
 	// The original nanocoder stores MCP servers in `.mcp.json` as
 	// `{ "mcpServers": { "<name>": { command, args, env } } }` — read that
 	// FIRST so a nanocoder-configured MCP setup is detected.

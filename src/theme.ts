@@ -103,7 +103,7 @@ export const THEMES: Record<string, Theme> = {
 };
 
 // NOTE: the initial theme must NOT be read from settings at module scope,
-// index.tsx sets NANOCODER_CONFIG_DIR in its body, but ESM imports (and thus
+// index.tsx sets BOBONYO_CONFIG_DIR in its body, but ESM imports (and thus
 // this module) evaluate BEFORE that body runs, so a top-level loadSettings()
 // would read the WRONG config dir. App syncs the theme from settings on mount
 // (same as mode/profile/maxMessages).

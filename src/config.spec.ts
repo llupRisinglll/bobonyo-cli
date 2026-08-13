@@ -13,7 +13,7 @@ import {
 	normalizeModels,
 	type ModelsDevCatalog,
 } from './config';
-import {nanocoderConfigDir, nanocoderDataDir} from './nanocoder-paths';
+import {bobonyoConfigDir, bobonyoDataDir} from './bobonyo-paths';
 
 const ORIGINAL_PROVIDERS = process.env.NANOCODER_PROVIDERS;
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
@@ -374,7 +374,7 @@ describe('discoverModels (full-URL contract)', () => {
 	});
 });
 
-describe('nanocoder storage paths', () => {
+describe('bobonyo storage paths', () => {
 	afterEach(() => {
 		delete process.env.NANOCODER_CONFIG_DIR;
 		delete process.env.NANOCODER_DATA_DIR;
@@ -382,16 +382,35 @@ describe('nanocoder storage paths', () => {
 		delete process.env.XDG_DATA_HOME;
 	});
 
-	test('defaults to the nanocoder config/data dirs (rename comes later)', () => {
-		expect(nanocoderConfigDir()).toMatch(/\/nanocoder$/);
-		expect(nanocoderDataDir()).toMatch(/\/nanocoder$/);
+	test('defaults to the bobonyo config/data dirs', () => {
+		expect(bobonyoConfigDir()).toMatch(/\/bobonyo$/);
+		expect(bobonyoDataDir()).toMatch(/\/bobonyo$/);
 	});
 
 	test('respects XDG overrides like the original', () => {
 		process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
 		process.env.XDG_DATA_HOME = '/tmp/xdg-data';
-		expect(nanocoderConfigDir()).toBe('/tmp/xdg-config/nanocoder');
-		expect(nanocoderDataDir()).toBe('/tmp/xdg-data/nanocoder');
+		expect(bobonyoConfigDir()).toBe('/tmp/xdg-config/bobonyo');
+		expect(bobonyoDataDir()).toBe('/tmp/xdg-data/bobonyo');
+	});
+
+	test('first run MIGRATES the legacy nanocoder dir into bobonyo', () => {
+		const xdgConfig = `${tmpdir()}/bobonyo-xdg-${Date.now()}`;
+		mkdirSync(join(xdgConfig, 'nanocoder'), {recursive: true});
+		writeFileSync(join(xdgConfig, 'nanocoder', 'legacy.txt'), 'x');
+		const prevXdg = process.env.XDG_CONFIG_HOME;
+		process.env.XDG_CONFIG_HOME = xdgConfig;
+		delete process.env.BOBONYO_CONFIG_DIR;
+		delete process.env.NANOCODER_CONFIG_DIR;
+		try {
+			const dir = bobonyoConfigDir();
+			expect(dir).toBe(join(xdgConfig, 'bobonyo'));
+			expect(readFileSync(join(dir, 'legacy.txt'), 'utf8')).toBe('x');
+		} finally {
+			if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+			else process.env.XDG_CONFIG_HOME = prevXdg;
+			rmSync(xdgConfig, {recursive: true, force: true});
+		}
 	});
 });
 

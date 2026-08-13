@@ -20,8 +20,8 @@ interface AgentEntry {
 /**
  * AGENTS modal (parity: nanocoder's `/agents` + subagent-loader): lists every
  * discoverable subagent — built-in personalities (General / Explore), user
- * agents (`~/.config/nanocoder/agents/`) and PROJECT agents
- * (`.nanocoder/agents/`, e.g. review-api, hilinga-marketing-integrator…).
+ * agents (`~/.config/bobonyo/agents/`) and PROJECT agents
+ * (`.bobonyo/agents/`, e.g. review-api, hilinga-marketing-integrator…).
  * Searchable with ↑/↓/Enter; Enter opens the full system prompt. The actual
  * spawning stays with the `agent` tool, which resolves the same discovered
  * prompt when the model delegates.

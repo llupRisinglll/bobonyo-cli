@@ -2,16 +2,16 @@
  * Provider configuration (parity: nanocoder's mcp-config-loader +
  * client-factory, docs 05 E1/E2/E5/E9).
  *
- * Precedence: `NANOCODER_PROVIDERS` env (highest) → `providers.json` in the
+ * Precedence: `BOBONYO_PROVIDERS` env (highest) → `providers.json` in the
  * config dir → built-in mock default. `${VAR}` values substitute from env.
- * `--provider <id>` (via NANOCODER_PROVIDER) selects; otherwise the first
- * configured provider wins.
+ * `--provider <id>` (via BOBONYO_PROVIDER) selects; otherwise the first
+ * configured provider wins. The legacy `NANOCODER_*` env vars still work.
  */
 
 import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {nanocoderConfigDir} from './nanocoder-paths';
+import {bobonyoConfigDir} from './bobonyo-paths';
 import {readCodexAuth} from './codex-auth';
 
 export interface ProviderConfig {
@@ -163,8 +163,7 @@ export async function resolveContextWindow(
 }
 
 export function configDir(): string {
-	// Still the NANOCODER config dir, the rename happens when stable.
-	return nanocoderConfigDir();
+	return bobonyoConfigDir();
 }
 
 export function configFilePath(): string {
@@ -261,8 +260,10 @@ function normalize(config: AppConfig): AppConfig {
 }
 
 export function loadConfig(): AppConfig {
-	// Highest precedence: providers from env.
-	const envProviders = process.env.NANOCODER_PROVIDERS;
+	// Highest precedence: providers from env (BOBONYO_*, legacy NANOCODER_*).
+	const envProviders =
+		process.env.BOBONYO_PROVIDERS ??
+		process.env.NANOCODER_PROVIDERS;
 	if (envProviders) {
 		try {
 			// NOTE: parse the whole AppConfig and take `.providers`, the old
@@ -274,10 +275,13 @@ export function loadConfig(): AppConfig {
 			// fall through to the file
 		}
 	}
-	// E1/E9: project config, closest `.nanocoder/providers.json` walking UP
-	// from cwd (falls back to `.nanocoder/agents.config.json` in the same
+	// E1/E9: project config, closest `.bobonyo/providers.json` walking UP
+	// from cwd (falls back to `.bobonyo/agents.config.json` in the same
 	// directory) wins by name; the global file fills the gaps.
-	const projectBase = process.env.NANOCODER_PROJECT_DIR ?? process.cwd();
+	const projectBase =
+		process.env.BOBONYO_PROJECT_DIR ??
+		process.env.NANOCODER_PROJECT_DIR ??
+		process.cwd();
 	const project = findClosestProjectConfig(projectBase);
 	const global = readProvidersFile(configFilePath());
 	const merged = mergeProviders(project ?? [], global ?? []);
@@ -287,14 +291,19 @@ export function loadConfig(): AppConfig {
 
 /**
  * E9: closest-file resolution, walk from `startDir` upward until a
- * `.nanocoder/providers.json` (or `agents.config.json`) is found, or the
+ * `.bobonyo/providers.json` (or `agents.config.json`) is found, or the
  * filesystem root is reached. Mirrors nanocoder's `getClosestConfigFile`.
  */
 function findClosestProjectConfig(startDir: string): ProviderConfig[] | null {
 	let dir = startDir;
 	for (;;) {
-		const providers = readProvidersFile(join(dir, '.nanocoder', 'providers.json'));
+		const providers = readProvidersFile(join(dir, '.bobonyo', 'providers.json'));
 		if (providers) return providers;
+		// Legacy project layout: `.nanocoder` still works for existing repos.
+		const legacyProviders = readProvidersFile(
+			join(dir, '.nanocoder', 'providers.json'),
+		);
+		if (legacyProviders) return legacyProviders;
 		const legacy = readProvidersFile(join(dir, 'agents.config.json'));
 		if (legacy) return legacy;
 		const parent = dirname(dir);
@@ -362,7 +371,10 @@ export function resolveProvider(id?: string): ResolvedProvider {
 	// E2: an explicit request wins; otherwise the last-used provider from
 	// preferences; otherwise the first configured provider.
 	const requested =
-		id ?? process.env.NANOCODER_PROVIDER ?? loadPreferences().lastProvider;
+		id ??
+		process.env.BOBONYO_PROVIDER ??
+		process.env.NANOCODER_PROVIDER ??
+		loadPreferences().lastProvider;
 	if (requested) {
 		const found = providers.find(
 			provider => provider.id.toLowerCase() === requested.toLowerCase(),
@@ -398,7 +410,7 @@ export interface Preferences {
 }
 
 function preferencesPath(): string {
-	return join(configDir(), 'nanocoder-preferences.json');
+	return join(configDir(), 'bobonyo-preferences.json');
 }
 
 export function loadPreferences(): Preferences {
@@ -406,6 +418,12 @@ export function loadPreferences(): Preferences {
 		const file = preferencesPath();
 		if (existsSync(file)) {
 			return JSON.parse(readFileSync(file, 'utf8')) as Preferences;
+		}
+		// Legacy name: the pre-rename file still holds the settings until the
+		// next save writes the bobonyo name.
+		const legacy = join(configDir(), 'nanocoder-preferences.json');
+		if (existsSync(legacy)) {
+			return JSON.parse(readFileSync(legacy, 'utf8')) as Preferences;
 		}
 	} catch {
 		// corrupt, defaults
