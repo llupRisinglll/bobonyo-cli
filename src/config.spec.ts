@@ -3,6 +3,7 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
+	codexClientVersion,
 	discoverCodexAccountModels,
 	discoverModels,
 	listProviders,
@@ -366,6 +367,10 @@ describe('discoverModels (full-URL contract)', () => {
 			if (prevHome === undefined) delete process.env.CODEX_HOME;
 			else process.env.CODEX_HOME = prevHome;
 		}
+	});
+
+	test('codexClientVersion resolves a semver (installed CLI or fallback)', () => {
+		expect(codexClientVersion()).toMatch(/^\d+\.\d+\.\d+$/);
 	});
 });
 

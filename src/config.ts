@@ -10,6 +10,7 @@
 
 import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
 import {dirname, join} from 'node:path';
+import {execFileSync} from 'node:child_process';
 import {nanocoderConfigDir} from './nanocoder-paths';
 import {readCodexAuth} from './codex-auth';
 
@@ -520,6 +521,32 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 }
 
 /**
+ * The installed codex CLI version (parsed from `codex --version`, CACHED),
+ * so the catalog request's `client_version` stays honest with the actual
+ * CLI instead of drifting from a hardcoded constant. Falls back to a known
+ * good version when codex is not installed.
+ */
+let cachedCodexClientVersion: string | null = null;
+export function codexClientVersion(): string {
+	if (cachedCodexClientVersion) return cachedCodexClientVersion;
+	try {
+		const out = execFileSync('codex', ['--version'], {
+			encoding: 'utf8',
+			timeout: 5000,
+		});
+		const match = /(\d+\.\d+\.\d+)/.exec(out);
+		if (match) {
+			cachedCodexClientVersion = match[1]!;
+			return cachedCodexClientVersion;
+		}
+	} catch {
+		// codex not installed / not on PATH — use the fallback.
+	}
+	cachedCodexClientVersion = '0.145.0';
+	return cachedCodexClientVersion;
+}
+
+/**
  * Live model discovery for the ChatGPT-ACCOUNT codex backend: its catalog
  * endpoint needs the `codex login` token + account id (a generic Bearer
  * apiKey fetch can't), so it reads ~/.codex/auth.json itself and caches to
@@ -529,7 +556,7 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 export async function discoverCodexAccountModels(
 	baseUrl: string,
 ): Promise<string[]> {
-	const discoveryUrl = `${baseUrl.replace(/\/+$/, '')}/models?client_version=0.145.0`;
+	const discoveryUrl = `${baseUrl.replace(/\/+$/, '')}/models?client_version=${codexClientVersion()}`;
 	const now = Date.now();
 	const memory = discoveryCache.get(discoveryUrl);
 	if (memory && now - memory.at < DISCOVERY_TTL_MS) return memory.models;

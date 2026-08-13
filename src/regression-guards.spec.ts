@@ -258,6 +258,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const config = read('./config.ts');
 		expect(config).toMatch(/export async function discoverCodexAccountModels/);
 		expect(config).toMatch(/chatgpt-account-id/);
+		// The catalog request's client_version tracks the INSTALLED codex CLI
+		// (cached), so the backend never gates models on a stale hardcoded
+		// version — new models (e.g. gpt-5.6-sol on a paid plan) appear once
+		// the account can serve them.
+		expect(config).toMatch(/codexClientVersion\(\)/);
+		expect(config).toMatch(/execFileSync\('codex', \['--version'\]/);
 		const app = read('./app.tsx');
 		expect(app).toMatch(
 			/provider\.codexAccount\n\s*\? discoverCodexAccountModels/,
