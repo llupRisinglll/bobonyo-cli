@@ -1,5 +1,11 @@
 import {afterEach, describe, expect, test} from 'bun:test';
-import {BASE_COMMAND_NAMES, commandNames, MOCK_COMMAND_NAMES} from './commands';
+import {
+	BASE_COMMAND_NAMES,
+	commandNames,
+	MOCK_COMMAND_NAMES,
+	runCommand,
+	type CommandContext,
+} from './commands';
 import {isPreviewTui} from './preview';
 
 const ORIGINAL_ARGV = process.argv;
@@ -44,5 +50,22 @@ describe('commandNames', () => {
 		for (const mock of MOCK_COMMAND_NAMES) {
 			expect(names).toContain(mock);
 		}
+	});
+});
+
+describe('runCommand routing', () => {
+	test('/effort routes to the effort switcher with its argument', () => {
+		const calls: Array<[string, unknown[]]> = [];
+		const ctx = new Proxy({} as CommandContext, {
+			get: (_target, prop: string) =>
+				(...args: unknown[]) => {
+					calls.push([prop, args]);
+				},
+		});
+		expect(runCommand('/effort high', ctx)).toBe(true);
+		expect(calls).toEqual([['setEffort', ['high']]]);
+		calls.length = 0;
+		expect(runCommand('/effort default', ctx)).toBe(true);
+		expect(calls).toEqual([['setEffort', ['default']]]);
 	});
 });

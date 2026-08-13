@@ -4,6 +4,7 @@ import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {loadPreferences} from '../config';
 
 /** Reasoning effort tiers a model can be selected at (parity: nanocoder). */
 export const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
@@ -63,8 +64,20 @@ interface ModelCell {
 	 *  re-renders when the `each` array changes, so signals read inside the
 	 *  child (effort overrides) never trigger a repaint on their own. */
 	shownEffort?: string;
+	/** Context-window label (e.g. "400K", "1.0M") for the size column. */
+	contextSize?: string;
 	/** Global index in the flattened model-cell list. */
 	index: number;
+}
+
+function formatContextLength(contextLength: number): string {
+	if (contextLength >= 1_000_000) {
+		return `${(contextLength / 1_000_000).toFixed(1)}M`;
+	}
+	if (contextLength >= 1000) {
+		return `${Math.round(contextLength / 1000)}K`;
+	}
+	return `${contextLength}`;
 }
 
 interface DisplayLine {
@@ -121,7 +134,7 @@ export function ModelModal(props: {
 	// Per-model effort OVERRIDE selected with E (keyed provider\0model).
 	const [effortOverrides, setEffortOverrides] = createSignal<
 		Record<string, string>
-	>({});
+	>(loadPreferences().modelEfforts ?? {});
 	const effortKey = (provider: string, model: string): string =>
 		`${provider}\u0000${model}`;
 	const effectiveEffort = (
@@ -209,6 +222,15 @@ export function ModelModal(props: {
 								group.provider,
 								group.models[i]!,
 							),
+							contextSize: (() => {
+								const window =
+									group.provider.modelContextWindows?.[
+										group.models[i]!
+									] ?? group.provider.contextWindow;
+								return window
+									? formatContextLength(window)
+									: undefined;
+							})(),
 							index: cellIndex,
 						});
 						cellIndex += 1;
@@ -249,6 +271,17 @@ export function ModelModal(props: {
 		model: string;
 		effort?: string;
 	} | null>(null);
+	// opencode-style EFFORT STEP: picking a model asks which effort to use
+	// (Default or minimal/low/medium/high) before the switch happens.
+	const [effortStep, setEffortStep] = createSignal<{
+		providerId: string;
+		model: string;
+	} | null>(null);
+	const [effortIndex, setEffortIndex] = createSignal(0);
+	const EFFORT_OPTIONS: Array<{id: string; label: string}> = [
+		{id: 'default', label: 'Default'},
+		...EFFORT_LEVELS.map(level => ({id: level, label: level})),
+	];
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
@@ -355,15 +388,19 @@ export function ModelModal(props: {
 	};
 
 	const selectCell = (cell: ModelCell): void => {
-		const target = {
+		setEffortStep({
 			providerId: cell.provider.id,
 			model: cell.model,
-			effort: effectiveEffort(cell.provider, cell.model),
-		};
-		// Mid-conversation model switches RESEND the whole history,
-		// confirm first (parity: the reference warns about usage).
-		if (props.hasMessages) setConfirming(target);
-		else props.onSelect(target.providerId, target.model, target.effort);
+		});
+		const currentEffort = effectiveEffort(cell.provider, cell.model);
+		setEffortIndex(
+			currentEffort
+				? Math.max(
+						0,
+						EFFORT_OPTIONS.findIndex(option => option.id === currentEffort),
+					)
+				: 0,
+		);
 	};
 
 	// The display LINE holding the cursor (for the scroll window).
@@ -412,8 +449,38 @@ export function ModelModal(props: {
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
-			if (confirming()) setConfirming(null);
+			if (effortStep()) setEffortStep(null);
+			else if (confirming()) setConfirming(null);
 			else props.onClose();
+			return true;
+		}
+		if (effortStep()) {
+			const options = EFFORT_OPTIONS;
+			if (event.name === 'up' || event.name === 'down') {
+				setEffortIndex(prev => {
+					const next = event.name === 'down' ? prev + 1 : prev - 1;
+					return Math.max(0, Math.min(options.length - 1, next));
+				});
+				return true;
+			}
+			if (event.name === 'return') {
+				const step = effortStep();
+				if (!step) return true;
+				const chosen = options[effortIndex()]!;
+				const target = {
+					providerId: step.providerId,
+					model: step.model,
+					effort:
+						chosen.id === 'default'
+							? undefined
+							: chosen.id,
+				};
+				setEffortStep(null);
+				// Mid-conversation model switches RESEND the whole history,
+				// confirm first (parity: the reference warns about usage).
+				if (props.hasMessages) setConfirming(target);
+				else props.onSelect(target.providerId, target.model, target.effort);
+			}
 			return true;
 		}
 		if (confirming()) {
@@ -494,6 +561,15 @@ export function ModelModal(props: {
 		x <= cardX() + cardWidth() &&
 		y >= cardY() &&
 		y <= cardY() + cardHeight();
+	const effortDefaultLabel = (): string => {
+		const step = effortStep();
+		if (!step) return 'Default';
+		const provider = props.providers.find(
+			candidate => candidate.id === step.providerId,
+		);
+		const catalog = provider?.modelEfforts?.[step.model];
+		return catalog ? `Default (${catalog})` : 'Default';
+	};
 
 	return (
 		<box
@@ -527,23 +603,101 @@ export function ModelModal(props: {
 				paddingY={2}
 			>
 				<Show
-					when={confirming() === null}
+					when={effortStep() === null && confirming() === null}
 					fallback={
-						<box flexDirection="column">
-							<text fg={colors().primary} attributes={bold()}>
-								Switch model
-							</text>
-							<box height={1} />
-							<text fg={colors().warning}>
-								Switching to "{confirming()?.model}" will RESEND the
-								entire conversation to the new model and take
-								additional usage.
-							</text>
-							<box height={1} />
-							<text fg={colors().secondary} attributes={dim()}>
-								(y) continue · (n) cancel
-							</text>
-						</box>
+						<Show
+							when={effortStep() !== null}
+							fallback={
+								<box flexDirection="column">
+									<text fg={colors().primary} attributes={bold()}>
+										Switch model
+									</text>
+									<box height={1} />
+									<text fg={colors().warning}>
+										Switching to "{confirming()?.model}" will RESEND the
+										entire conversation to the new model and take
+										additional usage.
+									</text>
+									<box height={1} />
+									<text fg={colors().secondary} attributes={dim()}>
+										(y) continue · (n) cancel
+									</text>
+								</box>
+							}
+						>
+							{/* opencode-style effort step: choose Default or a
+							    reasoning tier for THIS model before switching. */}
+							<box flexDirection="column">
+								<text fg={colors().primary} attributes={bold()}>
+									Select effort
+								</text>
+								<box height={1} />
+								<text fg={colors().text}>
+									{effortStep()?.model}
+								</text>
+								<box height={1} />
+								<For each={EFFORT_OPTIONS}>
+									{(option, i) => {
+										const active = i() === effortIndex();
+										return (
+											<box
+												flexDirection="row"
+												height={1}
+												backgroundColor={
+													active ? activeRow().bg : undefined
+												}
+												{...({
+													onMouseMove: () => setEffortIndex(i()),
+													onMouseUp: () => {
+														const step = effortStep();
+														if (!step) return;
+														setEffortStep(null);
+														const target = {
+															providerId: step.providerId,
+															model: step.model,
+															effort:
+																option.id === 'default'
+																	? undefined
+																	: option.id,
+														};
+														if (props.hasMessages) {
+															setConfirming(target);
+														} else {
+															props.onSelect(
+																target.providerId,
+																target.model,
+																target.effort,
+															);
+														}
+													},
+												} as any)}
+											>
+												<text
+													fg={
+														active
+															? activeRow().fg
+															: colors().text
+													}
+													attributes={active ? bold() : undefined}
+												>
+													{active ? '❯ ' : '  '}
+													{option.id === 'default'
+														? effortDefaultLabel()
+														: option.label}
+												</text>
+											</box>
+										);
+									}}
+								</For>
+								<box height={1} />
+								<text fg={colors().secondary} attributes={dim()}>
+									↑/↓ select · Enter choose · Esc back
+									{props.hasMessages
+										? ' · will resend the conversation'
+										: ''}
+								</text>
+							</box>
+						</Show>
 					}
 				>
 					<box flexDirection="row" height={1}>
@@ -635,7 +789,20 @@ export function ModelModal(props: {
 												);
 											}
 											const active = cursor() === cell.index;
-											const effort = cell.shownEffort;
+											const size = cell.contextSize;
+											const effortBadge =
+												active && cell.shownEffort
+													? `[${cell.shownEffort}]`
+													: '';
+											const nameWidth = Math.max(
+												6,
+												cellWidth() -
+													4 -
+													(size ? size.length + 1 : 0) -
+													(effortBadge
+														? effortBadge.length
+														: 0),
+											);
 											return (
 												<box
 													width={cellWidth()}
@@ -662,15 +829,26 @@ export function ModelModal(props: {
 														{active ? '❯ ' : '  '}
 														{truncateCell(
 															cell.model,
-															Math.max(8, cellWidth() - 6),
+															nameWidth,
 														)}
 													</text>
-													<Show when={active && effort}>
+													<Show
+														when={active && cell.shownEffort}
+													>
 														<text
 															fg={activeRow().fg}
 															attributes={dim()}
 														>
-															[{effort}]
+															[{cell.shownEffort}]
+														</text>
+													</Show>
+													<Show when={size}>
+														<text
+															fg={colors().secondary}
+															attributes={dim()}
+														>
+															{' '}
+															{size}
 														</text>
 													</Show>
 												</box>

@@ -381,6 +381,12 @@ export function resolveProvider(id?: string): ResolvedProvider {
 export interface Preferences {
 	lastProvider?: string;
 	lastModel?: string;
+	/**
+	 * Per-model reasoning-effort overrides, keyed
+	 * `${providerId}\u0000${model}` (set by `/effort` and the model modal's
+	 * effort step; the status line badge and the next selection read it).
+	 */
+	modelEfforts?: Record<string, string>;
 	/** Web-search fallback model + provider (native server-side search). */
 	webSearchModel?: string;
 	webSearchProvider?: string;

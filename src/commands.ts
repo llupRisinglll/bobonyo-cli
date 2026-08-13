@@ -24,6 +24,7 @@ export const BASE_COMMAND_NAMES = [
 	'tool:open-prs',
 	'status',
 	'model',
+	'effort',
 	'providers',
 	'mode',
 	'settings',
@@ -129,6 +130,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'tool:open-prs': 'Open the captured PRs in the browser',
 	status: 'Show status details',
 	model: 'Pick a model',
+	effort: 'Reasoning effort (minimal/low/medium/high/default)',
 	providers: 'List providers',
 	mode: 'Switch approval mode',
 	settings: 'Open settings',
@@ -226,6 +228,9 @@ export interface CommandContext {
 	openPRs: () => void;
 	status: () => void;
 	model: (args: string) => void;
+	/** `/effort <minimal|low|medium|high|default>` — reasoning effort for the
+	 *  ACTIVE model (persisted per model; default clears the override). */
+	setEffort: (args: string) => void;
 	providers: () => void;
 	/** A custom command matched by name (F4): run its body as a prompt. */
 	custom: (name: string, args: string) => void;
@@ -383,6 +388,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'model':
 			ctx.model(args);
+			return true;
+		case 'effort':
+			ctx.setEffort(args);
 			return true;
 		case 'providers':
 			ctx.providers();

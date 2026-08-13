@@ -168,6 +168,33 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/createEffect/);
 	});
 
+	test('the model modal keeps the context-length column in the grid', () => {
+		const modal = read('./components/model-modal.tsx');
+		// The grid cells must carry the size (modelContextWindows ??
+		// contextWindow) and render it dim — a regression to name-only cells
+		// silently drops the context length users rely on.
+		expect(modal).toMatch(/contextSize: \(\(\) =>/);
+		expect(modal).toMatch(/formatContextLength\(window\)/);
+		expect(modal).toMatch(/cell\.contextSize/);
+	});
+
+	test('the model modal asks for effort after selecting a model (opencode parity)', () => {
+		const modal = read('./components/model-modal.tsx');
+		expect(modal).toMatch(/Select effort/);
+		expect(modal).toMatch(/setEffortStep\(/);
+		expect(modal).toMatch(/EFFORT_OPTIONS/);
+		expect(modal).toMatch(/Default \(\$\{catalog\}\)/);
+	});
+
+	test('/effort routes and persists per-model overrides', () => {
+		const commands = read('./commands.ts');
+		expect(commands).toMatch(/case 'effort':\n\s*ctx\.setEffort\(args\)/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/const switchEffort = \(args: string\) =>/);
+		expect(app).toMatch(/EFFORT_LEVELS\.includes/);
+		expect(read('./config.ts')).toMatch(/modelEfforts\?: Record<string, string>/);
+	});
+
 	test('resume search covers the session id', () => {
 		const modal = read('./components/resume-modal.tsx');
 		// The filter must go through the pure helper that matches the id,

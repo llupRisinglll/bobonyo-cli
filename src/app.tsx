@@ -111,6 +111,7 @@ import {CommandsModal} from './components/commands-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
+import {EFFORT_LEVELS} from './components/model-modal';
 import {ConnectProviderModal} from './components/connect-provider-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
@@ -1694,6 +1695,7 @@ export function App() {
 				openPRs,
 				status,
 				model: switchModel,
+				setEffort: switchEffort,
 				providers: listProvidersInfo,
 				custom: runCustomCommand,
 				modeSwitch,
@@ -3153,6 +3155,43 @@ export function App() {
 	};
 
 	/**
+	 * `/effort <minimal|low|medium|high|default>` — reasoning effort for the
+	 * ACTIVE model, persisted per model (keyed provider\0model) so the model
+	 * modal, the status-line badge and the next selection all agree.
+	 * `default` clears the override and falls back to the catalog effort.
+	 */
+	const switchEffort = (args: string) => {
+		const level = args.trim().toLowerCase();
+		if (
+			level !== 'default' &&
+			!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])
+		) {
+			appendInfo(
+				`Invalid effort '${args}'. Use default, minimal, low, medium or high.`,
+			);
+			return;
+		}
+		const endpoint = activeEndpoint();
+		const effortKey = `${endpoint.id}\u0000${endpoint.model}`;
+		const prefs = loadPreferences();
+		const nextEfforts = {...(prefs.modelEfforts ?? {})};
+		if (level === 'default') delete nextEfforts[effortKey];
+		else nextEfforts[effortKey] = level;
+		savePreferences({
+			...prefs,
+			modelEfforts: nextEfforts,
+		});
+		const effort =
+			level === 'default'
+				? (endpoint.modelEfforts ?? {})[endpoint.model]
+				: level;
+		setActiveEndpoint(prev => ({...prev, effort}));
+		showToast(
+			`Effort: ${level === 'default' ? 'default' : level} · ${endpoint.model}`,
+		);
+	};
+
+	/**
 	 * Provider-specific statusline/history features load when the ACTIVE
 	 * provider switches, not only at startup or on /status: DeepSeek balance
 	 * (`Cred:` — TTL-cached + deduped, cheap on re-switch) and the Xiaomi
@@ -3276,7 +3315,20 @@ export function App() {
 			promptCacheKey: provider.promptCacheKey,
 			alwaysAllow: provider.alwaysAllow,
 		});
-		savePreferences({lastProvider: provider.id, lastModel: model});
+		// Persist the chosen effort as a per-model override (or clear it when
+		// Default was picked) so `/effort`, the modal and the next selection
+		// stay consistent across restarts.
+		const effortKey = `${provider.id}\u0000${model}`;
+		const prefs = loadPreferences();
+		const nextEfforts = {...(prefs.modelEfforts ?? {})};
+		if (effort) nextEfforts[effortKey] = effort;
+		else delete nextEfforts[effortKey];
+		savePreferences({
+			...prefs,
+			lastProvider: provider.id,
+			lastModel: model,
+			modelEfforts: nextEfforts,
+		});
 		loadProviderFeatures(provider);
 		showToast(
 			`Model: ${model}${effort ? ` [${effort}]` : ''} · ${provider.id}`,
