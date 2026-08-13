@@ -244,9 +244,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/);
 		expect(modal).toMatch(/providerColumns\(cardWidth\(\)\)/);
 		expect(modal).toMatch(/visibleGridRows\(\)/);
-		// Height autofits: the picker fits its content, prompts stay compact.
-		expect(modal).toMatch(/if \(view\(\)\.kind !== 'pick'\)/);
-		expect(modal).toMatch(/Math\.min\(dims\(\)\.height - 2, 13\)/);
+		// Height autofits EVERY step (fit-content): each view computes its own
+		// content lines and the card is exactly that, capped by the window.
+		expect(modal).toMatch(/const viewContentLines = \(\): number =>/);
+		expect(modal).toMatch(/case 'pick':/);
+		expect(modal).toMatch(/case 'manage':/);
+		expect(modal).toMatch(/Math\.max\(10, viewContentLines\(\) \+ 8\)/);
 	});
 
 	test('connected providers offer a MANAGE step to edit existing instances', () => {
@@ -263,9 +266,21 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
 		expect(modal).toMatch(/spinnerFrame\(\) >> 2\) % 2 === 0/);
 		expect(modal).toMatch(/activeRow\(\)\.bg/);
-		expect(modal).toMatch(/const caretChar =/);
+		// The caret sits at the START of an empty field (rendered BEFORE the
+		// placeholder), at the END once the user types.
+		expect(modal).toMatch(/when=\{!filled\}/);
+		expect(modal).toMatch(/const caretChar = filled/);
+		expect(modal).toMatch(/shown\[shown\.length - 1\]!/);
 		// The hint lives INSIDE the field, never below the input.
 		expect(modal).not.toMatch(/props\.description/);
+	});
+
+	test('/provider is removed (redundant with /connect)', () => {
+		const commands = read('./commands.ts');
+		expect(commands).not.toMatch(/case 'provider':/);
+		expect(commands).not.toMatch(/providerSwitch/);
+		const app = read('./app.tsx');
+		expect(app).not.toMatch(/const switchProvider/);
 	});
 
 	test('settings: Providers tab removed, Connect provider row added', () => {
@@ -418,9 +433,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/const loadProviderFeatures/);
 		expect(app).toMatch(/refreshDeepSeekBalance\(provider\)/);
 		expect(app).toMatch(/currentMonthUsage\(provider\.baseUrl\)/);
-		// Every switch path must call it: modal select + /provider (provider
-		// arg) and /model (endpoint arg).
-		const providerCalls = app.match(/loadProviderFeatures\(provider\);/g) ?? [];
+		// Every switch path must call it: modal select, resume, and /model
+		// (endpoint arg). /provider was removed (redundant with /connect).
+		const providerCalls = app.match(/loadProviderFeatures\(provider\)/g) ?? [];
 		const endpointCalls = app.match(/loadProviderFeatures\(endpoint\);/g) ?? [];
 		expect(providerCalls.length).toBeGreaterThanOrEqual(2);
 		expect(endpointCalls.length).toBe(1);

@@ -1578,7 +1578,7 @@ export function App() {
 		setConnectOpen(null);
 		showToast(`Provider '${provider.id}' connected`);
 		appendInfo(
-			`Provider '${provider.id}' saved. Switch to it with /model or /provider ${provider.id}.`,
+			`Provider '${provider.id}' saved. Switch to it with /model.`,
 		);
 		if (!wasEdit) {
 			setModelModalInherit(false);
@@ -1700,7 +1700,6 @@ export function App() {
 				setupProviders,
 				connectCodex,
 				connectProvider,
-				providerSwitch: switchProvider,
 				mcp: mcpSurface,
 				session: sessionCommand,
 				checkpoint,
@@ -3360,57 +3359,6 @@ export function App() {
 					)
 					.join('\n'),
 		);
-	};
-
-	const switchProvider = (args: string) => {
-		const id = args.trim();
-		const providers = listProviders();
-		if (!id) {
-			appendInfo(
-				`Providers:\n` +
-					providers
-						.map(
-							provider =>
-								`  └ ${provider.id}${provider.id === activeEndpoint().id ? ' (active)' : ''}`,
-						)
-						.join('\n'),
-			);
-			return;
-		}
-		const provider = providers.find(
-			candidate => candidate.id.toLowerCase() === id.toLowerCase(),
-		);
-		if (!provider) {
-			appendInfo(
-				`Provider '${id}' not found. Available: ${providers
-					.map(candidate => candidate.id)
-					.join(', ')}`,
-			);
-			return;
-		}
-		const model = provider.models[0] ?? 'mock-model-1';
-		setActiveEndpoint({
-			id: provider.id,
-			name: provider.name ?? provider.id,
-			baseUrl: provider.baseUrl,
-			apiKey: provider.apiKeyResolved,
-			model,
-			models: provider.models,
-			modelEfforts: provider.modelEfforts,
-			contextWindow:
-				modelWindows()[provider.id]?.[model] ??
-				provider.contextWindow ??
-				128_000,
-			sdkProvider: provider.sdkProvider,
-			codexAccount: provider.codexAccount,
-			providerOptions: provider.providerOptions,
-			effort: (provider.modelEfforts ?? {})[model],
-			promptCacheKey: provider.promptCacheKey,
-			alwaysAllow: provider.alwaysAllow,
-		});
-		savePreferences({lastProvider: provider.id, lastModel: model});
-		loadProviderFeatures(provider);
-		showToast(`Provider: ${provider.id} · ${model}`);
 	};
 
 	const mcpSurface = () => {

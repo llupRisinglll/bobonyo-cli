@@ -235,8 +235,13 @@ export function ModelModal(props: {
 	// big terminals, 2 on small ones.
 	const cardWidth = () => Math.min(120, Math.max(60, dims().width - 4));
 	const listVisible = () => Math.max(3, Math.min(60, dims().height - 9));
-	const cardHeight = () =>
-		Math.min(dims().height - 2, Math.max(10, listVisible() + 7));
+	// FIT-CONTENT: the card is exactly the model-list height + chrome, capped
+	// by the window — a short catalog shrinks the card, a huge one fills the
+	// screen and scrolls (never a fixed tall box).
+	const cardHeight = (): number => {
+		const capped = Math.min(displayLines().length, listVisible());
+		return Math.min(dims().height - 2, Math.max(10, capped + 9));
+	};
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const modelColumns = () => (cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1);
@@ -426,7 +431,9 @@ export function ModelModal(props: {
 	};
 	const visibleLines = (): DisplayLine[] => {
 		const lines = displayLines();
-		const visible = Math.max(1, listVisible());
+		// The scroll window matches the CARD (fit-content), so rows never
+		// render below the card edge.
+		const visible = Math.max(1, cardHeight() - 9);
 		const start = Math.max(
 			0,
 			Math.min(

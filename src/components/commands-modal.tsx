@@ -49,7 +49,15 @@ export function CommandsModal(props: {
 	// footer + padding ≈ 7 rows of chrome), capped only by the screen.
 	const listVisible = () =>
 		Math.max(6, Math.min(60, dims().height - 9));
-	const cardHeight = () => Math.min(listVisible() + 7, dims().height - 2);
+	// FIT-CONTENT: the card is exactly the command list height + chrome,
+	// capped by the window (short lists shrink the card, long ones scroll).
+	const contentLines = () =>
+		rows().reduce((sum, row) => sum + rowLines(row), 0);
+	const cardHeight = () =>
+		Math.min(
+			dims().height - 2,
+			Math.max(10, Math.min(contentLines(), listVisible()) + 7),
+		);
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -118,14 +126,15 @@ export function CommandsModal(props: {
 
 	const scrollStart = () => {
 		// Walk backward from the SELECTED row until the window fits
-		// listVisible lines (headers 1 line, entries 1-2 lines), so the
-		// selection is always visible and the window uses the full height.
+		// the CARD (headers 1 line, entries 1-2 lines), so the selection is
+		// always visible and the window never renders below the card edge.
+		const windowBudget = cardHeight() - 7;
 		let start = index();
 		let lines = 0;
-		while (start > 0 && lines < listVisible()) {
+		while (start > 0 && lines < windowBudget) {
 			start -= 1;
 			const rl = rowLines(rows()[start]!);
-			if (lines + rl > listVisible() && start < index()) {
+			if (lines + rl > windowBudget && start < index()) {
 				start += 1;
 				break;
 			}
@@ -142,7 +151,7 @@ export function CommandsModal(props: {
 		for (let i = start; i < all.length; i++) {
 			const row = all[i]!;
 			const rl = rowLines(row);
-			if (out.length > 0 && lines + rl > listVisible()) break;
+			if (out.length > 0 && lines + rl > cardHeight() - 7) break;
 			out.push(row);
 			lines += rl;
 		}

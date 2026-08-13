@@ -916,17 +916,25 @@ export function ConnectProviderModal(props: {
 	const columns = () => providerColumns(cardWidth());
 	const cellWidth = () => Math.floor((cardWidth() - 4) / columns());
 	const listVisible = () => Math.max(4, Math.min(60, dims().height - 9));
-	const rowLines = (row: PickerRow): number =>
-		row.kind === 'header' || row.kind === 'empty' ? 1 : 2;
-	const contentLines = (): number =>
-		pickerRows().reduce((sum, row) => sum + rowLines(row), 0);
-	const cardHeight = (): number => {
-		if (view().kind !== 'pick') {
-			return Math.min(dims().height - 2, 13);
+	/** Content height of the CURRENT step (fit-content every step): the picker
+	 *  is its grid rows, manage/methods are their rows, prompts are compact.
+	 *  The card is exactly that, capped by the window. */
+	const viewContentLines = (): number => {
+		switch (view().kind) {
+			case 'pick':
+				return Math.ceil(gridItems().length / columns()) * 2;
+			case 'manage':
+				return manageRows().length;
+			case 'methods':
+				return (selectedPreset().authMethods ?? []).length;
+			case 'chatgpt':
+				return 3;
+			default:
+				return 2;
 		}
-		const budget = Math.max(4, Math.min(listVisible(), contentLines()));
-		return Math.min(dims().height - 2, Math.max(10, budget + 8));
 	};
+	const cardHeight = (): number =>
+		Math.min(dims().height - 2, Math.max(10, viewContentLines() + 8));
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
@@ -951,7 +959,9 @@ export function ConnectProviderModal(props: {
 		const cols = columns();
 		const totalRows = Math.ceil(items.length / cols);
 		if (totalRows === 0) return [];
-		const visibleRows = Math.max(1, Math.floor(listVisible() / 2));
+		// The scroll window matches the CARD (fit-content), never a larger
+		// listVisible budget that would clip rows below the card edge.
+		const visibleRows = Math.max(1, Math.floor((cardHeight() - 8) / 2));
 		const selectedRow = Math.min(
 			Math.floor(index() / cols),
 			totalRows - 1,
@@ -1257,11 +1267,15 @@ function PromptField(props: {
 	const shown = props.secret && props.value.length > 0
 		? '•'.repeat(Math.min(24, props.value.length))
 		: props.value;
-	const display =
-		shown.length > 0 ? shown : (props.placeholder ?? '');
-	const caretChar = display.length > 0 ? display[display.length - 1]! : ' ';
-	const valueText = display.slice(0, -1);
 	const filled = shown.length > 0;
+	// Input-box caret parity: an EMPTY field shows the blinking box at the
+	// START (before the dimmed placeholder); typing puts the caret at the
+	// END over the last char. The caret cell is always rendered so the line
+	// width never shifts while it blinks.
+	const caretChar = filled
+		? shown[shown.length - 1]!
+		: ' ';
+	const valueText = filled ? shown.slice(0, -1) : '';
 	return (
 		<box flexDirection="column">
 			<box
@@ -1275,25 +1289,40 @@ function PromptField(props: {
 				    never rides below the input; the caret blinks like the
 				    chat input box. */}
 				<box flexDirection="row">
+					{/* Caret FIRST when empty (the box sits before the
+					    placeholder, like an empty chat input). */}
+					<Show when={!filled}>
+						<text
+							bg={cursorVisible() ? activeRow().bg : undefined}
+							fg={
+								cursorVisible()
+									? activeRow().fg
+									: colors().secondary
+							}
+							attributes={dim()}
+						>
+							{caretChar}
+						</text>
+					</Show>
 					<text
 						fg={filled ? colors().text : colors().secondary}
 						attributes={filled ? undefined : dim()}
 					>
 						{valueText}
+						{!filled ? (props.placeholder ?? '') : ''}
 					</text>
-					<text
-						bg={cursorVisible() ? activeRow().bg : undefined}
-						fg={
-							cursorVisible()
-								? activeRow().fg
-								: filled
-									? colors().text
-									: colors().secondary
-						}
-						attributes={filled ? undefined : dim()}
-					>
-						{caretChar}
-					</text>
+					<Show when={filled}>
+						<text
+							bg={cursorVisible() ? activeRow().bg : undefined}
+							fg={
+								cursorVisible()
+									? activeRow().fg
+									: colors().text
+							}
+						>
+							{caretChar}
+						</text>
+					</Show>
 				</box>
 			</box>
 			<Show when={props.error}>

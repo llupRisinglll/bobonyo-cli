@@ -31,7 +31,6 @@ export const BASE_COMMAND_NAMES = [
 	'setup-providers',
 	'connect',
 	'codex',
-	'provider',
 	'mcp',
 	'session',
 	'checkpoint',
@@ -137,7 +136,6 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'setup-providers': 'Add or edit a provider',
 	connect: 'Connect a provider (add or edit)',
 	codex: 'Connect Codex (OpenAI) as a provider',
-	provider: 'Switch provider',
 	mcp: 'MCP servers',
 	session: 'Session details',
 	checkpoint: 'Save a checkpoint',
@@ -241,7 +239,6 @@ export interface CommandContext {
 	connectCodex: () => void;
 	/** `/connect` — smooth provider connect flow (Codex or custom). */
 	connectProvider: (args: string) => void;
-	providerSwitch: (args: string) => void;
 	mcp: () => void;
 	session: (args: string) => void;
 	/** F3: save a checkpoint of the current session. */
@@ -409,9 +406,6 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'codex':
 			ctx.connectCodex();
-			return true;
-		case 'provider':
-			ctx.providerSwitch(args);
 			return true;
 		case 'mcp':
 			ctx.mcp();

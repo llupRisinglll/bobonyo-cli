@@ -88,7 +88,16 @@ export function SettingsListModal(props: {
 	// chrome), capped so the card never overflows the screen.
 	const listVisible = () =>
 		Math.max(3, Math.min(60, dims().height - 9));
-	const cardHeight = () => Math.min(listVisible() + 7, dims().height - 2);
+	// FIT-CONTENT: the card is exactly the filtered list height + chrome,
+	// capped by the window (a short list shrinks the card, a long one fills
+	// the screen and scrolls).
+	const contentLines = () =>
+		filtered().reduce((sum, row) => sum + rowLineCount(row, descWidth()), 0);
+	const cardHeight = () =>
+		Math.min(
+			dims().height - 2,
+			Math.max(10, Math.min(contentLines(), listVisible()) + 7),
+		);
 	const descWidth = () => Math.max(20, cardWidth() - 8);
 	// VERTICALLY CENTERED: (screen height − card height) / 2, never off-screen.
 	const cardY = () =>
@@ -107,7 +116,8 @@ export function SettingsListModal(props: {
 		let lines = 0;
 		for (let i = start; i < rows.length; i++) {
 			const rowLines = rowLineCount(rows[i]!, descWidth());
-			if (count > 0 && lines + rowLines > listVisible()) break;
+			// The window matches the CARD, so rows never render below it.
+			if (count > 0 && lines + rowLines > cardHeight() - 7) break;
 			count += 1;
 			lines += rowLines;
 		}

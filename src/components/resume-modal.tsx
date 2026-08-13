@@ -134,10 +134,18 @@ export function ResumeModal(props: {
 	const activeRow = () => activeRowPalette(colors());
 	const cardWidth = () => Math.min(72, Math.max(52, dims().width - 6));
 	// Bound the card to the screen and CENTER it vertically (the previous
-	// quarter-height placement overflowed on short terminals).
+	// quarter-height placement overflowed on short terminals). FIT-CONTENT:
+	// the card is exactly the session list height + chrome, capped by the
+	// window (a few sessions shrink the card, a long list scrolls).
 	const cardHeight = () => {
 		const available = Math.max(8, dims().height - 2);
-		return Math.min(26, available);
+		const lineCount = (row: Row): number =>
+			row.kind === 'session' &&
+			(row.session.firstMessage ?? '').trim()
+				? 2
+				: 1;
+		const content = allRows().reduce((sum, row) => sum + lineCount(row), 0);
+		return Math.min(26, Math.max(10, Math.min(content + 10, available)));
 	};
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
