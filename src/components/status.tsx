@@ -56,13 +56,14 @@ export function Status() {
 					: `${balance.currency} `;
 		return ` · Cred: ${symbol}${balance.total.toFixed(2)}`;
 	};
-	// `· cache 100K/1.5M (10% miss)` (DeepSeek): the balance only refreshes
-	// every 5 minutes, but the per-turn usage block reports
-	// `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` — the monthly
-	// ledger accumulates them so the status line shows the REAL cost driver
-	// live, updating after every turn. Two-tone like `Cred:`.
+	// `· cache 100K/1.5M (10% miss)` for ANY provider that reports cache
+	// fields (DeepSeek's explicit hit/miss split, OpenAI-style
+	// `cached_tokens`, Anthropic's `cache_read_input_tokens`). The balance
+	// only refreshes every 5 minutes, but the per-turn usage block always
+	// updates — the monthly ledger accumulates it so the status line shows
+	// the REAL cost driver live, regardless of provider. Two-tone like
+	// `Cred:`.
 	const cacheRateSegment = () => {
-		if (!isDeepSeek(activeEndpoint())) return '';
 		const label = formatCacheRate(providerUsage());
 		return label ? ` · cache ${label}` : '';
 	};
@@ -117,7 +118,7 @@ export function Status() {
 					{deepSeekBalance()!.total.toFixed(2)}
 				</text>
 			</Show>
-			<Show when={isDeepSeek(activeEndpoint()) && formatCacheRate(providerUsage())}>
+			<Show when={formatCacheRate(providerUsage())}>
 				<text fg={colors().secondary}> · cache</text>
 				<text fg={colors().primary}>
 					{' '}

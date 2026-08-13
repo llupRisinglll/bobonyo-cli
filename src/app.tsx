@@ -128,6 +128,7 @@ import {
 } from './deepseek';
 import {
 	currentMonthUsage,
+	extractCacheTokens,
 	formatTokens,
 	recordProviderUsage,
 } from './provider-usage';
@@ -444,11 +445,10 @@ export function App() {
 				// discovery lands with the real ids.
 				void refreshModelWindows(provider, catalog);
 				// Seed the monthly usage indicator from the DISK ledger so
-				// the status line shows `used N.NM` immediately on a warm
-				// ledger (even before the first turn of this session).
-				if (isXiaomiMiMo(provider)) {
-					setProviderUsage(currentMonthUsage(provider.baseUrl));
-				}
+				// the status line shows `used N.NM` / the cache rate
+				// immediately on a warm ledger (even before the first turn
+				// of this session).
+				setProviderUsage(currentMonthUsage(provider.baseUrl));
 				// E6: no declared context window → resolve from models.dev
 				// (cached, async; the ctx% indicator updates when it lands).
 				if (!provider.contextWindow) {
@@ -2659,19 +2659,18 @@ export function App() {
 				ts: Date.now(),
 			},
 		]);
-		// Token-plan providers (Xiaomi MiMo, DeepSeek): accumulate the turn's
-		// usage into the per-provider MONTHLY ledger (`used N.NM` on the
-		// status line). The disk-backed ledger survives restarts, unlike the
-		// session-scoped history above.
-		if (isXiaomiMiMo(activeEndpoint()) || isDeepSeek(activeEndpoint())) {
-			const updated = recordProviderUsage(activeEndpoint().baseUrl, snapshot);
-			if (updated) setProviderUsage(updated);
-		}
-		// DeepSeek prompt-cache alert: an unusually cache-miss-heavy turn is
-		// exactly what drives the cost up. Toast (transient) — never a chat
+		// Accumulate the turn's usage into the per-provider MONTHLY ledger
+		// (`used N.NM` for token-plan providers, the cache rate for ANY
+		// provider that reports cache fields). The disk-backed ledger
+		// survives restarts, unlike the session-scoped history above.
+		const updated = recordProviderUsage(activeEndpoint().baseUrl, snapshot);
+		if (updated) setProviderUsage(updated);
+		// Prompt-cache alert: an unusually cache-miss-heavy turn is exactly
+		// what drives the cost up — surface it for ANY provider that reports
+		// cache fields, not just DeepSeek. Toast (transient) — never a chat
 		// history row, same policy as setting changes.
-		if (isDeepSeek(activeEndpoint())) {
-			const stats = cacheStats(usage);
+		{
+			const stats = cacheStats(snapshot);
 			if (shouldAlertCacheMiss(stats)) {
 				showToast(
 					`Cache miss ${Math.round((1 - (stats?.ratio ?? 0)) * 100)}% on this turn · costs more`,
@@ -3123,13 +3122,10 @@ export function App() {
 				}
 			});
 		}
-		if (isXiaomiMiMo(endpoint)) {
-			setProviderUsage(currentMonthUsage(endpoint.baseUrl));
-		}
-		const cacheLabel =
-			isDeepSeek(endpoint) && cacheStats(lastUsage())
-				? `deepseek · ${formatCacheHitLabel(cacheStats(lastUsage()))}`
-				: 'n/a';
+		setProviderUsage(currentMonthUsage(endpoint.baseUrl));
+		const cacheLabel = cacheStats(lastUsage())
+			? `${endpoint.id} · ${formatCacheHitLabel(cacheStats(lastUsage()))}`
+			: 'n/a';
 		// `/status` opens as a MODAL (parity: settings) listing only the
 		// details NOT already visible on the status line (mode, tune, agents,
 		// bg, cwd) or the input corner (model[effort], ctx ~N%).
@@ -3773,12 +3769,19 @@ function usageSignal(
 	promptCacheMissTokens?: number;
 } | undefined {
 	if (!usage) return undefined;
+	// ANY provider can feed the cache rate: DeepSeek's explicit split, the
+	// OpenAI-style `cached_tokens` (miss derived from prompt_tokens), or
+	// Anthropic's `cache_read_input_tokens`. Fields stay undefined until the
+	// provider actually reports cache info, so the ledger/status line never
+	// fabricate a 0% rate.
+	const cache = extractCacheTokens(usage);
+	const reportedCache = cache.hit > 0 || cache.miss > 0;
 	return {
 		prompt_tokens: finiteNumber(usage.prompt_tokens),
 		completion_tokens: finiteNumber(usage.completion_tokens),
 		total_tokens: finiteNumber(usage.total_tokens),
-		promptCacheHitTokens: finiteNumber(usage.prompt_cache_hit_tokens),
-		promptCacheMissTokens: finiteNumber(usage.prompt_cache_miss_tokens),
+		promptCacheHitTokens: reportedCache ? cache.hit : undefined,
+		promptCacheMissTokens: reportedCache ? cache.miss : undefined,
 	};
 }
 

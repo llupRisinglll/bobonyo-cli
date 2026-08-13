@@ -194,3 +194,38 @@ export function formatCacheRate(
 	const missPct = Math.round((miss / total) * 100);
 	return `${formatTokens(hit)}/${formatTokens(total)} (${missPct}% miss)`;
 }
+
+function toFinite(value: unknown): number | undefined {
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Cache hit/miss input tokens from ANY provider usage block, so the status
+ * line rate works beyond DeepSeek:
+ * - DeepSeek reports the explicit split (`prompt_cache_hit_tokens` /
+ *   `prompt_cache_miss_tokens`);
+ * - OpenAI-compatible providers report `prompt_tokens_details.cached_tokens`
+ *   (or Responses-style `input_tokens_details.cached_tokens`) — the miss
+ *   side is derived from `prompt_tokens - cached`;
+ * - Anthropic-compatible report `cache_read_input_tokens` (same derivation).
+ * Returns zeros when the provider reports no cache fields.
+ */
+export function extractCacheTokens(
+	usage: Record<string, unknown> | undefined,
+): {hit: number; miss: number} {
+	if (!usage) return {hit: 0, miss: 0};
+	const details =
+		(usage.prompt_tokens_details as Record<string, unknown> | undefined) ??
+		(usage.input_tokens_details as Record<string, unknown> | undefined);
+	const hit =
+		toFinite(usage.prompt_cache_hit_tokens) ??
+		toFinite(details?.cached_tokens) ??
+		toFinite(usage.cache_read_input_tokens) ??
+		0;
+	const explicitMiss = toFinite(usage.prompt_cache_miss_tokens);
+	const prompt = toFinite(usage.prompt_tokens);
+	const miss =
+		explicitMiss ??
+		(hit > 0 && prompt !== undefined ? Math.max(0, prompt - hit) : 0);
+	return {hit, miss};
+}

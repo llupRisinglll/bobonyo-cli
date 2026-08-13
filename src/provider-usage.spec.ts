@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	currentMonthUsage,
+	extractCacheTokens,
 	formatCacheRate,
 	formatMonthlyUsage,
 	formatTokens,
@@ -184,5 +185,50 @@ describe('formatCacheRate (DeepSeek status-line cost driver)', () => {
 		expect(
 			formatCacheRate(usage({cacheHitTokens: 0, cacheMissTokens: 0})),
 		).toBeUndefined();
+	});
+});
+
+describe('extractCacheTokens (provider-agnostic cache rate)', () => {
+	test('DeepSeek: explicit hit/miss split wins', () => {
+		expect(
+			extractCacheTokens({
+				prompt_tokens: 1000,
+				prompt_cache_hit_tokens: 700,
+				prompt_cache_miss_tokens: 300,
+			}),
+		).toEqual({hit: 700, miss: 300});
+	});
+
+	test('OpenAI-compatible: cached_tokens + prompt total derive the miss', () => {
+		expect(
+			extractCacheTokens({
+				prompt_tokens: 1000,
+				prompt_tokens_details: {cached_tokens: 700},
+			}),
+		).toEqual({hit: 700, miss: 300});
+		// Responses-style nested field works too.
+		expect(
+			extractCacheTokens({
+				prompt_tokens: 1000,
+				input_tokens_details: {cached_tokens: 250},
+			}),
+		).toEqual({hit: 250, miss: 750});
+	});
+
+	test('Anthropic: cache_read_input_tokens derives the miss', () => {
+		expect(
+			extractCacheTokens({
+				prompt_tokens: 800,
+				cache_read_input_tokens: 500,
+			}),
+		).toEqual({hit: 500, miss: 300});
+	});
+
+	test('no cache fields reports zeros (never a fabricated rate)', () => {
+		expect(extractCacheTokens(undefined)).toEqual({hit: 0, miss: 0});
+		expect(extractCacheTokens({prompt_tokens: 100})).toEqual({hit: 0, miss: 0});
+		expect(
+			extractCacheTokens({prompt_tokens: 100, prompt_tokens_details: {}}),
+		).toEqual({hit: 0, miss: 0});
 	});
 });

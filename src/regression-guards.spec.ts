@@ -215,11 +215,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// render the cumulative rate (`100K/1.5M (10% miss)`) every turn.
 		const usage = read('./provider-usage.ts');
 		expect(usage).toMatch(/export function formatCacheRate/);
+		expect(usage).toMatch(/export function extractCacheTokens/);
 		expect(usage).toMatch(/cacheHitTokens:/);
 		expect(usage).toMatch(/cacheMissTokens:/);
 		const status = read('./components/status.tsx');
 		expect(status).toMatch(/formatCacheRate\(providerUsage\(\)\)/);
 		expect(status).toMatch(/· cache/);
+		// Provider-agnostic: the cache rate must render for ANY provider that
+		// reports cache fields, never gated on DeepSeek.
+		expect(status).not.toMatch(/isDeepSeek\(activeEndpoint\(\)\) && formatCacheRate/);
 	});
 
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
