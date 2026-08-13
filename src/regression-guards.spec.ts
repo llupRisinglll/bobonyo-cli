@@ -239,6 +239,43 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).not.toMatch(/deepseek-chat/);
 	});
 
+	test('the provider modal auto-widens and tiles on big screens', () => {
+		const modal = read('./components/connect-provider-modal.tsx');
+		expect(modal).toMatch(/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/);
+		expect(modal).toMatch(/providerColumns\(cardWidth\(\)\)/);
+		expect(modal).toMatch(/visibleGridRows\(\)/);
+		// Height autofits: the picker fits its content, prompts stay compact.
+		expect(modal).toMatch(/if \(view\(\)\.kind !== 'pick'\)/);
+		expect(modal).toMatch(/Math\.min\(dims\(\)\.height - 2, 13\)/);
+	});
+
+	test('connected providers offer a MANAGE step to edit existing instances', () => {
+		const modal = read('./components/connect-provider-modal.tsx');
+		expect(modal).toMatch(/presetConnections\(row\.preset\)\.length > 0/);
+		expect(modal).toMatch(/<ManageList/);
+		expect(modal).toMatch(/setEditTargetId\(selected\.id\)/);
+		// Editing preserves the wire fields (responses/anthropic, codexAccount…).
+		expect(modal).toMatch(/editProvider\.sdkProvider/);
+		expect(modal).toMatch(/editProvider\.codexAccount/);
+	});
+
+	test('modal input placeholders use the blinking caret (input-box parity)', () => {
+		const modal = read('./components/connect-provider-modal.tsx');
+		expect(modal).toMatch(/spinnerFrame\(\) >> 2\) % 2 === 0/);
+		expect(modal).toMatch(/activeRow\(\)\.bg/);
+		expect(modal).toMatch(/const caretChar =/);
+		// The hint lives INSIDE the field, never below the input.
+		expect(modal).not.toMatch(/props\.description/);
+	});
+
+	test('settings: Providers tab removed, Connect provider row added', () => {
+		const panel = read('./components/settings-panel.tsx');
+		expect(panel).not.toMatch(/'Providers',/);
+		expect(panel).toMatch(/key: 'connectProvider'/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/case 'connectProvider':/);
+	});
+
 	test('resume search covers the session id', () => {
 		const modal = read('./components/resume-modal.tsx');
 		// The filter must go through the pure helper that matches the id,

@@ -9,6 +9,8 @@ import {
 	filterConnectPicker,
 	openAICompatibleProvider,
 	presetConnectionCount,
+	presetConnections,
+	providerColumns,
 	PROVIDER_PRESETS,
 	xiaomiProvider,
 } from './components/connect-provider-modal';
@@ -198,6 +200,20 @@ describe('defaultProviderName ((n) duplicate suffix)', () => {
 	});
 });
 
+describe('providerColumns (responsive options grid)', () => {
+	test('narrow cards stay single-column (small screens never cram)', () => {
+		expect(providerColumns(60)).toBe(1);
+		expect(providerColumns(80)).toBe(1);
+	});
+
+	test('medium cards get 2 columns, wide cards 3', () => {
+		expect(providerColumns(84)).toBe(2);
+		expect(providerColumns(100)).toBe(2);
+		expect(providerColumns(108)).toBe(3);
+		expect(providerColumns(120)).toBe(3);
+	});
+});
+
 describe('presetConnectionCount (n connected)', () => {
 	const deepseek = PROVIDER_PRESETS.find(
 		preset => preset.id === 'deepseek',
@@ -253,5 +269,56 @@ describe('presetConnectionCount (n connected)', () => {
 				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
 			]),
 		).toBe(2);
+	});
+});
+
+describe('presetConnections (edit targets for the manage step)', () => {
+	const deepseek = PROVIDER_PRESETS.find(
+		preset => preset.id === 'deepseek',
+	)!;
+	const xiaomi = PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')!;
+	const codex = PROVIDER_PRESETS.find(preset => preset.id === 'codex')!;
+	const custom = PROVIDER_PRESETS.find(preset => preset.id === 'custom')!;
+
+	test('lists every instance: default id, (n) suffix, same endpoint', () => {
+		expect(
+			presetConnections(deepseek, [
+				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
+				{id: 'deepseek (2)', baseUrl: 'https://api.deepseek.com'},
+				{id: 'other', baseUrl: 'https://example.com'},
+			]).map(connection => connection.id),
+		).toEqual(['deepseek', 'deepseek (2)']);
+	});
+
+	test('xiaomi matches every token-plan connection (split instances)', () => {
+		expect(
+			presetConnections(xiaomi, [
+				{id: 'xiaomi', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+				{id: 'mimo-pro', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
+			]).map(connection => connection.id),
+		).toEqual(['xiaomi', 'mimo-pro']);
+	});
+
+	test('codex includes the ChatGPT-account backend', () => {
+		expect(
+			presetConnections(codex, [
+				{id: 'codex', baseUrl: 'https://api.openai.com'},
+				{
+					id: 'codex-account',
+					baseUrl: 'https://chatgpt.com/backend-api/codex',
+				},
+			]).map(connection => connection.id),
+		).toEqual(['codex', 'codex-account']);
+	});
+
+	test('custom matches only custom-id instances', () => {
+		expect(
+			presetConnections(custom, [
+				{id: 'custom', baseUrl: 'https://a.example.com'},
+				{id: 'custom (2)', baseUrl: 'https://b.example.com'},
+				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
+			]).map(connection => connection.id),
+		).toEqual(['custom', 'custom (2)']);
 	});
 });

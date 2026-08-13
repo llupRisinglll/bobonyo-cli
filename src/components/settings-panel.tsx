@@ -20,7 +20,6 @@ import {
 	titleShape,
 	toolProfile,
 } from '../state';
-import {listProviders} from '../config';
 import {listCheckpoints} from '../session';
 import {loadSettings} from '../settings';
 import {loadPreferences} from '../config';
@@ -36,7 +35,6 @@ export const SETTINGS_TABS = [
 	'Input',
 	'Behavior',
 	'Capabilities',
-	'Providers',
 	'Advanced',
 ] as const;
 
@@ -163,13 +161,16 @@ export function settingsRows(tab: number): SettingsRow[] {
 						loadPreferences().webSearchModel ??
 						'inherit (main agent model)',
 				},
+				{
+					key: 'connectProvider',
+					label: 'Connect provider',
+					// The provider modal (opencode-style) replaces the old
+					// Providers tab: /connect and this row both open it.
+					value: 'add or edit a provider',
+				},
 			];
-		case 4:
-			return listProviders().map(provider => ({
-				key: `provider:${provider.id}`,
-				label: provider.id,
-				value: `${provider.baseUrl} · ${provider.models.length} models`,
-			})).concat([
+		default:
+			return [
 				{
 					key: 'mcp',
 					label: 'MCP servers',
@@ -180,9 +181,6 @@ export function settingsRows(tab: number): SettingsRow[] {
 					label: 'Tool approval',
 					value: mode() === 'yolo' ? 'off (yolo)' : 'on',
 				},
-			]);
-		default:
-			return [
 				{key: 'session', label: 'Session', value: `${sessionName()} (${sessionId()})`},
 				{
 					key: 'checkpoints',

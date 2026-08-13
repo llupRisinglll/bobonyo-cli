@@ -52,3 +52,23 @@ describe('caveman mode setting', () => {
 		expect(SETTING_OPTIONS.resumeCwd).toEqual(['session', 'current', 'ask']);
 	});
 });
+
+describe('providers tab is replaced by the connect-provider modal entry', () => {
+	test('the Providers tab is GONE (the modal replaces it)', () => {
+		expect(SETTINGS_TABS).not.toContain('Providers');
+	});
+
+	test('Capabilities exposes a Connect provider row (opens the modal)', () => {
+		const rows = settingsRows(SETTINGS_TABS.indexOf('Capabilities'));
+		const row = rows.find(candidate => candidate.key === 'connectProvider');
+		expect(row?.label).toBe('Connect provider');
+	});
+
+	test('MCP servers + tool approval moved to Advanced', () => {
+		const keys = settingsRows(
+			SETTINGS_TABS.indexOf('Advanced'),
+		).map(row => row.key);
+		expect(keys).toContain('mcp');
+		expect(keys).toContain('toolApproval');
+	});
+});

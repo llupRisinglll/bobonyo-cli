@@ -46,7 +46,9 @@ export function EffortModal(props: {
 	const [index, setIndex] = createSignal(initialIndex);
 
 	const cardWidth = () => Math.min(64, Math.max(52, dims().width - 8));
-	const cardHeight = 13;
+	// Autofit: the card is exactly as tall as its content (13 rows), clamped
+	// to the window so a short terminal never overflows.
+	const cardHeight = Math.min(13, Math.max(10, dims().height - 2));
 	const cardY = () => Math.max(2, Math.floor((dims().height - cardHeight) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>

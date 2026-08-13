@@ -1030,21 +1030,14 @@ export function App() {
 					})),
 				);
 				return;
-			default:
-				if (row.key.startsWith('provider:')) {
-					openSettingsList(
-						row.label,
-						listProviders()
-							.filter(provider => provider.id === row.key.slice(9))
-							.map(provider => ({
-								label: provider.id,
-								value: provider.baseUrl,
-								providerId: provider.id,
-								activateHint: 'edit',
-							})),
-					);
-					return;
-				}
+			case 'connectProvider':
+				// Settings → Capabilities → Connect provider opens the same
+				// opencode-style modal as /connect. CLOSE the settings modal
+				// first: both surfaces register useKeyboard, so a key aimed
+				// at the connect modal would also hit the settings behind it.
+				setSettingsOpen(false);
+				setConnectOpen({});
+				return;
 		}
 		// Defer by a microtask: the SAME Enter keypress that opens the wizard
 		// also reaches the InputBox's own key handler (OpenTUI dispatches to

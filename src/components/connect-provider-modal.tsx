@@ -5,6 +5,7 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {listProviders, type ProviderConfig} from '../config';
+import {spinnerFrame} from '../state';
 import {
 	codexAuthSummary,
 	hasCodexChatgptAuth,
@@ -207,6 +208,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 type View =
 	| {kind: 'pick'}
+	| {kind: 'manage'}
 	| {kind: 'methods'}
 	| {kind: 'apikey'}
 	| {kind: 'chatgpt'}
@@ -254,6 +256,18 @@ export function filterConnectPicker(
 }
 
 /**
+ * Responsive provider-OPTION columns: the card auto-widens on big screens
+ * and the options tile into 3 columns when there is room, 2 on medium
+ * cards, and stay a single column on narrow ones (small screens never get
+ * the cramped grid). Pure, unit-tested.
+ */
+export function providerColumns(cardWidth: number): number {
+	if (cardWidth >= 108) return 3;
+	if (cardWidth >= 84) return 2;
+	return 1;
+}
+
+/**
  * Blank-name default: the preset id, suffixed with `(n)` when already
  * connected, so repeated connects never clobber each other (pure).
  */
@@ -268,6 +282,31 @@ export function defaultProviderName(
 	let n = 2;
 	while (ids.has(`${base} (${n})`.toLowerCase())) n += 1;
 	return `${base} (${n})`;
+}
+
+/**
+ * The configured providers that ARE instances of a preset (same matching as
+ * presetConnectionCount): by default id + `(n)` suffixes, by the normalized
+ * endpoint, or — for Codex — the ChatGPT-account backend. Pure, unit-tested.
+ */
+export function presetConnections(
+	preset: ProviderPreset,
+	providers?: Array<{id: string; baseUrl: string}>,
+): Array<{id: string; baseUrl: string}> {
+	const list = providers ?? listProviders();
+	const normalize = (url: string): string =>
+		url.replace(/\/+$/, '').replace(/\/v1$/, '');
+	const presetBase = normalize(preset.baseUrl);
+	const codexAccountBase = normalize('https://chatgpt.com/backend-api/codex');
+	return list.filter(provider => {
+		const id = provider.id.toLowerCase();
+		if (id === preset.id.toLowerCase()) return true;
+		if (id.startsWith(`${preset.id.toLowerCase()} (`)) return true;
+		if (preset.id === 'custom') return false;
+		const base = normalize(provider.baseUrl);
+		if (base === presetBase) return true;
+		return preset.id === 'codex' && base === codexAccountBase;
+	});
 }
 
 /**
@@ -451,6 +490,11 @@ export function ConnectProviderModal(props: {
 	const [selectedPreset, setSelectedPreset] = createSignal<ProviderPreset>(
 		PROVIDER_PRESETS[0]!,
 	);
+	/** The preset whose existing connections the manage step lists. */
+	const [managePreset, setManagePreset] = createSignal<ProviderPreset>(
+		PROVIDER_PRESETS[0]!,
+	);
+	const [manageIndex, setManageIndex] = createSignal(0);
 	/** Stashed API key entered BEFORE the optional name step. */
 	const [presetKey, setPresetKey] = createSignal('');
 	/** Codex auth mode chosen in the methods step. */
@@ -462,9 +506,15 @@ export function ConnectProviderModal(props: {
 		return readCodexAuth();
 	});
 
-	const editProvider = props.editId
+	// EDIT target: set from the settings/edit flow (props.editId) or by the
+	// manage step when the user edits an existing connection.
+	const [editTargetId, setEditTargetId] = createSignal<string | null>(
+		props.editId ?? null,
+	);
+	const editProvider = editTargetId()
 		? listProviders().find(
-				provider => provider.id.toLowerCase() === props.editId!.toLowerCase(),
+				provider =>
+					provider.id.toLowerCase() === editTargetId()!.toLowerCase(),
 			)
 		: undefined;
 
@@ -475,6 +525,27 @@ export function ConnectProviderModal(props: {
 	const [customModels, setCustomModels] = createSignal(
 		editProvider?.models.join(', ') ?? '',
 	);
+	// Re-seed the custom edit fields when the EDIT TARGET changes (the
+	// manage step switches targets mid-modal; mount-time seeding only covers
+	// the props.editId path).
+	createEffect(() => {
+		const targetId = editTargetId();
+		if (!targetId) return;
+		const provider = listProviders().find(
+			candidate => candidate.id.toLowerCase() === targetId.toLowerCase(),
+		);
+		if (!provider) return;
+		setCustomBase(provider.baseUrl);
+		setCustomModels(provider.models.join(', '));
+		setCustomKey('');
+		// Prefill the CURRENT step's input immediately (the manage step
+		// switches edit targets mid-modal; without this the field briefly
+		// shows the placeholder before the value lands).
+		if (view().kind === 'custom-base') setInput(provider.baseUrl);
+		else if (view().kind === 'custom-models') {
+			setInput(provider.models.join(', '));
+		} else if (view().kind === 'custom-key') setInput('');
+	});
 
 	const stepDefault = (current: View): string => {
 		switch (current.kind) {
@@ -503,8 +574,8 @@ export function ConnectProviderModal(props: {
 		setError('');
 	});
 
-	// The provider OPTIONS stay a single settings-style column (multi-column
-	// layouts are for model DETAILS, not the option list).
+	// Provider OPTIONS: a settings-style list on narrow screens that tiles
+	// into 2-3 columns when the card is wide enough (providerColumns).
 	const pickerRows = (): PickerRow[] => {
 		const configured = listProviders();
 		const rows: PickerRow[] = [];
@@ -522,26 +593,46 @@ export function ConnectProviderModal(props: {
 		}
 		return filterConnectPicker(rows, query());
 	};
-	const navigableRows = (): PickerRow[] =>
+	const gridItems = (): PickerRow[] =>
 		pickerRows().filter(
 			row => row.kind === 'provider' || row.kind === 'custom',
 		);
-	const movePicker = (delta: number): void => {
-		const rows = navigableRows();
-		if (rows.length === 0) return;
-		const current = rows[index()];
-		const currentIndex = current ? rows.indexOf(current) : -1;
-		const next =
-			currentIndex === -1
-				? delta > 0
-					? 0
-					: rows.length - 1
-				: currentIndex + delta;
-		if (next < 0 || next >= rows.length) return;
-		setIndex(next);
+	// Grid navigation (row-major). Left/right wrap across columns; up/down
+	// wrap to the top/bottom of the same column (mirrors the model modal).
+	const moveGrid = (direction: 'up' | 'down' | 'left' | 'right'): void => {
+		const items = gridItems();
+		const cols = columns();
+		const total = items.length;
+		if (total === 0) return;
+		const current = index();
+		const col = current % cols;
+		let next: number;
+		switch (direction) {
+			case 'left':
+				next = (current - 1 + total) % total;
+				break;
+			case 'right':
+				next = (current + 1) % total;
+				break;
+			case 'up': {
+				next = current - cols;
+				if (next < 0) {
+					const bottomRow = Math.max(0, Math.floor((total - 1) / cols));
+					const bottom = bottomRow * cols + col;
+					next = bottom < total ? bottom : Math.max(0, bottom - cols);
+				}
+				break;
+			}
+			case 'down': {
+				next = current + cols;
+				if (next >= total) next = col;
+				break;
+			}
+		}
+		setIndex(Math.max(0, Math.min(total - 1, next)));
 	};
 	const activatePicker = (): void => {
-		const row = navigableRows()[index()];
+		const row = gridItems()[index()];
 		if (!row?.preset) return;
 		if (row.kind === 'custom') {
 			push({kind: 'custom-base'});
@@ -550,8 +641,37 @@ export function ConnectProviderModal(props: {
 		setSelectedPreset(row.preset);
 		setPresetAuth('api');
 		setInput('');
+		// Already-connected providers offer a MANAGE step first: edit the
+		// existing instances or connect a new one.
+		if (presetConnections(row.preset).length > 0) {
+			setManagePreset(row.preset);
+			setManageIndex(0);
+			push({kind: 'manage'});
+			return;
+		}
 		if (row.preset.authMethods?.length) push({kind: 'methods'});
 		else push({kind: 'apikey'});
+	};
+	const startNewConnection = (): void => {
+		const preset = selectedPreset();
+		if (preset.authMethods?.length) push({kind: 'methods'});
+		else push({kind: 'apikey'});
+	};
+	/** Rows of the manage step: each existing connection + "new" entry. */
+	const manageRows = (): Array<{id: string; baseUrl: string} | null> => {
+		const preset = managePreset();
+		return [...presetConnections(preset), null];
+	};
+	const activateManage = (): void => {
+		const rows = manageRows();
+		const selected = rows[manageIndex()];
+		if (!selected) {
+			startNewConnection();
+			return;
+		}
+		// Edit the existing connection through the prefilled custom flow.
+		setEditTargetId(selected.id);
+		push({kind: 'custom-base'});
 	};
 
 	const submitApiKey = (): void => {
@@ -620,7 +740,50 @@ export function ConnectProviderModal(props: {
 						(editProvider?.apiKeyResolved ? editProvider.apiKey : undefined),
 					models: models.length > 0 ? models : (editProvider?.models ?? []),
 				});
-				if (provider) props.onConnect(provider);
+				if (!provider) return;
+				// Editing an existing connection keeps its wire fields
+				// (responses/anthropic, codexAccount, discovery, context
+				// window) — the custom form only edits id/base/key/models.
+				props.onConnect(
+					editProvider
+						? {
+								...provider,
+								...(editProvider.sdkProvider
+									? {sdkProvider: editProvider.sdkProvider}
+									: {}),
+								...(editProvider.codexAccount
+									? {codexAccount: editProvider.codexAccount}
+									: {}),
+								...(editProvider.modelDiscoveryUrl
+									? {
+											modelDiscoveryUrl:
+												editProvider.modelDiscoveryUrl,
+										}
+									: {}),
+								...(editProvider.contextWindow
+									? {
+											contextWindow:
+												editProvider.contextWindow,
+										}
+									: {}),
+								...(editProvider.providerOptions
+									? {
+											providerOptions:
+												editProvider.providerOptions,
+										}
+									: {}),
+								...(editProvider.promptCacheKey
+									? {
+											promptCacheKey:
+												editProvider.promptCacheKey,
+										}
+									: {}),
+								...(editProvider.alwaysAllow?.length
+									? {alwaysAllow: editProvider.alwaysAllow}
+									: {}),
+							}
+						: provider,
+				);
 				return;
 			}
 			default:
@@ -635,8 +798,13 @@ export function ConnectProviderModal(props: {
 				props.onClose();
 				return true;
 			}
-			if (event.name === 'up' || event.name === 'down') {
-				movePicker(event.name === 'down' ? 1 : -1);
+			if (
+				event.name === 'up' ||
+				event.name === 'down' ||
+				event.name === 'left' ||
+				event.name === 'right'
+			) {
+				moveGrid(event.name);
 				return true;
 			}
 			if (event.name === 'return') {
@@ -660,6 +828,23 @@ export function ConnectProviderModal(props: {
 			}
 			// The picker owns EVERY key while open: nothing may leak into the
 			// chat input or the history scrollbox behind it.
+			return true;
+		}
+		if (current.kind === 'manage') {
+			if (event.name === 'escape') {
+				back();
+				return true;
+			}
+			if (event.name === 'up' || event.name === 'down') {
+				setManageIndex(prev => {
+					const next = event.name === 'down' ? prev + 1 : prev - 1;
+					return Math.max(0, Math.min(manageRows().length - 1, next));
+				});
+				return true;
+			}
+			if (event.name === 'return') {
+				activateManage();
+			}
 			return true;
 		}
 		if (current.kind === 'methods') {
@@ -723,12 +908,25 @@ export function ConnectProviderModal(props: {
 		return true;
 	});
 
-	// Settings-modal shell: the card uses as much of the screen as the
-	// content needs — tall terminals grow the card up to the window height.
-	const cardWidth = () => Math.min(78, Math.max(60, dims().width - 6));
+	// RESPONSIVE SHELL: the card auto-WIDENS on big screens (up to 120) so
+	// the provider options can tile into more columns, and the HEIGHT
+	// autofits to the current view — the picker fits its rows, prompt/method
+	// steps stay compact, and short terminals cap at the window and scroll.
+	const cardWidth = () => Math.min(120, Math.max(60, dims().width - 4));
+	const columns = () => providerColumns(cardWidth());
+	const cellWidth = () => Math.floor((cardWidth() - 4) / columns());
 	const listVisible = () => Math.max(4, Math.min(60, dims().height - 9));
-	const cardHeight = () =>
-		Math.min(dims().height - 2, Math.max(12, listVisible() + 8));
+	const rowLines = (row: PickerRow): number =>
+		row.kind === 'header' || row.kind === 'empty' ? 1 : 2;
+	const contentLines = (): number =>
+		pickerRows().reduce((sum, row) => sum + rowLines(row), 0);
+	const cardHeight = (): number => {
+		if (view().kind !== 'pick') {
+			return Math.min(dims().height - 2, 13);
+		}
+		const budget = Math.max(4, Math.min(listVisible(), contentLines()));
+		return Math.min(dims().height - 2, Math.max(10, budget + 8));
+	};
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
@@ -741,55 +939,51 @@ export function ConnectProviderModal(props: {
 		// (from PROVIDER_PRESETS) — compare by preset, not object identity.
 		return (
 			Boolean(row.preset) &&
-			row.preset === navigableRows()[index()]?.preset
+			row.preset === gridItems()[index()]?.preset
 		);
 	};
-	// Settings-list scrolling: rows are 2 lines (title + examples) so the
-	// window walks line counts, not row indexes.
-	const rowLines = (row: PickerRow): number =>
-		row.kind === 'header' || row.kind === 'empty' ? 1 : 2;
-	const fullRowIndex = (): number => {
-		const all = pickerRows();
-		const selected = navigableRows()[index()];
-		if (!selected) return 0;
-		return Math.max(
+	// Grid scroll window: 2-line cells, the selected row stays in view.
+	const visibleGridRows = (): Array<{
+		row: number;
+		cells: Array<PickerRow | null>;
+	}> => {
+		const items = gridItems();
+		const cols = columns();
+		const totalRows = Math.ceil(items.length / cols);
+		if (totalRows === 0) return [];
+		const visibleRows = Math.max(1, Math.floor(listVisible() / 2));
+		const selectedRow = Math.min(
+			Math.floor(index() / cols),
+			totalRows - 1,
+		);
+		const startRow = Math.max(
 			0,
-			all.findIndex(candidate => candidate.preset === selected.preset),
+			Math.min(
+				selectedRow - visibleRows + 1,
+				Math.max(0, totalRows - visibleRows),
+			),
 		);
-	};
-	const visiblePickerRows = (): PickerRow[] => {
-		const all = pickerRows();
-		const full = Math.min(fullRowIndex(), Math.max(0, all.length - 1));
-		// Walk BACK from the selection so it ALWAYS fits in the window, then
-		// extend forward; a forward-only window dropped the selected row
-		// when the next row overflowed.
-		let start = full;
-		let lines = rowLines(all[full] ?? all[0]!);
-		while (start > 0) {
-			const rl = rowLines(all[start - 1]!);
-			// Stop BEFORE the walk-back fills the whole window: the
-			// selection must stay inside, with room left for rows after it.
-			if (lines + rl >= listVisible()) break;
-			start -= 1;
-			lines += rl;
-		}
-		// Rows from start THROUGH the selection were counted in `lines`;
-		// take them all, then extend forward with whatever budget is left.
-		const out = all.slice(start, full + 1);
-		let used = lines;
-		for (let i = full + 1; i < all.length; i++) {
-			const rl = rowLines(all[i]!);
-			if (used + rl > listVisible()) break;
-			out.push(all[i]!);
-			used += rl;
+		const out: Array<{row: number; cells: Array<PickerRow | null>}> = [];
+		for (let r = startRow; r < Math.min(startRow + visibleRows, totalRows); r++) {
+			const cells: Array<PickerRow | null> = [];
+			for (let c = 0; c < cols; c++) {
+				cells.push(items[r * cols + c] ?? null);
+			}
+			out.push({row: r, cells});
 		}
 		return out;
 	};
+	const truncateCell = (text: string, width: number): string =>
+		text.length > width
+			? text.slice(0, Math.max(1, width - 1)) + '…'
+			: text;
 
 	const title = (): string => {
 		switch (view().kind) {
 			case 'pick':
 				return 'Connect a provider';
+			case 'manage':
+				return `${managePreset().title} connections`;
 			case 'methods':
 				return selectedPreset().title;
 			case 'apikey':
@@ -874,38 +1068,55 @@ export function ConnectProviderModal(props: {
 					when={view().kind === 'pick'}
 					fallback={
 						<Show
-							when={view().kind === 'methods' || view().kind === 'chatgpt'}
+							when={
+								view().kind === 'methods' ||
+								view().kind === 'chatgpt' ||
+								view().kind === 'manage'
+							}
 							fallback={
 								<PromptField
 									value={input()}
 									error={error()}
 									secret={view().kind === 'apikey' || view().kind === 'custom-key'}
-									description={promptDescription()}
+									placeholder={promptDescription()}
 								/>
 							}
 						>
 							<Show
-								when={view().kind === 'methods'}
+								when={view().kind === 'manage'}
 								fallback={
-									<ChatgptView
-										authTick={authTick()}
-										authSummary={codexAuthSummary(auth())}
-										loggedIn={hasCodexChatgptAuth(auth())}
-										onCheckAgain={() => setAuthTick(tick => tick + 1)}
-									/>
+									<Show
+										when={view().kind === 'methods'}
+										fallback={
+											<ChatgptView
+												authTick={authTick()}
+												authSummary={codexAuthSummary(auth())}
+												loggedIn={hasCodexChatgptAuth(auth())}
+												onCheckAgain={() => setAuthTick(tick => tick + 1)}
+											/>
+										}
+									>
+										<MethodList
+											methods={selectedPreset().authMethods ?? []}
+											index={methodIndex()}
+											onMove={setMethodIndex}
+											onSelect={chosen => {
+												if (chosen === 0) push({kind: 'chatgpt'});
+												else {
+													setInput('');
+													push({kind: 'apikey'});
+												}
+											}}
+										/>
+									</Show>
 								}
 							>
-								<MethodList
-									methods={selectedPreset().authMethods ?? []}
-									index={methodIndex()}
-									onMove={setMethodIndex}
-									onSelect={chosen => {
-										if (chosen === 0) push({kind: 'chatgpt'});
-										else {
-											setInput('');
-											push({kind: 'apikey'});
-										}
-									}}
+								<ManageList
+									presetTitle={managePreset().title}
+									rows={manageRows()}
+									index={manageIndex()}
+									onMove={setManageIndex}
+									onSelect={activateManage}
 								/>
 							</Show>
 						</Show>
@@ -917,98 +1128,111 @@ export function ConnectProviderModal(props: {
 						</text>
 					</box>
 					<box height={1} />
-					<For each={visiblePickerRows()}>
-						{(row) => {
-							if (row.kind === 'empty') {
-								return (
-									<text fg={colors().secondary} attributes={dim()}>
-										No providers match "{query()}"
-									</text>
-								);
-							}
-							if (row.kind === 'header') {
-								return (
-									// Headers reserve their OWN row (a bare text
-									// doesn't, and the next provider row paints
-									// over it — the "rs" left from Providers).
-									<box height={1}>
-										<text fg={colors().primary} attributes={bold()}>
-											{'  '}
-											{row.label}
-										</text>
-									</box>
-								);
-							}
-							const active = pickerSelection(row);
-							return (
-								<box
-									flexDirection="column"
-									height={2}
-									backgroundColor={
-										active ? activeRow().bg : undefined
-									}
-									{...({
-										onMouseMove: () => {
-											const navigable = navigableRows();
-											const rowIndex = navigable.findIndex(
-												candidate => candidate.preset === row.preset,
+					<Show
+						when={gridItems().length > 0}
+						fallback={
+							<text fg={colors().secondary} attributes={dim()}>
+								No providers match "{query()}"
+							</text>
+						}
+					>
+						{/* Responsive provider grid: 1 column on narrow cards,
+						    2 on medium, 3 on wide (providerColumns). */}
+						<For each={visibleGridRows()}>
+							{(entry) => (
+								<box flexDirection="row" height={2}>
+									<For each={entry.cells}>
+										{(cell, colIndex) => {
+											if (!cell?.preset) {
+												return (
+													<box
+														width={cellWidth()}
+														height={2}
+													/>
+												);
+											}
+											const active = pickerSelection(cell);
+											const gridPosition =
+												entry.row * columns() + colIndex();
+											return (
+												<box
+													width={cellWidth()}
+													flexDirection="column"
+													height={2}
+													backgroundColor={
+														active ? activeRow().bg : undefined
+													}
+													{...({
+														onMouseMove: () => setIndex(gridPosition),
+														onMouseUp: () => {
+															if (cell.kind === 'custom') {
+																push({kind: 'custom-base'});
+															} else if (cell.preset) {
+																setSelectedPreset(cell.preset);
+																setPresetAuth('api');
+																setInput('');
+																if (cell.preset.authMethods?.length) {
+																	push({kind: 'methods'});
+																} else {
+																	push({kind: 'apikey'});
+																}
+															}
+														},
+													} as any)}
+												>
+													<box flexDirection="row" height={1}>
+														<text
+															fg={
+																active
+																	? activeRow().fg
+																	: colors().text
+															}
+															attributes={bold()}
+														>
+															{active ? '❯ ' : '  '}
+															{truncateCell(
+																cell.preset.title,
+																Math.max(
+																	6,
+																	cellWidth() - 14,
+																),
+															)}
+														</text>
+														<box flexGrow={1} />
+														<Show
+															when={cell.count && cell.count > 0}
+														>
+															<text
+																fg={colors().success}
+																attributes={dim()}
+															>
+																{cell.count} connected
+															</text>
+														</Show>
+													</box>
+													<box height={1} paddingLeft={2}>
+														<text
+															fg={colors().secondary}
+															attributes={dim()}
+														>
+															{truncateCell(
+																cell.preset.description ??
+																	'Custom provider',
+																Math.max(8, cellWidth() - 4),
+															)}
+														</text>
+													</box>
+												</box>
 											);
-											if (rowIndex !== -1) setIndex(rowIndex);
-										},
-										onMouseUp: () => {
-											if (row.kind === 'custom') {
-												push({kind: 'custom-base'});
-											} else if (row.preset) {
-												setSelectedPreset(row.preset);
-												setPresetAuth('api');
-												setInput('');
-												if (row.preset.authMethods?.length) {
-													push({kind: 'methods'});
-												} else {
-													push({kind: 'apikey'});
-												}
-											}
-										},
-									} as any)}
-								>
-									{/* Settings-list layout: title + count on the
-									    first line, the model examples BELOW it —
-									    never same-line (OpenTUI clips the title
-									    when the row overflows). */}
-									<box flexDirection="row" height={1}>
-										<text
-											fg={
-												active
-													? activeRow().fg
-													: colors().text
-											}
-											attributes={bold()}
-										>
-											{active ? '❯ ' : '  '}
-											{row.preset?.title ?? 'Custom provider'}
-										</text>
-										<box flexGrow={1} />
-										<Show when={row.count && row.count > 0}>
-											<text
-												fg={colors().success}
-												attributes={dim()}
-											>
-												{row.count} connected
-											</text>
-										</Show>
-									</box>
-									<box height={1} paddingLeft={2}>
-										<text fg={colors().secondary} attributes={dim()}>
-											{row.preset?.description ?? 'Custom provider'}
-										</text>
-									</box>
+										}}
+									</For>
 								</box>
-							);
-						}}
-					</For>
+							)}
+						</For>
+					</Show>
 					<box flexGrow={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						↑/↓ select · Enter choose · Esc close
+						↑↓←→ navigate · Enter choose · Esc close
 					</text>
 				</Show>
 			</box>
@@ -1020,13 +1244,24 @@ function PromptField(props: {
 	value: string;
 	error?: string;
 	secret?: boolean;
-	description?: string;
+	placeholder?: string;
 }) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
+	const activeRow = () => activeRowPalette(colors());
+	// Input-box caret parity: the cell under the cursor blinks (400ms) via
+	// the shared spinnerFrame; the caret char is ALWAYS rendered (the last
+	// char, or a space on an empty/placeholder line) so the line width never
+	// shifts when it blinks.
+	const cursorVisible = () => (spinnerFrame() >> 2) % 2 === 0;
 	const shown = props.secret && props.value.length > 0
 		? '•'.repeat(Math.min(24, props.value.length))
 		: props.value;
+	const display =
+		shown.length > 0 ? shown : (props.placeholder ?? '');
+	const caretChar = display.length > 0 ? display[display.length - 1]! : ' ';
+	const valueText = display.slice(0, -1);
+	const filled = shown.length > 0;
 	return (
 		<box flexDirection="column">
 			<box
@@ -1036,16 +1271,31 @@ function PromptField(props: {
 				paddingX={1}
 				height={3}
 			>
-				<text fg={colors().text}>
-					{shown.length > 0 ? shown : ''}▌
-				</text>
+				{/* Placeholder INSIDE the field (dimmed) when empty — the hint
+				    never rides below the input; the caret blinks like the
+				    chat input box. */}
+				<box flexDirection="row">
+					<text
+						fg={filled ? colors().text : colors().secondary}
+						attributes={filled ? undefined : dim()}
+					>
+						{valueText}
+					</text>
+					<text
+						bg={cursorVisible() ? activeRow().bg : undefined}
+						fg={
+							cursorVisible()
+								? activeRow().fg
+								: filled
+									? colors().text
+									: colors().secondary
+						}
+						attributes={filled ? undefined : dim()}
+					>
+						{caretChar}
+					</text>
+				</box>
 			</box>
-			<Show when={props.description}>
-				<box height={1} />
-				<text fg={colors().secondary} attributes={dim()}>
-					{props.description}
-				</text>
-			</Show>
 			<Show when={props.error}>
 				<box height={1} />
 				<text fg={colors().warning} attributes={bold()}>
@@ -1094,6 +1344,56 @@ function MethodList(props: {
 							<box flexGrow={1} />
 							<text fg={colors().secondary} attributes={dim()}>
 								{method.detail}
+							</text>
+						</box>
+					);
+				}}
+			</For>
+			<box flexGrow={1} />
+			<text fg={colors().secondary} attributes={dim()}>
+				↑/↓ select · Enter choose · Esc back
+			</text>
+		</box>
+	);
+}
+
+function ManageList(props: {
+	presetTitle: string;
+	rows: Array<{id: string; baseUrl: string} | null>;
+	index: number;
+	onMove: (next: number) => void;
+	onSelect: (index: number) => void;
+}) {
+	const bold = () => createTextAttributes({bold: true});
+	const dim = () => createTextAttributes({dim: true});
+	const activeRow = () => activeRowPalette(colors());
+	return (
+		<box flexDirection="column">
+			<For each={props.rows}>
+				{(row, i) => {
+					const active = i() === props.index;
+					return (
+						<box
+							flexDirection="row"
+							height={1}
+							backgroundColor={active ? activeRow().bg : undefined}
+							{...({
+								onMouseMove: () => props.onMove(i()),
+								onMouseUp: () => props.onSelect(i()),
+							} as any)}
+						>
+							<text
+								fg={active ? activeRow().fg : colors().text}
+								attributes={bold()}
+							>
+								{active ? '❯ ' : '  '}
+								{row
+									? row.id
+									: `Connect a new ${props.presetTitle}`}
+							</text>
+							<box flexGrow={1} />
+							<text fg={colors().secondary} attributes={dim()}>
+								{row ? `${row.baseUrl} · edit` : ''}
 							</text>
 						</box>
 					);
