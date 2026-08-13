@@ -178,6 +178,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/cell\.contextSize/);
 	});
 
+	test('the model modal reserves the WRAPPED footer height', () => {
+		const modal = read('./components/model-modal.tsx');
+		// The long footer hint wraps to 2 lines on narrow cards; the card
+		// must reserve the real wrapped height or the hint renders outside.
+		expect(modal).toMatch(/const footerLines = \(\): number =>/);
+		expect(modal).toMatch(/wrapText\(footerHint, cardWidth\(\) - 6\)/);
+		expect(modal).toMatch(/capped \+ 10 \+ footerLines\(\)/);
+	});
+
 	test('the model modal asks for effort after selecting a model (opencode parity)', () => {
 		const modal = read('./components/model-modal.tsx');
 		expect(modal).toMatch(/Select effort/);
@@ -265,7 +274,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/const viewContentLines = \(\): number =>/);
 		expect(modal).toMatch(/case 'pick':/);
 		expect(modal).toMatch(/case 'manage':/);
-		expect(modal).toMatch(/Math\.max\(10, viewContentLines\(\) \+ 8\)/);
+		// The footer hint reserves its REAL wrapped height (narrow cards
+		// wrap it; a 1-line estimate left it below the card edge).
+		expect(modal).toMatch(/viewContentLines\(\) \+ 7 \+ footerLines\(\)/);
+		expect(modal).toMatch(/const footerLines = \(\): number =>/);
 	});
 
 	test('connected providers offer a MANAGE step to edit existing instances', () => {

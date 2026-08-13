@@ -6,6 +6,7 @@ import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {listProviders, type ProviderConfig} from '../config';
 import {spinnerFrame} from '../state';
+import {wrapText} from '../text-wrap';
 import {
 	codexAuthSummary,
 	hasCodexChatgptAuth,
@@ -944,8 +945,20 @@ export function ConnectProviderModal(props: {
 				return 2;
 		}
 	};
+	// The footer hint can wrap on narrow cards; reserve its REAL wrapped
+	// height so it never renders below the card edge.
+	const footerLines = (): number => {
+		const hint =
+			view().kind === 'pick'
+				? '↑↓←→ navigate · Enter choose · Esc close'
+				: 'Enter submit · Esc back';
+		return Math.max(1, wrapText(hint, cardWidth() - 6).length);
+	};
 	const cardHeight = (): number =>
-		Math.min(dims().height - 2, Math.max(10, viewContentLines() + 8));
+		Math.min(
+			dims().height - 2,
+			Math.max(10, viewContentLines() + 7 + footerLines()),
+		);
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
@@ -972,7 +985,10 @@ export function ConnectProviderModal(props: {
 		if (totalRows === 0) return [];
 		// The scroll window matches the CARD (fit-content), never a larger
 		// listVisible budget that would clip rows below the card edge.
-		const visibleRows = Math.max(1, Math.floor((cardHeight() - 8) / 2));
+		const visibleRows = Math.max(
+			1,
+			Math.floor((cardHeight() - 7 - footerLines()) / 2),
+		);
 		const selectedRow = Math.min(
 			Math.floor(index() / cols),
 			totalRows - 1,

@@ -5,6 +5,7 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {loadPreferences} from '../config';
+import {wrapText} from '../text-wrap';
 
 /** Reasoning effort tiers a model can be selected at (parity: nanocoder). */
 export const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
@@ -237,10 +238,19 @@ export function ModelModal(props: {
 	const listVisible = () => Math.max(3, Math.min(60, dims().height - 9));
 	// FIT-CONTENT: the card is exactly the model-list height + chrome, capped
 	// by the window — a short catalog shrinks the card, a huge one fills the
-	// screen and scrolls (never a fixed tall box).
+	// screen and scrolls (never a fixed tall box). The footer hint can WRAP
+	// on narrow cards, so its real wrapped height is reserved (a 1-line
+	// estimate left the wrapped hint rendering below the card edge).
+	const footerHint =
+		'Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect (list) · Esc close';
+	const footerLines = (): number =>
+		Math.max(1, wrapText(footerHint, cardWidth() - 6).length);
 	const cardHeight = (): number => {
 		const capped = Math.min(displayLines().length, listVisible());
-		return Math.min(dims().height - 2, Math.max(10, capped + 9));
+		return Math.min(
+			dims().height - 2,
+			Math.max(10, capped + 10 + footerLines()),
+		);
 	};
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -433,7 +443,7 @@ export function ModelModal(props: {
 		const lines = displayLines();
 		// The scroll window matches the CARD (fit-content), so rows never
 		// render below the card edge.
-		const visible = Math.max(1, cardHeight() - 9);
+		const visible = Math.max(1, cardHeight() - 10 - footerLines());
 		const start = Math.max(
 			0,
 			Math.min(
