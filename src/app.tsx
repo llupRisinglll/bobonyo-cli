@@ -6,6 +6,7 @@ import {createTextAttributes} from '@opentui/core';
 import {createMemo, createSignal, Show} from 'solid-js';
 import {
 	looksLikeToolCallText,
+	currentDateFragment,
 	parseArguments,
 	parseToolCalls,
 	ProviderError,
@@ -751,9 +752,12 @@ export function App() {
 			// Xiaomi automatic prefix caching) — the cost the user sees.
 			// Restore the session's original directory so the head stays
 			// byte-identical (codex/opencode resume restore it too).
+			let cwdChanged = false;
 			if (resumed.cwd && existsSync(resumed.cwd)) {
 				try {
+					const previousCwd = process.cwd();
 					process.chdir(resumed.cwd);
+					cwdChanged = process.cwd() !== previousCwd;
 				} catch {
 					// Original directory vanished/moved — keep the current
 					// one (a one-time cold start, not a per-turn cost).
@@ -823,7 +827,8 @@ export function App() {
 			if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
 			setCompletionTone('success');
 			setCompletionMessage(
-				`✔ Resumed session ${resumed.id} (${resumed.name}).`,
+				`✔ Resumed session ${resumed.id} (${resumed.name}).` +
+					(cwdChanged ? ` Working in ${process.cwd()}.` : ''),
 			);
 			resumeNoticeTimer = setTimeout(() => {
 				setCompletionMessage('');
@@ -1805,6 +1810,15 @@ export function App() {
 			role: 'user' as const,
 			content: scrubberRef.scrub(providerValue),
 		};
+		// CACHE HEAD PARITY (codex): the current DATE rides the request
+		// TAIL, not the system head. The dated message is what the provider
+		// sees AND what the context persists, so a day change or a next-day
+		// resume keeps the byte-stable head warm; the display transcript
+		// keeps the clean user text.
+		const datedUserMsg = {
+			...userMsg,
+			content: `${userMsg.content}${currentDateFragment()}`,
+		};
 		setInput('');
 		setBusy(true);
 		setStreaming('');
@@ -1833,7 +1847,7 @@ export function App() {
 		abortRef = controller;
 		const startedAt = Date.now();
 
-		let history: ChatMessageLike[] = [...context(), userMsg];
+		let history: ChatMessageLike[] = [...context(), datedUserMsg];
 		// F4: subscribe blocks auto-trigger, a custom command whose
 		// `subscribe:` keywords match the prompt injects its body.
 		for (const command of loadCustomCommands()) {

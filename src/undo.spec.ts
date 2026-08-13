@@ -132,6 +132,51 @@ describe('undoExchange (opencode-style session revert)', () => {
 		);
 	});
 
+	test('a HEALTHY tool-run context is reused as the exact slice (no heal rebuild)', () => {
+		// The resume cache fix made the heal tail-lag aware. /undo must not
+		// accidentally trigger a rebuild on a healthy context — the kept
+		// slice must be BYTE-IDENTICAL to the old list's prefix so the
+		// provider's prefix cache stays warm after the undo.
+		const messages = [
+			user('fix the bug'),
+			{role: 'assistant', content: ''} as ChatMessage,
+			{
+				role: 'tool',
+				content: '✦ Bash(ls)',
+				toolId: 'c1',
+				tool: {
+					name: 'execute_bash',
+					detail: 'ls',
+					output: 'file.txt',
+				},
+			} as ChatMessage,
+			user('now ship it'),
+			assistant('done'),
+		];
+		const context: ChatMessageLike[] = [
+			ctxUser('fix the bug'),
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{id: 'c1', name: 'bash', arguments: '{}'}],
+			},
+			{role: 'tool', content: '✦ Bash(ls)', tool_call_id: 'c1'},
+			ctxUser('now ship it'),
+			ctxAssistant('done'),
+		];
+		const {keptMessages, keptContext} = undoExchange(messages, context);
+		expect(keptMessages.map(m => m.content)).toEqual([
+			'fix the bug',
+			'',
+			'✦ Bash(ls)',
+		]);
+		// Exact slice reuse — the persisted bytes, untouched.
+		expect(keptContext).toEqual(context.slice(0, 3));
+		expect(JSON.stringify(keptContext)).toBe(
+			JSON.stringify(context.slice(0, 3)),
+		);
+	});
+
 	test('a lagged context (fewer users) is rebuilt from the kept transcript', () => {
 		const messages = [user('one'), assistant('a'), user('two'), assistant('b')];
 		// Context never got the second exchange (interrupted-turn lag).

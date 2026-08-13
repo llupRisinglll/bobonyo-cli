@@ -183,6 +183,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/process\.chdir\(resumed\.cwd\)/);
 	});
 
+	test('the current date rides the user-message tail, never the cached head', () => {
+		// codex delivers the time as a persisted per-turn fragment; ours
+		// used to sit in the system prompt, so a day change or next-day
+		// resume busted the ENTIRE prefix cache. The date must stay out of
+		// the system head and ride the provider user message instead.
+		const client = read('./client.ts');
+		expect(client).not.toMatch(/Current Date/);
+		expect(client).toMatch(/export function currentDateFragment/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/datedUserMsg/);
+	});
+
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
 		const input = read('./components/input-box.tsx');
 		// The arrow handler branches on ctrl and goes through the word-jump

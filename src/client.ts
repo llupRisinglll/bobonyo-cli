@@ -70,14 +70,15 @@ const NANO_SYSTEM_PROMPT =
 	'with no text unless it continues the goal you already explained.';
 
 /**
- * B1: volatile system-info block (cwd, date, AGENTS.md). SESSION-STABLE in
- * practice (cwd fixed, date changes once a day, AGENTS.md rarely edited), so
- * it does not bust per-turn prefix caches; the ANTHROPIC path puts the
+ * B1: volatile system-info block (cwd, AGENTS.md, skills). SESSION-STABLE in
+ * practice (cwd fixed by the resume restore, AGENTS.md/skills rarely edited),
+ * so it does not bust per-turn prefix caches; the ANTHROPIC path puts the
  * `cache_control` breakpoint on the STABLE block only, so the volatile tail
- * never invalidates the cached prefix.
+ * never invalidates the cached prefix. The CURRENT DATE deliberately does
+ * NOT live here — it rides the provider user-message tail (codex parity) so
+ * a day change never busts the head.
  */
 function buildVolatileSystemInfo(): string {
-	const dateStr = new Date().toISOString().split('T')[0]!;
 	const cwd = process.cwd();
 	let agents = '';
 	// Nearest AGENTS.md walking UP from the cwd (cwd wins), the same
@@ -109,8 +110,21 @@ function buildVolatileSystemInfo(): string {
 	return (
 		`## SYSTEM INFORMATION\n` +
 		`Current Working Directory: ${cwd}\n` +
-		`Current Date: ${dateStr}${agents}${skillsBlock}`
+		`${agents}${skillsBlock}`
 	);
+}
+
+/**
+ * Current-date fragment appended to the PROVIDER user message (codex
+ * parity: codex delivers the time as a per-turn user-message fragment that
+ * is persisted in the rollout). The date must NOT live in the cached system
+ * head — a day change (or a next-day resume) would bust the ENTIRE prefix
+ * cache. Appending it to the user message keeps the head byte-stable while
+ * the dated message is stored in the provider context, so a resumed
+ * conversation reproduces the exact prefix.
+ */
+export function currentDateFragment(date = new Date()): string {
+	return `\n\nCurrent date: ${date.toISOString().slice(0, 10)}`;
 }
 
 /**

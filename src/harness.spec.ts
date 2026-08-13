@@ -6,6 +6,7 @@ import {
 	buildAnthropicMessages,
 	buildOpenAIRequestBody,
 	buildSystemPrompt,
+	currentDateFragment,
 	type ChatMessageLike,
 } from './client';
 
@@ -28,6 +29,17 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		const a = buildSystemPrompt('full');
 		const b = buildSystemPrompt('full');
 		expect(b).toBe(a);
+	});
+
+	test('the current date lives in a TAIL fragment, never the cached head', () => {
+		// codex parity: the time is a per-turn user-message fragment that is
+		// persisted in the rollout. If the date sat in the system prompt, a
+		// day change (or a next-day resume) would bust the ENTIRE prefix
+		// cache — the exact cost this resume work targets.
+		expect(buildSystemPrompt('full')).not.toContain('Current Date');
+		expect(currentDateFragment(new Date('2026-08-13T00:00:00Z'))).toBe(
+			'\n\nCurrent date: 2026-08-13',
+		);
 	});
 
 	test('caveman instructions are injected into the stable prompt when enabled', () => {
