@@ -9,6 +9,7 @@ import {join} from 'node:path';
 import {activeEndpoint, cavemanMode, sessionId, setRetryingAttempt} from './state';
 import {resolveRulesFile} from './rules-file';
 import {builtinCavemanSkill, loadSkills} from './custom';
+import {readCodexAuth} from './codex-auth';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -298,6 +299,8 @@ export interface EndpointOverride {
 	apiKey: string;
 	model: string;
 	sdkProvider?: string;
+	/** Responses wire against the ChatGPT Codex backend (codex login). */
+	codexAccount?: boolean;
 	providerOptions?: Record<string, unknown>;
 	promptCacheKey?: boolean;
 }
@@ -433,6 +436,17 @@ async function streamOnce(
 	const endpoint = endpointOverride ?? activeEndpoint();
 	if (endpoint.sdkProvider === 'anthropic') {
 		return anthropicStreamOnce(
+			messages,
+			handlers,
+			signal,
+			tools,
+			endpoint,
+			toolProfile,
+			streamGuard,
+		);
+	}
+	if (endpoint.sdkProvider === 'responses') {
+		return responsesStreamOnce(
 			messages,
 			handlers,
 			signal,
@@ -966,6 +980,388 @@ async function anthropicStreamOnce(
 					if (chunk.delta?.stop_reason) finishReason = chunk.delta.stop_reason;
 					if (chunk.usage) usage = chunk.usage;
 					break;
+				default:
+					break;
+			}
+		}
+	}
+
+	return {
+		text,
+		reasoning,
+		toolCalls: [...toolCalls.values()].map(call => ({
+			id: call.id,
+			name: call.name,
+			rawArguments: call.arguments,
+			arguments: parseArguments(call.arguments),
+		})),
+		finishReason,
+		usage,
+	};
+}
+
+/**
+ * Responses-API tool blocks (OpenAI `/v1/responses` AND the ChatGPT Codex
+ * backend). The tool list is part of the cache head, so names are SORTED
+ * exactly like `openAIToolBlocks` — a per-turn tool-set change busts the
+ * prefix cache.
+ */
+export function responsesToolBlocks(
+	tools: ToolCatalogEntry[],
+	codexAccount = false,
+): Array<Record<string, unknown>> {
+	return [...tools]
+		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+		.map(tool => ({
+			type: 'function',
+			name: tool.name,
+			description: tool.description ?? '',
+			parameters: tool.parameters ?? {type: 'object', properties: {}},
+			// The ChatGPT Codex backend expects `strict: null` (reference:
+			// the codex CLI request body); the standard API takes a boolean.
+			strict: codexAccount ? null : false,
+		}));
+}
+
+/**
+ * Convert the app's OpenAI-shaped history to the Responses-API `input`
+ * array. System → `instructions` (never in `input`), user/assistant text →
+ * content items, assistant tool calls → `function_call` items, tool results
+ * → `function_call_output` items. ORDER MATTERS: each function_call must
+ * precede its matching function_call_output (the model pairs them by
+ * call_id).
+ */
+export function buildResponsesInput(messages: ChatMessageLike[]): unknown[] {
+	const input: unknown[] = [];
+	for (const message of messages) {
+		if (message.role === 'user') {
+			input.push({
+				role: 'user',
+				content: [{type: 'input_text', text: message.content}],
+			});
+		} else if (message.role === 'assistant') {
+			if (message.content) {
+				input.push({
+					role: 'assistant',
+					content: [{type: 'output_text', text: message.content}],
+				});
+			}
+			for (const call of message.tool_calls ?? []) {
+				input.push({
+					type: 'function_call',
+					call_id: call.id,
+					name: call.name,
+					arguments: call.arguments,
+				});
+			}
+		} else if (message.role === 'tool') {
+			input.push({
+				type: 'function_call_output',
+				call_id: message.tool_call_id ?? '',
+				output: message.content,
+			});
+		}
+	}
+	return input;
+}
+
+/**
+ * Resolve the bearer + account id for a Responses-wire endpoint. The
+ * ChatGPT Codex backend authenticates with the OAuth access token stored by
+ * `codex login` (`~/.codex/auth.json`) and needs the `chatgpt-account-id`
+ * header; the standard OpenAI API authenticates with the configured key.
+ */
+function resolveResponsesAuth(endpoint: {
+	apiKey: string;
+	codexAccount?: boolean;
+}): {bearer: string; accountId?: string} {
+	if (endpoint.codexAccount) {
+		const auth = readCodexAuth();
+		if (!auth.accessToken) {
+			throw new ProviderError(
+				401,
+				'No Codex ChatGPT login found. Run `codex login` or reconnect with an API key.',
+			);
+		}
+		return {bearer: auth.accessToken, accountId: auth.accountId};
+	}
+	return {bearer: endpoint.apiKey};
+}
+
+/**
+ * Responses-API streaming path (E3-style wire family + Codex). Handles the
+ * semantic SSE events: `response.output_item.added/done` (function_call
+ * items), `response.output_text.delta`, `response.content_part.delta`,
+ * `response.reasoning_summary_text.delta`, function-argument deltas (both
+ * the standard `response.function_call_arguments.delta` and the ChatGPT
+ * backend's `response.custom_tool_call_input.delta`) and
+ * `response.completed` (usage + terminal status).
+ */
+async function responsesStreamOnce(
+	messages: ChatMessageLike[],
+	handlers: StreamHandlers,
+	signal?: AbortSignal,
+	tools: ToolCatalogEntry[] = [],
+	endpointOverride?: EndpointOverride,
+	toolProfile?: string,
+	streamGuard?: StreamGuard,
+): Promise<TurnResult> {
+	const endpoint = endpointOverride ?? activeEndpoint();
+	const {stable, volatile} = buildSystemParts(toolProfile);
+	const instructions = volatile ? `${stable}\n\n${volatile}` : stable;
+	const {bearer, accountId} = resolveResponsesAuth(endpoint);
+	const body: Record<string, unknown> = {
+		model: endpoint.model,
+		store: false,
+		stream: true,
+		instructions,
+		input: buildResponsesInput(messages),
+		tools: responsesToolBlocks(tools, Boolean(endpoint.codexAccount)),
+		text: {verbosity: 'low'},
+	};
+	if (endpoint.codexAccount) {
+		// Session affinity for the ChatGPT Codex backend: the request body
+		// carries the persisted session id so the provider can keep a warm
+		// prefix across turns (same contract as prompt_cache_key).
+		body.prompt_cache_key = sessionId().slice(0, 64);
+	} else if (endpoint.promptCacheKey) {
+		body.prompt_cache_key = sessionId();
+	}
+	if (endpoint.providerOptions) {
+		Object.assign(body, endpoint.providerOptions);
+	}
+	const base = endpoint.baseUrl.replace(/\/+$/, '');
+	const url = endpoint.codexAccount
+		? `${base}/responses`
+		: `${base}/v1/responses`;
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			accept: 'text/event-stream',
+			...(bearer ? {authorization: `Bearer ${bearer}`} : {}),
+			...(endpoint.codexAccount && accountId
+				? {'chatgpt-account-id': accountId}
+				: {}),
+			...(endpoint.codexAccount
+				? {
+						'OpenAI-Beta': 'responses=experimental',
+						originator: 'bobonyo',
+						'session-id': sessionId(),
+					}
+				: {}),
+		},
+		body: JSON.stringify(body),
+		signal,
+	});
+
+	if (!response.ok) {
+		let message = '';
+		try {
+			const body = (await response.json()) as {
+				error?: {message?: string};
+			};
+			message = body.error?.message ?? '';
+		} catch {
+			// keep the status
+		}
+		throw new ProviderError(
+			response.status,
+			classifyHttpError(response.status, message),
+		);
+	}
+	if (!response.body) {
+		return {text: '', reasoning: '', toolCalls: [], finishReason: 'stop'};
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	let text = '';
+	let reasoning = '';
+	let finishReason = 'stop';
+	let usage: Record<string, unknown> | undefined;
+	const toolCalls = new Map<
+		number,
+		{id: string; name: string; arguments: string}
+	>();
+	const guard = {
+		maxOutputChars:
+			streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
+		maxDurationMs: streamGuard?.maxDurationMs ?? MAX_STREAM_DURATION_MS,
+		stallTimeoutMs: streamGuard?.stallTimeoutMs ?? 60_000,
+	};
+	const streamStartedAt = Date.now();
+	const stallGuard = createStallGuard(guard.stallTimeoutMs, () =>
+		reader.cancel(),
+	);
+	let eventName = '';
+
+	interface ResponseChunk {
+		type?: string;
+		error?: {message?: string};
+		delta?: unknown;
+		text?: string;
+		output_index?: number;
+		item?: {
+			type?: string;
+			id?: string;
+			call_id?: string;
+			name?: string;
+			arguments?: string;
+		};
+		response?: {
+			status?: string;
+			error?: {message?: string};
+			usage?: Record<string, unknown>;
+			incomplete_details?: {reason?: string};
+		};
+	}
+
+	while (true) {
+		const {done, value} = await stallGuard.race(reader.read());
+		stallGuard.clear();
+		if (done) break;
+		const elapsed = Date.now() - streamStartedAt;
+		if (elapsed > guard.maxDurationMs) {
+			throw new StreamRunawayError(
+				'duration',
+				`${Math.round(elapsed / 1000)}s`,
+			);
+		}
+		buffer += decoder.decode(value, {stream: true});
+		const lines = buffer.split('\n');
+		buffer = lines.pop() ?? '';
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith('event:')) {
+				eventName = trimmed.slice(6).trim();
+				continue;
+			}
+			if (!trimmed.startsWith('data:')) continue;
+			const payload = trimmed.slice(5).trim();
+			if (!payload || payload === '[DONE]') continue;
+			let chunk: ResponseChunk;
+			try {
+				chunk = JSON.parse(payload) as ResponseChunk;
+			} catch {
+				continue;
+			}
+			const type = chunk.type ?? eventName;
+			if (type === 'error' || chunk.error) {
+				throw new Error(
+					chunk.error?.message ?? 'responses stream error',
+				);
+			}
+			switch (type) {
+				case 'response.output_item.added': {
+					const item = chunk.item;
+					if (item?.type === 'function_call') {
+						toolCalls.set(chunk.output_index ?? toolCalls.size, {
+							id: item.call_id ?? item.id ?? '',
+							name: item.name ?? '',
+							arguments: item.arguments ?? '',
+						});
+					}
+					break;
+				}
+				case 'response.output_text.delta': {
+					const delta =
+						typeof chunk.delta === 'string' ? chunk.delta : '';
+					if (delta) {
+						text += delta;
+						if (text.length > guard.maxOutputChars) {
+							throw new StreamRunawayError(
+								'output',
+								`${Math.round(text.length / 1000)}k`,
+							);
+						}
+						handlers.onText(delta);
+					}
+					break;
+				}
+				case 'response.content_part.delta': {
+					const part =
+						typeof chunk.delta === 'string'
+							? chunk.delta
+							: (chunk.delta as {text?: string} | undefined)
+									?.text ?? '';
+					if (part) {
+						text += part;
+						if (text.length > guard.maxOutputChars) {
+							throw new StreamRunawayError(
+								'output',
+								`${Math.round(text.length / 1000)}k`,
+							);
+						}
+						handlers.onText(part);
+					}
+					break;
+				}
+				case 'response.reasoning_summary_text.delta': {
+					if (typeof chunk.delta === 'string' && chunk.delta) {
+						reasoning += chunk.delta;
+						handlers.onReasoning(chunk.delta);
+					}
+					break;
+				}
+				case 'response.function_call_arguments.delta':
+				case 'response.custom_tool_call_input.delta': {
+					if (typeof chunk.delta === 'string' && chunk.delta) {
+						const index =
+							chunk.output_index ?? toolCalls.size - 1;
+						const call = toolCalls.get(index);
+						if (call) call.arguments += chunk.delta;
+					}
+					break;
+				}
+				case 'response.output_item.done': {
+					const item = chunk.item;
+					if (item?.type === 'function_call') {
+						const index =
+							chunk.output_index ?? toolCalls.size - 1;
+						const existing = toolCalls.get(index);
+						if (existing) {
+							if (item.name) existing.name = item.name;
+							if (item.call_id) existing.id = item.call_id;
+							if (item.arguments) {
+								existing.arguments = item.arguments;
+							}
+						} else {
+							toolCalls.set(index, {
+								id: item.call_id ?? item.id ?? '',
+								name: item.name ?? '',
+								arguments: item.arguments ?? '',
+							});
+						}
+					}
+					break;
+				}
+				case 'response.completed': {
+					const response = chunk.response;
+					if (response?.status) {
+						finishReason =
+							response.status === 'completed'
+								? 'stop'
+								: response.status;
+					}
+					if (response?.usage) usage = response.usage;
+					break;
+				}
+				case 'response.incomplete': {
+					const reason =
+						chunk.response?.incomplete_details?.reason ??
+						'unknown';
+					throw new Error(
+						`Incomplete response returned, reason: ${reason}`,
+					);
+				}
+				case 'response.failed': {
+					throw new Error(
+						chunk.response?.error?.message ??
+							'response failed',
+					);
+				}
 				default:
 					break;
 			}

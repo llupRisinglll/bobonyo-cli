@@ -660,6 +660,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			'./components/settings-panel.tsx',
 			'./components/status-modal.tsx',
 			'./components/trust-modal.tsx',
+			'./components/connect-provider-modal.tsx',
 		]) {
 			const src = read(file);
 			expect(src).not.toMatch(/suppressFirstMouseUp/);
@@ -684,5 +685,33 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// OPTIONAL — a required glyph regresses the whole header to primary.
 		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(Ran\\s\+\)\(\.\*\)\$/);
 		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(\.\*\)\$/);
+	});
+
+	test('provider connect is a MODAL — the input-box wizard must not return', () => {
+		// The old /connect flow asked questions in the chat input row
+		// (`setPendingPrompt`); it was replaced by the opencode-style modal.
+		// A future "simplification" that resurrects the input-row wizard
+		// breaks the UX this guard exists for.
+		const app = read('./app.tsx');
+		const connectFlow = app
+			.slice(app.indexOf('const setupProviders'), app.indexOf('const submit ='))
+			.replace(/\/\*[\s\S]*?\*\//g, '')
+			.replace(/^\s*\/\/.*$/gm, '');
+		expect(connectFlow).not.toMatch(/setPendingPrompt/);
+		expect(connectFlow).toMatch(/setConnectOpen/);
+		expect(app).toMatch(
+			/<ConnectProviderModal[\s\S]*?onConnect=\{saveConnectedProvider\}/,
+		);
+	});
+
+	test('connect modal owns every key (gated in BOTH the app and input box)', () => {
+		// OpenTUI dispatches every keypress to every listener: a modal that
+		// is not in the gate list leaks arrow/typing keys into the chat
+		// input and the history scrollbox behind it (the k-scrolls bug
+		// class).
+		expect(read('./app.tsx')).toMatch(/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/);
+		expect(read('./components/input-box.tsx')).toMatch(
+			/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/,
+		);
 	});
 });

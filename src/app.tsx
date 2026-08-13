@@ -21,10 +21,12 @@ import {
 	listProviders,
 	loadConfig,
 	loadPreferences,
+	resolveApiKey,
 	resolveContextWindow,
 	resolveProvider,
 	saveConfig,
 	savePreferences,
+	type ProviderConfig,
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
@@ -109,6 +111,7 @@ import {CommandsModal} from './components/commands-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
+import {ConnectProviderModal} from './components/connect-provider-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
@@ -158,6 +161,8 @@ import {
 	completionTone,
 	commandsOpen,
 	setCommandsOpen,
+	connectOpen,
+	setConnectOpen,
 	deepSeekBalance,
 	diagnosticsCount,
 	discoveredModels,
@@ -440,6 +445,7 @@ export function App() {
 					modelEfforts: provider.modelEfforts,
 					contextWindow: provider.contextWindow ?? 128_000,
 					sdkProvider: provider.sdkProvider,
+					codexAccount: provider.codexAccount,
 					providerOptions: provider.providerOptions,
 					// EFFORT IS PER MODEL: the badge comes from the SELECTED
 					// model's catalog entry, never an env var.
@@ -517,6 +523,7 @@ export function App() {
 						apiKey: provider.apiKeyResolved,
 						model: provider.models[0] ?? 'mock-model-1',
 						sdkProvider: provider.sdkProvider,
+						codexAccount: provider.codexAccount,
 						providerOptions: provider.providerOptions,
 						promptCacheKey: provider.promptCacheKey,
 					})),
@@ -847,6 +854,7 @@ export function App() {
 							provider.contextWindow ??
 							128_000,
 						sdkProvider: provider.sdkProvider,
+						codexAccount: provider.codexAccount,
 						providerOptions: provider.providerOptions,
 						effort: provider.modelEfforts[sessionModel],
 						promptCacheKey: provider.promptCacheKey,
@@ -1066,7 +1074,8 @@ export function App() {
 			modelOpen() ||
 			agentsOpen() ||
 			detailsOpen() ||
-			resumeOpen()
+			resumeOpen() ||
+			connectOpen()
 		) {
 			// All modal keys (tabs/rows/search/Enter/Esc) are owned by the
 			// modal's own useKeyboard, nothing may leak to the app outside.
@@ -1486,22 +1495,16 @@ export function App() {
 		}
 	};
 
+	/**
+	 * `/setup-providers` — MODAL provider management. `delete` stays a
+	 * display-only command (no prompts); edit/add open the connect modal.
+	 */
 	const setupProviders = async (args: string) => {
 		if (busy()) {
-			appendInfo('Cannot run the wizard while a turn is running.');
+			appendInfo('Cannot manage providers while a turn is running.');
 			return;
 		}
 		const [action, idArg] = args.trim().split(/\s+/);
-		const ask = (question: string) =>
-			new Promise<string>(resolve =>
-				// Esc cancels the wizard step with an empty value instead of
-				// leaving the promise dangling forever.
-				setPendingPrompt({
-					question,
-					resolve,
-					onCancel: () => resolve(''),
-				}),
-			);
 		if (action === 'delete' && idArg) {
 			const config = loadConfig();
 			config.providers = config.providers.filter(
@@ -1512,125 +1515,22 @@ export function App() {
 			return;
 		}
 		if (action === 'edit' && idArg) {
-			// F8: guided edit form, values are prefilled by showing the
-			// current value in the question; an empty answer keeps it.
-			const existing = listProviders().find(
-				provider => provider.id.toLowerCase() === idArg.toLowerCase(),
-			);
-			const id = existing?.id ?? idArg;
-			const baseUrl =
-				(await ask(`Base URL (current: ${existing?.baseUrl ?? '-'})`)) ||
-				existing?.baseUrl;
-			if (!baseUrl) {
-				appendInfo('Edit cancelled.');
-				return;
-			}
-			const apiKey = await ask(
-				`API key (current: ${existing?.apiKeyResolved ? 'set' : '-'})`,
-			);
-			const modelsRaw = await ask(
-				`Models, comma-separated (current: ${existing?.models.join(',') ?? '-'})`,
-			);
-			const config = loadConfig();
-			config.providers = config.providers.filter(
-				provider => provider.id.toLowerCase() !== id.toLowerCase(),
-			);
-			config.providers.push({
-				id,
-				baseUrl,
-				...(apiKey ? {apiKey} : existing?.apiKey ? {apiKey: existing.apiKey} : {}),
-				models: modelsRaw
-					? modelsRaw.split(',').map(model => model.trim()).filter(Boolean)
-					: existing?.models ?? [],
-			});
-			saveConfig(config);
-			appendInfo(`Provider '${id}' updated.`);
+			setConnectOpen({editId: idArg});
 			return;
 		}
-		const id = await ask('Provider id');
-		if (!id) {
-			appendInfo('Setup cancelled.');
-			return;
-		}
-		const baseUrl = await ask('Base URL');
-		const apiKey = await ask('API key (or env:VAR)');
-		const modelsRaw = await ask('Models (comma-separated)');
-		const config = loadConfig();
-		config.providers = config.providers.filter(
-			provider => provider.id.toLowerCase() !== id.toLowerCase(),
-		);
-		config.providers.push({
-			id,
-			baseUrl,
-			...(apiKey ? {apiKey} : {}),
-			models: modelsRaw
-				.split(',')
-				.map(model => model.trim())
-				.filter(Boolean),
-		});
-		saveConfig(config);
-		appendInfo(
-			`Provider '${id}' saved. /providers to list, /model to switch.`,
-		);
+		setConnectOpen({});
 	};
 
-	/** `/codex` — scaffold the Codex (OpenAI) provider smoothly (one key). */
+	/** `/codex` — open the Codex connect modal (ChatGPT account or key). */
 	const connectCodex = async () => {
 		if (busy()) {
 			appendInfo('Cannot connect while a turn is running.');
 			return;
 		}
-		const existing = listProviders().find(
-			provider => provider.id.toLowerCase() === 'codex',
-		);
-		if (existing) {
-			appendInfo(
-				`Codex is already connected (${existing.baseUrl}). Edit via /setup-providers edit codex.`,
-			);
-			return;
-		}
-		const ask = (question: string) =>
-			new Promise<string>(resolve =>
-				setPendingPrompt({
-					question,
-					resolve,
-					onCancel: () => resolve(''),
-				}),
-			);
-		const apiKey = (await ask(
-			'Codex API key (sk-... or env:VAR)',
-		)).trim();
-		if (!apiKey) {
-			appendInfo('Codex connect cancelled.');
-			return;
-		}
-		const baseUrl = 'https://api.openai.com/v1';
-		const config = loadConfig();
-		config.providers = config.providers.filter(
-			provider => provider.id.toLowerCase() !== 'codex',
-		);
-		config.providers.push({
-			id: 'codex',
-			name: 'Codex',
-			baseUrl,
-			apiKey,
-			// Live model discovery keeps the Codex catalog up to date.
-			modelDiscoveryUrl: `${baseUrl.replace(/\/+$/, '')}/models`,
-			contextWindow: 400_000,
-			models: [
-				'gpt-5.5-codex',
-				'gpt-5.5-codex-high',
-				'gpt-5.4-codex',
-				'gpt-5.4-codex-mini',
-			],
-		});
-		saveConfig(config);
-		showToast('Codex provider connected');
-		appendInfo(
-			'Codex provider saved. Switch to it with /model or /provider codex.',
-		);
+		setConnectOpen({provider: 'codex'});
 	};
-	/** `/connect` — smooth provider-connect flow (Codex or custom wizard). */
+
+	/** `/connect` — open the provider-connect modal (opencode-style). */
 	const connectProvider = async (args: string) => {
 		if (busy()) {
 			appendInfo('Cannot connect while a turn is running.');
@@ -1638,29 +1538,55 @@ export function App() {
 		}
 		const name = args.trim().toLowerCase();
 		if (name === 'codex') {
-			await connectCodex();
+			setConnectOpen({provider: 'codex'});
 			return;
 		}
-		if (name) {
-			await setupProviders(args.trim());
+		if (name === 'custom') {
+			setConnectOpen({provider: 'custom'});
 			return;
 		}
-		const ask = (question: string) =>
-			new Promise<string>(resolve =>
-				setPendingPrompt({
-					question,
-					resolve,
-					onCancel: () => resolve(''),
-				}),
-			);
-		const choice = (
-			await ask('Connect provider: codex (OpenAI) or custom?')
-		).trim().toLowerCase();
-		if (choice === 'codex' || choice === 'c') {
-			await connectCodex();
-			return;
+		setConnectOpen({});
+	};
+
+	/**
+	 * The connect modal's save action: upsert the provider into the config,
+	 * refresh the model catalogs, and (opencode parity) drop the user into
+	 * the model picker afterwards — unless this was an EDIT opened from the
+	 * settings surface, where the modal closes back to the settings list.
+	 */
+	const saveConnectedProvider = (provider: ProviderConfig) => {
+		const wasEdit = Boolean(connectOpen()?.editId);
+		const config = loadConfig();
+		config.providers = config.providers.filter(
+			candidate => candidate.id.toLowerCase() !== provider.id.toLowerCase(),
+		);
+		config.providers.push(provider);
+		saveConfig(config);
+		refreshModelCatalogs();
+		// Editing the ACTIVE provider applies the new base URL/credentials
+		// immediately instead of waiting for a model switch.
+		if (activeEndpoint().id.toLowerCase() === provider.id.toLowerCase()) {
+			setActiveEndpoint(prev => ({
+				...prev,
+				baseUrl: provider.baseUrl,
+				apiKey: resolveApiKey(provider.apiKey),
+				sdkProvider: provider.sdkProvider,
+				codexAccount: provider.codexAccount,
+				providerOptions: provider.providerOptions,
+				promptCacheKey: provider.promptCacheKey,
+				alwaysAllow: provider.alwaysAllow,
+			}));
 		}
-		await setupProviders('');
+		setConnectOpen(null);
+		showToast(`Provider '${provider.id}' connected`);
+		appendInfo(
+			`Provider '${provider.id}' saved. Switch to it with /model or /provider ${provider.id}.`,
+		);
+		if (!wasEdit) {
+			setModelModalInherit(false);
+			setFallbackTarget(null);
+			setModelOpen(true);
+		}
 	};
 
 	const submit = async (
@@ -3340,6 +3266,7 @@ export function App() {
 				provider.contextWindow ??
 				128_000,
 			sdkProvider: provider.sdkProvider,
+			codexAccount: provider.codexAccount,
 			providerOptions: provider.providerOptions,
 			// The modal's ←/→ effort override wins; otherwise the model's
 			// configured catalog effort applies.
@@ -3414,6 +3341,7 @@ export function App() {
 				provider.contextWindow ??
 				128_000,
 			sdkProvider: provider.sdkProvider,
+			codexAccount: provider.codexAccount,
 			providerOptions: provider.providerOptions,
 			effort: (provider.modelEfforts ?? {})[model],
 			promptCacheKey: provider.promptCacheKey,
@@ -3603,14 +3531,11 @@ export function App() {
 							title={list().title}
 							rows={list().rows}
 							onEditProvider={(providerId) => {
-								// Close EVERYTHING, then open the guided edit
-								// wizard (base URL → API key → models), the
-								// same flow `/setup-providers edit <id>` uses.
-								setSettingsList(null);
-								setSettingsOpen(false);
-								queueMicrotask(() => {
-									void setupProviders(`edit ${providerId}`);
-								});
+								// Open the connect MODAL prefilled with the
+								// provider (opencode-style edit), never the
+								// input-row wizard. The settings list stays
+								// open behind the modal.
+								setConnectOpen({editId: providerId});
 							}}
 							onInsert={(text) => {
 								setSettingsList(null);
@@ -3638,11 +3563,10 @@ export function App() {
 					currentModel={activeEndpoint().model}
 					onSelect={selectModel}
 					onConnectProvider={() => {
-						// The provider wizard prompts from the input box, so
-						// close the modal first; the newly saved provider is
-						// picked up on the next /model (config is re-read).
-						setModelOpen(false);
-						void setupProviders('');
+						// The connect modal floats ABOVE the model picker
+						// (zIndex 3200 > 3000); once connected, the picker
+						// refreshes with the new provider behind it.
+						setConnectOpen({});
 					}}
 					onClose={() => {
 						setModelOpen(false);
@@ -3743,6 +3667,18 @@ export function App() {
 						pendingTrust()!.resolve(false);
 						setPendingTrust(null);
 					}}
+				/>
+			</Show>
+			{/* Provider-connect MODAL (opencode-style picker → auth method →
+			    in-modal prompts). Rendered LAST so it floats above every
+			    other modal; the model/settings pickers stay open behind it
+			    and refresh when the provider saves. */}
+			<Show when={connectOpen()}>
+				<ConnectProviderModal
+					provider={connectOpen()!.provider}
+					editId={connectOpen()!.editId}
+					onConnect={saveConnectedProvider}
+					onClose={() => setConnectOpen(null)}
 				/>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference

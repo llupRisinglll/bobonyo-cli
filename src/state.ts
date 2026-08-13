@@ -295,6 +295,8 @@ export interface ActiveEndpoint {
 	 *  model's catalog entry, never an environment variable. */
 	effort?: string;
 	sdkProvider?: string;
+	/** Responses wire against the ChatGPT Codex backend (codex login). */
+	codexAccount?: boolean;
 	providerOptions?: Record<string, unknown>;
 	promptCacheKey?: boolean;
 	alwaysAllow?: string[];
@@ -341,6 +343,16 @@ export const [pendingPrompt, setPendingPrompt] = createSignal<{
 export const [pendingTrust, setPendingTrust] = createSignal<{
 	directory: string;
 	resolve: (trust: boolean) => void;
+} | null>(null);
+/**
+ * Provider-connect MODAL (opencode-style): `/connect`, `/codex`, the model
+ * modal's C shortcut and the settings provider rows open it — NEVER the
+ * chat input row. `provider` preselects Codex/Custom, `editId` prefills
+ * the custom form for an existing provider.
+ */
+export const [connectOpen, setConnectOpen] = createSignal<{
+	provider?: 'codex' | 'custom';
+	editId?: string;
 } | null>(null);
 /** Estimated context usage % (E7): tokens / provider context window. */
 export const [contextPercent, setContextPercent] = createSignal(0);

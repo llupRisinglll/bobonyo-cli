@@ -27,6 +27,14 @@ export interface ProviderConfig {
 	models?: Array<string | {name: string; effort?: string}>;
 	/** SDK family; the rewrite implements `openai-compatible` only. */
 	sdkProvider?: string;
+	/**
+	 * Responses wire against the ChatGPT Codex backend
+	 * (`https://chatgpt.com/backend-api/codex`), authenticated with the
+	 * `codex login` credentials (`~/.codex/auth.json`). Set for the Codex
+	 * provider's "ChatGPT account" connection; API-key Codex connections use
+	 * the standard OpenAI responses endpoint instead.
+	 */
+	codexAccount?: boolean;
 	/** Optional live model-discovery endpoint (`/v1/models`). */
 	modelDiscoveryUrl?: string;
 	/** Provider context window (tokens) for the ctx% indicator. */
