@@ -14,11 +14,13 @@ import {
 /**
  * OpenCode-style provider connect MODAL (parity: opencode's
  * dialog-provider). NEVER the chat input row: a provider picker → auth
- * method selection → in-modal prompt steps. Presets (Codex / DeepSeek /
- * Xiaomi MiMo) know their endpoints, so only the NAME + API key are asked;
- * custom providers ask everything. Naming is per-instance: the same
- * endpoint may be connected multiple times under different names (the user
- * organizes/splits models). Each step owns every keypress; Esc steps back.
+ * method selection → in-modal prompt steps. Presets know their endpoints,
+ * so only the API key is asked (plus an OPTIONAL name, LAST); custom
+ * providers ask base URL → key → models → name. A blank name uses the
+ * preset id with a `(n)` suffix when it is already connected, so the same
+ * endpoint can exist under multiple names (model org/splitting). Rows use
+ * the settings-list navigation/highlight language (always-bold labels,
+ * active row background + fg).
  */
 
 const CODEX_MODELS = [
@@ -38,7 +40,7 @@ const XIAOMI_MODELS = [
 ];
 
 export interface ProviderPreset {
-	/** Default provider id/name; the user may rename each connection. */
+	/** Default provider id/name; a blank name falls back to this. */
 	id: string;
 	title: string;
 	description: string;
@@ -56,7 +58,12 @@ export interface ProviderPreset {
 	authMethods?: Array<{id: 'account' | 'api'; label: string; detail: string}>;
 }
 
-/** The provider catalog the connect modal offers (order = picker order). */
+/**
+ * Preset catalog. Scope = providers the harness can ACTUALLY talk to with
+ * the existing wires (openai-compatible, anthropic, responses); the list is
+ * inspired by opencode's provider catalog. Most carry a `/models` discovery
+ * URL so the real catalog replaces the seeds after connect.
+ */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
 	{
 		id: 'codex',
@@ -78,6 +85,33 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		],
 	},
 	{
+		id: 'openai',
+		title: 'OpenAI',
+		description: 'gpt-5.5 / gpt-5.4',
+		category: 'Popular',
+		baseUrl: 'https://api.openai.com/v1',
+		models: ['gpt-5.5', 'gpt-5.5-mini', 'gpt-5.4', 'gpt-5.4-mini'],
+		modelDiscoveryUrl: 'https://api.openai.com/v1/models',
+	},
+	{
+		id: 'anthropic',
+		title: 'Anthropic',
+		description: 'claude-sonnet / claude-opus',
+		category: 'Popular',
+		baseUrl: 'https://api.anthropic.com',
+		models: ['claude-sonnet-4-6', 'claude-opus-4', 'claude-sonnet-4-5'],
+		sdkProvider: 'anthropic',
+	},
+	{
+		id: 'openrouter',
+		title: 'OpenRouter',
+		description: 'one key, many models',
+		category: 'Popular',
+		baseUrl: 'https://openrouter.ai/api',
+		models: ['openrouter/auto'],
+		modelDiscoveryUrl: 'https://openrouter.ai/api/v1/models',
+	},
+	{
 		id: 'deepseek',
 		title: 'DeepSeek',
 		description: 'deepseek-chat / deepseek-reasoner',
@@ -96,6 +130,69 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 		// normalize() auto-adds modelDiscoveryUrl for token-plan hosts.
 	},
 	{
+		id: 'mistral',
+		title: 'Mistral',
+		description: 'mistral-large',
+		category: 'Providers',
+		baseUrl: 'https://api.mistral.ai',
+		models: ['mistral-large'],
+		modelDiscoveryUrl: 'https://api.mistral.ai/v1/models',
+	},
+	{
+		id: 'xai',
+		title: 'xAI',
+		description: 'grok-4',
+		category: 'Providers',
+		baseUrl: 'https://api.x.ai',
+		models: ['grok-4'],
+		modelDiscoveryUrl: 'https://api.x.ai/v1/models',
+	},
+	{
+		id: 'groq',
+		title: 'Groq',
+		description: 'fast llama',
+		category: 'Providers',
+		baseUrl: 'https://api.groq.com/openai',
+		models: ['llama-4-scout-17b-16e-instruct'],
+		modelDiscoveryUrl: 'https://api.groq.com/openai/v1/models',
+	},
+	{
+		id: 'cerebras',
+		title: 'Cerebras',
+		description: 'llama / deepseek on wafer',
+		category: 'Providers',
+		baseUrl: 'https://api.cerebras.ai',
+		models: ['llama-3.3-70b'],
+		modelDiscoveryUrl: 'https://api.cerebras.ai/v1/models',
+	},
+	{
+		id: 'together',
+		title: 'Together AI',
+		description: 'open-source catalog',
+		category: 'Providers',
+		baseUrl: 'https://api.together.xyz',
+		models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo'],
+		modelDiscoveryUrl: 'https://api.together.xyz/v1/models',
+	},
+	{
+		id: 'fireworks',
+		title: 'Fireworks AI',
+		description: 'fast inference',
+		category: 'Providers',
+		baseUrl: 'https://api.fireworks.ai/inference',
+		models: ['accounts/fireworks/models/llama-v3p3-70b-instruct'],
+		modelDiscoveryUrl: 'https://api.fireworks.ai/inference/v1/models',
+	},
+	{
+		id: 'nvidia',
+		title: 'NVIDIA',
+		description: 'nemotron',
+		category: 'Providers',
+		baseUrl: 'https://integrate.api.nvidia.com',
+		models: ['nvidia/llama-3.3-nemotron-super-49b-v1'],
+		modelDiscoveryUrl: 'https://integrate.api.nvidia.com/v1/models',
+	},
+	{
 		id: 'custom',
 		title: 'Custom provider',
 		description: 'Bring your own endpoint',
@@ -107,14 +204,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 type View =
 	| {kind: 'pick'}
-	| {kind: 'name'}
 	| {kind: 'methods'}
 	| {kind: 'apikey'}
 	| {kind: 'chatgpt'}
-	| {kind: 'custom-id'}
+	| {kind: 'name'}
 	| {kind: 'custom-base'}
 	| {kind: 'custom-key'}
-	| {kind: 'custom-models'};
+	| {kind: 'custom-models'}
+	| {kind: 'custom-name'};
 
 export interface PickerRow {
 	kind: 'provider' | 'custom' | 'header' | 'empty';
@@ -150,6 +247,23 @@ export function filterConnectPicker(
 	}
 	if (out.length === 0) out.push({kind: 'empty'});
 	return out;
+}
+
+/**
+ * Blank-name default: the preset id, suffixed with `(n)` when already
+ * connected, so repeated connects never clobber each other (pure).
+ */
+export function defaultProviderName(
+	base: string,
+	existing?: Array<{id: string}>,
+): string {
+	const ids = new Set(
+		(existing ?? listProviders()).map(provider => provider.id.toLowerCase()),
+	);
+	if (!ids.has(base.toLowerCase())) return base;
+	let n = 2;
+	while (ids.has(`${base} (${n})`.toLowerCase())) n += 1;
+	return `${base} (${n})`;
 }
 
 /** Codex provider payloads (pure, unit-tested). */
@@ -209,7 +323,28 @@ export function xiaomiProvider(name: string, apiKey: string): ProviderConfig {
 	};
 }
 
-/** Generic preset builder (API-key auth; Codex routes to the codex builder). */
+/** Generic preset builder for OpenAI-compatible endpoints (pure). */
+export function openAICompatibleProvider(
+	preset: ProviderPreset,
+	name: string,
+	apiKey: string,
+): ProviderConfig {
+	const id = name.trim() || preset.id;
+	return {
+		id,
+		name: id,
+		baseUrl: preset.baseUrl,
+		...(apiKey.trim() ? {apiKey: apiKey.trim()} : {}),
+		...(preset.modelDiscoveryUrl
+			? {modelDiscoveryUrl: preset.modelDiscoveryUrl}
+			: {}),
+		...(preset.sdkProvider ? {sdkProvider: preset.sdkProvider} : {}),
+		...(preset.contextWindow ? {contextWindow: preset.contextWindow} : {}),
+		models: preset.models,
+	};
+}
+
+/** Build the provider for a preset + stashed API key (codex routes apart). */
 export function buildPresetProvider(
 	preset: ProviderPreset,
 	name: string,
@@ -219,7 +354,7 @@ export function buildPresetProvider(
 	if (!apiKey.trim()) return null;
 	if (preset.id === 'deepseek') return deepseekProvider(name, apiKey);
 	if (preset.id === 'xiaomi') return xiaomiProvider(name, apiKey);
-	return null;
+	return openAICompatibleProvider(preset, name, apiKey);
 }
 
 export function customProvider(config: {
@@ -256,13 +391,12 @@ export function ConnectProviderModal(props: {
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
-	// opencode flow: picker → name → (auth method →) prompt steps.
 	const initialView = (): View[] => {
 		if (props.provider && props.provider !== 'custom') {
-			return [{kind: 'name'}, {kind: 'pick'}];
+			return [{kind: 'apikey'}, {kind: 'pick'}];
 		}
 		if (props.provider === 'custom' || props.editId) {
-			return [{kind: 'custom-id'}, {kind: 'pick'}];
+			return [{kind: 'custom-base'}, {kind: 'pick'}];
 		}
 		return [{kind: 'pick'}];
 	};
@@ -285,7 +419,10 @@ export function ConnectProviderModal(props: {
 	const [selectedPreset, setSelectedPreset] = createSignal<ProviderPreset>(
 		PROVIDER_PRESETS[0]!,
 	);
-	const [presetName, setPresetName] = createSignal('');
+	/** Stashed API key entered BEFORE the optional name step. */
+	const [presetKey, setPresetKey] = createSignal('');
+	/** Codex auth mode chosen in the methods step. */
+	const [presetAuth, setPresetAuth] = createSignal<'account' | 'api'>('api');
 	// Force auth.json re-reads (the "check again" action after `codex login`).
 	const [authTick, setAuthTick] = createSignal(0);
 	const auth = createMemo(() => {
@@ -299,9 +436,6 @@ export function ConnectProviderModal(props: {
 			)
 		: undefined;
 
-	// Custom step values, kept across steps so Esc-back preserves what was
-	// already entered.
-	const [customId, setCustomId] = createSignal(editProvider?.id ?? '');
 	const [customBase, setCustomBase] = createSignal(
 		editProvider?.baseUrl ?? '',
 	);
@@ -310,12 +444,13 @@ export function ConnectProviderModal(props: {
 		editProvider?.models.join(', ') ?? '',
 	);
 
-	const stepDefault = createMemo(() => {
-		switch (view().kind) {
+	const stepDefault = (current: View): string => {
+		switch (current.kind) {
+			// The name is OPTIONAL and asked LAST — start empty; the default
+			// (id + `(n)` when taken) applies when nothing is typed.
 			case 'name':
-				return presetName() || selectedPreset().id;
-			case 'custom-id':
-				return customId();
+			case 'custom-name':
+				return '';
 			case 'custom-base':
 				return customBase();
 			case 'custom-key':
@@ -325,11 +460,14 @@ export function ConnectProviderModal(props: {
 			default:
 				return '';
 		}
-	});
+	};
 	// On view change the input starts from that step's stored value; typing
-	// never rewrites it (the stored value only changes on submit).
+	// never rewrites it (the stored value only changes on submit). The
+	// effect tracks the VIEW ITSELF, not the derived default: two steps with
+	// the same default ('' API key → '' name) would otherwise keep the
+	// previous step's typed text in the input.
 	createEffect(() => {
-		setInput(stepDefault());
+		setInput(stepDefault(view()));
 		setError('');
 	});
 
@@ -374,32 +512,28 @@ export function ConnectProviderModal(props: {
 		const row = navigableRows()[index()];
 		if (!row?.preset) return;
 		if (row.kind === 'custom') {
-			push({kind: 'custom-id'});
+			push({kind: 'custom-base'});
 			return;
 		}
 		setSelectedPreset(row.preset);
-		setPresetName(row.preset.id);
-		push({kind: 'name'});
+		setPresetAuth('api');
+		setInput('');
+		if (row.preset.authMethods?.length) push({kind: 'methods'});
+		else push({kind: 'apikey'});
 	};
 
-	const submitName = (): void => {
-		const preset = selectedPreset();
-		const name = input().trim() || preset.id;
-		setPresetName(name);
-		if (preset.authMethods?.length) {
-			setMethodIndex(0);
-			push({kind: 'methods'});
-		} else {
-			setInput('');
-			push({kind: 'apikey'});
-		}
-	};
 	const submitApiKey = (): void => {
+		setPresetKey(input().trim());
+		push({kind: 'name'});
+	};
+	const connectPreset = (): void => {
 		const preset = selectedPreset();
-		const provider =
-			preset.id === 'codex'
-				? codexApiKeyProvider(input(), presetName())
-				: buildPresetProvider(preset, presetName(), input());
+		const name = input().trim() || defaultProviderName(preset.id);
+		if (presetAuth() === 'account') {
+			props.onConnect(codexAccountProvider(name));
+			return;
+		}
+		const provider = buildPresetProvider(preset, name, presetKey());
 		if (!provider) {
 			setError('API key is required.');
 			return;
@@ -407,24 +541,17 @@ export function ConnectProviderModal(props: {
 		props.onConnect(provider);
 	};
 	const connectChatgpt = (): void => {
+		// ChatGPT-account mode: login confirmed → the optional name is asked
+		// LAST (same flow as the key path); not logged in → re-check.
 		if (hasCodexChatgptAuth(auth())) {
-			props.onConnect(codexAccountProvider(presetName()));
+			setPresetAuth('account');
+			push({kind: 'name'});
 			return;
 		}
 		setAuthTick(tick => tick + 1);
 	};
 	const submitCustom = (): void => {
 		switch (view().kind) {
-			case 'custom-id': {
-				const id = input().trim();
-				if (!id) {
-					setError('Provider id is required.');
-					return;
-				}
-				setCustomId(id);
-				push({kind: 'custom-base'});
-				return;
-			}
 			case 'custom-base': {
 				const baseUrl = input().trim();
 				if (!baseUrl) {
@@ -442,12 +569,19 @@ export function ConnectProviderModal(props: {
 			}
 			case 'custom-models': {
 				setCustomModels(input());
-				const models = input()
+				push({kind: 'custom-name'});
+				return;
+			}
+			case 'custom-name': {
+				const models = customModels()
 					.split(',')
 					.map(model => model.trim())
 					.filter(Boolean);
+				const id =
+					input().trim() ||
+					(editProvider?.id || defaultProviderName('custom'));
 				const provider = customProvider({
-					id: customId(),
+					id,
 					baseUrl: customBase(),
 					apiKey:
 						customKey() ||
@@ -537,7 +671,7 @@ export function ConnectProviderModal(props: {
 			return true;
 		}
 		if (event.name === 'return') {
-			if (current.kind === 'name') submitName();
+			if (current.kind === 'name') connectPreset();
 			else if (current.kind === 'apikey') submitApiKey();
 			else submitCustom();
 			return true;
@@ -558,7 +692,7 @@ export function ConnectProviderModal(props: {
 	});
 
 	const cardWidth = () => Math.min(78, Math.max(60, dims().width - 6));
-	const cardHeight = () => Math.min(18, Math.max(11, dims().height - 8));
+	const cardHeight = () => Math.min(20, Math.max(12, dims().height - 8));
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
@@ -567,9 +701,8 @@ export function ConnectProviderModal(props: {
 		y >= cardY() &&
 		y <= cardY() + cardHeight();
 	const pickerSelection = (row: PickerRow): boolean => {
-		// Row OBJECTS are rebuilt per render (filterConnectPicker maps), but
-		// the preset refs come from PROVIDER_PRESETS — compare by preset so
-		// the highlight tracks the selection (identity compare was the bug).
+		// Row OBJECTS are rebuilt per render, but the preset refs are stable
+		// (from PROVIDER_PRESETS) — compare by preset, not object identity.
 		return (
 			Boolean(row.preset) &&
 			row.preset === navigableRows()[index()]?.preset
@@ -580,35 +713,37 @@ export function ConnectProviderModal(props: {
 		switch (view().kind) {
 			case 'pick':
 				return 'Connect a provider';
-			case 'name':
-				return `${selectedPreset().title} name`;
 			case 'methods':
 				return selectedPreset().title;
 			case 'apikey':
-				return 'API key';
+				return `${selectedPreset().title} API key`;
 			case 'chatgpt':
 				return 'ChatGPT account';
-			case 'custom-id':
-				return 'Provider id';
+			case 'name':
+				return `${selectedPreset().title} name`;
 			case 'custom-base':
 				return 'Base URL';
 			case 'custom-key':
 				return 'API key (optional)';
 			case 'custom-models':
 				return 'Models (comma-separated, optional)';
+			case 'custom-name':
+				return 'Provider name';
 		}
 	};
 
 	const promptDescription = (): string | undefined => {
 		switch (view().kind) {
-			case 'name':
-				return 'id used in /model and /provider — connect the same endpoint under multiple names';
 			case 'apikey':
 				return 'sk-... or env:VAR';
+			case 'name':
+				return `optional — empty uses ${defaultProviderName(selectedPreset().id)}`;
 			case 'custom-base':
 				return 'e.g. https://api.deepseek.com/v1';
 			case 'custom-models':
 				return 'e.g. deepseek-chat, deepseek-reasoner';
+			case 'custom-name':
+				return `optional — empty uses ${editProvider?.id ?? defaultProviderName('custom')}`;
 			default:
 				return undefined;
 		}
@@ -716,10 +851,15 @@ export function ConnectProviderModal(props: {
 							}
 							if (row.kind === 'header') {
 								return (
-									<text fg={colors().primary} attributes={bold()}>
-										{'  '}
-										{row.label}
-									</text>
+									// Headers reserve their OWN row (a bare text
+									// doesn't, and the next provider row paints
+									// over it — the "rs" left from Providers).
+									<box height={1}>
+										<text fg={colors().primary} attributes={bold()}>
+											{'  '}
+											{row.label}
+										</text>
+									</box>
 								);
 							}
 							const active = pickerSelection(row);
@@ -740,22 +880,29 @@ export function ConnectProviderModal(props: {
 										},
 										onMouseUp: () => {
 											if (row.kind === 'custom') {
-												push({kind: 'custom-id'});
+												push({kind: 'custom-base'});
 											} else if (row.preset) {
 												setSelectedPreset(row.preset);
-												setPresetName(row.preset.id);
-												push({kind: 'name'});
+												setPresetAuth('api');
+												setInput('');
+												if (row.preset.authMethods?.length) {
+													push({kind: 'methods'});
+												} else {
+													push({kind: 'apikey'});
+												}
 											}
 										},
 									} as any)}
 								>
+									{/* Settings-list navigation language: label is
+									    ALWAYS bold, active row swaps fg + bg. */}
 									<text
 										fg={
 											active
 												? activeRow().fg
 												: colors().text
 										}
-										attributes={active ? bold() : undefined}
+										attributes={bold()}
 									>
 										{active ? '❯ ' : '  '}
 										{row.preset?.title ?? 'Custom provider'}
@@ -848,7 +995,7 @@ function MethodList(props: {
 						>
 							<text
 								fg={active ? activeRow().fg : colors().text}
-								attributes={active ? bold() : undefined}
+								attributes={bold()}
 							>
 								{active ? '❯ ' : '  '}
 								{method.label}

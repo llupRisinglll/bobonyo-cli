@@ -4,8 +4,10 @@ import {
 	codexAccountProvider,
 	codexApiKeyProvider,
 	customProvider,
+	defaultProviderName,
 	deepseekProvider,
 	filterConnectPicker,
+	openAICompatibleProvider,
 	PROVIDER_PRESETS,
 	xiaomiProvider,
 } from './components/connect-provider-modal';
@@ -34,7 +36,7 @@ describe('filterConnectPicker (opencode-style provider list)', () => {
 	});
 
 	test('no match returns the empty row (never a blank card)', () => {
-		expect(filterConnectPicker(rows, 'anthropic')).toEqual([
+		expect(filterConnectPicker(rows, 'azure')).toEqual([
 			{kind: 'empty'},
 		]);
 	});
@@ -44,7 +46,22 @@ describe('provider presets (known endpoints, never asked)', () => {
 	test('every preset carries its endpoint so the modal never asks for it', () => {
 		const presetIds = new Set(PROVIDER_PRESETS.map(preset => preset.id));
 		expect(presetIds).toEqual(
-			new Set(['codex', 'deepseek', 'xiaomi', 'custom']),
+			new Set([
+				'codex',
+				'openai',
+				'anthropic',
+				'openrouter',
+				'deepseek',
+				'xiaomi',
+				'mistral',
+				'xai',
+				'groq',
+				'cerebras',
+				'together',
+				'fireworks',
+				'nvidia',
+				'custom',
+			]),
 		);
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'deepseek')?.baseUrl,
@@ -52,6 +69,24 @@ describe('provider presets (known endpoints, never asked)', () => {
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')?.baseUrl,
 		).toBe('https://token-plan-sgp.xiaomimimo.com');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'anthropic')
+				?.sdkProvider,
+		).toBe('anthropic');
+		expect(
+			PROVIDER_PRESETS.find(preset => preset.id === 'openrouter')
+				?.modelDiscoveryUrl,
+		).toBe('https://openrouter.ai/api/v1/models');
+	});
+
+	test('every preset except custom is in a known group', () => {
+		for (const preset of PROVIDER_PRESETS) {
+			if (preset.id === 'custom') continue;
+			expect(
+				preset.category === 'Popular' || preset.category === 'Providers',
+			).toBe(true);
+			expect(preset.baseUrl).not.toBe('');
+		}
 	});
 
 	test('codexAccountProvider targets the ChatGPT Codex backend', () => {
@@ -113,6 +148,20 @@ describe('provider presets (known endpoints, never asked)', () => {
 		expect(buildPresetProvider(deepseekPreset, 'ds', '  ')).toBeNull();
 	});
 
+	test('openAICompatibleProvider keeps preset endpoint + discovery', () => {
+		const openrouter = PROVIDER_PRESETS.find(
+			preset => preset.id === 'openrouter',
+		)!;
+		expect(
+			openAICompatibleProvider(openrouter, 'my-router', 'sk-1'),
+		).toMatchObject({
+			id: 'my-router',
+			baseUrl: 'https://openrouter.ai/api',
+			apiKey: 'sk-1',
+			modelDiscoveryUrl: 'https://openrouter.ai/api/v1/models',
+		});
+	});
+
 	test('customProvider requires id + base URL and keeps models', () => {
 		expect(customProvider({id: '', baseUrl: 'x', models: []})).toBeNull();
 		expect(customProvider({id: 'x', baseUrl: '', models: []})).toBeNull();
@@ -128,5 +177,22 @@ describe('provider presets (known endpoints, never asked)', () => {
 			apiKey: 'sk-1',
 			models: ['a', 'b'],
 		});
+	});
+});
+
+describe('defaultProviderName ((n) duplicate suffix)', () => {
+	test('free default id stays as-is', () => {
+		expect(defaultProviderName('deepseek', [])).toBe('deepseek');
+	});
+
+	test('taken id gets a (2) suffix, then (3), never clobbering', () => {
+		const existing = [{id: 'deepseek'}, {id: 'deepseek (2)'}];
+		expect(defaultProviderName('deepseek', existing)).toBe('deepseek (3)');
+	});
+
+	test('case-insensitive duplicate detection', () => {
+		expect(defaultProviderName('DeepSeek', [{id: 'deepseek'}])).toBe(
+			'DeepSeek (2)',
+		);
 	});
 });
