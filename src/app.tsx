@@ -358,6 +358,14 @@ export function App() {
 	// grows between turn 1 and turn 2 and busts the whole prefix cache.
 	let startupReadyRef = false;
 	let watchdogRef = false;
+	/**
+	 * Compact when the conversation gets within this many messages of the
+	 * message cap. The cap trims the OLDEST message once exceeded, which
+	 * changes byte 0 of the request and busts the provider's whole prefix
+	 * cache — compacting FIRST turns the head change into a deliberate,
+	 * one-time summary instead of a per-turn miss.
+	 */
+	const AUTO_COMPACT_MESSAGE_MARGIN = 100;
 	const autoCompactRef: {enabled: boolean; threshold: number} = {
 		enabled: false,
 		threshold: 75,
@@ -1158,6 +1166,18 @@ export function App() {
 		// short summary, the compaction never interrupts the conversation.
 		setTimeout(() => void compact(), 0);
 	};
+
+	/**
+	 * Auto-compact when the token share of the context window crosses the
+	 * threshold OR the conversation approaches the MESSAGE cap (the cap
+	 * trims the oldest message once exceeded, silently changing the cache
+	 * head — compact before that happens so the head change is a deliberate
+	 * one-time summary, never a per-turn miss).
+	 */
+	const shouldAutoCompact = (): boolean =>
+		autoCompactRef.enabled &&
+		(contextPercent() >= autoCompactRef.threshold ||
+			context().length >= maxMessages() - AUTO_COMPACT_MESSAGE_MARGIN);
 
 	const runCustomCommand = (name: string, args: string) => {
 		const command = findCustomCommand(name);
@@ -2134,12 +2154,7 @@ export function App() {
 						setContext(history);
 						refreshContextPercent();
 						recordUsage(result.usage);
-						if (
-							autoCompactRef.enabled &&
-							contextPercent() >= autoCompactRef.threshold
-						) {
-							triggerAutoCompact();
-						}
+						if (shouldAutoCompact()) triggerAutoCompact();
 						break;
 					}
 
@@ -2573,6 +2588,10 @@ export function App() {
 			// different prefix and missed the LLM cache on the first turn.
 			setContext(history);
 			refreshContextPercent();
+			// Compaction check AFTER the whole turn (tool rounds included) —
+			// the text branch checks it too, but a tool-heavy turn grows the
+			// history past the message cap without ever hitting a text turn.
+			if (shouldAutoCompact()) triggerAutoCompact();
 			// Completion line also shows after TOOL-only turns (the loop can
 			// end on tools with no final text round, the text branch above
 			// already set it; this covers the other path).

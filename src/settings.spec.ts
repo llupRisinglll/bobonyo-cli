@@ -82,6 +82,22 @@ describe('resumeCwd (codex ResumeCwdMode parity)', () => {
 	});
 });
 
+describe('autoCompact default (cache-head protection)', () => {
+	test('defaults ON so long conversations compact before the cap trims', () => {
+		expect(loadSettings().autoCompact.enabled).toBe(true);
+		expect(loadSettings().autoCompact.threshold).toBe(75);
+	});
+
+	test('an explicit off is respected', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({autoCompact: {enabled: false, threshold: 80}}),
+		);
+		expect(loadSettings().autoCompact.enabled).toBe(false);
+		expect(loadSettings().autoCompact.threshold).toBe(80);
+	});
+});
+
 describe('resumeCwdDecision (which directory a resumed session uses)', () => {
 	test('session mode always restores the session directory', () => {
 		expect(resumeCwdDecision('session', '/a', '/b')).toBe('session');

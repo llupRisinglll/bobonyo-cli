@@ -226,6 +226,22 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(status).not.toMatch(/isDeepSeek\(activeEndpoint\(\)\) && formatCacheRate/);
 	});
 
+	test('long conversations COMPACT before the message cap trims the head', () => {
+		// Once a conversation exceeds the message cap, capMessages trims the
+		// OLDEST message — byte 0 changes, so every subsequent request misses
+		// the provider's entire prefix cache (the 14M-token / 55% session).
+		// Auto-compact must trigger on the MESSAGE cap (not just the token
+		// threshold, which a 1M-window provider never crosses at ~300K) and
+		// after tool-heavy turns, so the head change stays a one-time
+		// summary instead of a per-turn miss.
+		const app = read('./app.tsx');
+		expect(app).toMatch(/shouldAutoCompact/);
+		expect(app).toMatch(/context\(\)\.length >= maxMessages\(\) - AUTO_COMPACT_MESSAGE_MARGIN/);
+		expect(app).toMatch(/if \(shouldAutoCompact\(\)\) triggerAutoCompact\(\)/);
+		const settings = read('./settings.ts');
+		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 75\}/);
+	});
+
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
 		const input = read('./components/input-box.tsx');
 		// The arrow handler branches on ctrl and goes through the word-jump

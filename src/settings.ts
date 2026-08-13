@@ -60,7 +60,11 @@ const DEFAULTS: Settings = {
 	cavemanMode: true,
 	resumeCwd: 'session',
 	scrollSpeed: 3,
-	autoCompact: {enabled: false, threshold: 75},
+	// ON by default: without compaction, a long conversation hits the
+	// message cap and silently trims its OLDEST messages — the byte-0 head
+	// changes on every request and the provider's prefix cache misses the
+	// entire history each turn (the 14M-token / 55% cache-rate session).
+	autoCompact: {enabled: true, threshold: 75},
 	watchdogMs: 0,
 	streamGuard: {},
 	trustedDirs: [],
@@ -141,7 +145,10 @@ export function loadSettings(): Settings {
 		resumeCwd,
 		scrollSpeed,
 		autoCompact: {
-			enabled: rawAuto.enabled === true,
+			// Missing field → DEFAULTS (compaction is ON by default so long
+			// conversations compact before the message cap trims the cache
+			// head); an explicit false stays off.
+			enabled: rawAuto.enabled ?? DEFAULTS.autoCompact.enabled,
 			threshold,
 		},
 		watchdogMs: Number.isFinite(watchdogMs) && watchdogMs >= 0 ? watchdogMs : 0,

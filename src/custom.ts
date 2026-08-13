@@ -179,7 +179,11 @@ function findFiles(subdir: string): string[] {
 			files.push(join(dir, file));
 		}
 	}
-	return files;
+	// Deterministic order: readdirSync order is filesystem-dependent, and the
+	// skills/commands blocks live in the SYSTEM PROMPT (the cache head). A
+	// reordered list between turns would change byte 0 and miss the whole
+	// provider prefix cache.
+	return files.sort();
 }
 
 export function loadCustomCommands(): CustomCommand[] {
