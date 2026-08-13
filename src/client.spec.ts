@@ -8,9 +8,104 @@ import {
 	parseToolCalls,
 	parseXmlToolCalls,
 	responsesToolBlocks,
+	sanitizeToolCallIds,
 	streamChat,
 } from './client';
 import {setActiveEndpoint} from './state';
+
+describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () => {
+	test('well-formed sequences pass through unchanged', () => {
+		const messages = [
+			{role: 'user', content: 'run it'},
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
+				],
+			},
+			{role: 'tool', content: 'done', tool_call_id: 'call_1'},
+			{role: 'assistant', content: 'ok'},
+		];
+		expect(sanitizeToolCallIds(messages)).toEqual(messages);
+	});
+
+	test('an empty tool_call_id is matched to the next pending declaration', () => {
+		const sanitized = sanitizeToolCallIds([
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
+				],
+			},
+			{role: 'tool', content: 'done', tool_call_id: ''},
+		]);
+		expect(sanitized).toEqual([
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
+				],
+			},
+			{role: 'tool', content: 'done', tool_call_id: 'call_1'},
+		]);
+	});
+
+	test('an orphan tool message with no declaration is dropped', () => {
+		expect(
+			sanitizeToolCallIds([
+				{role: 'user', content: 'hi'},
+				{role: 'tool', content: 'orphan'},
+			]),
+		).toEqual([{role: 'user', content: 'hi'}]);
+	});
+
+	test('empty tool_calls ids are synthesized and the result matches', () => {
+		const sanitized = sanitizeToolCallIds([
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{id: '', name: 'execute_bash', arguments: '{}'}],
+			},
+			{role: 'tool', content: 'out'},
+		]);
+		expect(sanitized[0]!.tool_calls?.[0]!.id).toBe('call-0');
+		expect(sanitized[1]).toMatchObject({tool_call_id: 'call-0'});
+	});
+
+	test('a degenerate tool_calls block and its results are dropped', () => {
+		// Exact shape the migrated legacy session carried: assistant
+		// tool_calls with an EMPTY id and name, followed by an orphan tool
+		// result — the provider rejected it with "missing field
+		// tool_call_id".
+		expect(
+			sanitizeToolCallIds([
+				{role: 'user', content: 'summary'},
+				{
+					role: 'assistant',
+					content: '',
+					tool_calls: [{id: '', name: '', arguments: '{}'}],
+				},
+				{role: 'tool', content: '✦ Bash(...)'},
+				{role: 'assistant', content: 'The real reply.'},
+			]),
+		).toEqual([
+			{role: 'user', content: 'summary'},
+			{role: 'assistant', content: 'The real reply.'},
+		]);
+	});
+
+	test('an undeclared tool result id is dropped too', () => {
+		expect(
+			sanitizeToolCallIds([
+				{role: 'tool', content: 'stale', tool_call_id: 'call_gone'},
+				{role: 'assistant', content: 'ok'},
+			]),
+		).toEqual([{role: 'assistant', content: 'ok'}]);
+	});
+});
 
 describe('parseXmlToolCalls', () => {
 	test('parses the plain <tool_calls>/<invoke> dialect with named params', () => {

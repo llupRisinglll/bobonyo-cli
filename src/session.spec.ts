@@ -236,6 +236,31 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 			{role: 'user', content: 'u3'},
 		]);
 	});
+
+	test('rebuilt tool results reference the SAME synthesized id as their declaration', () => {
+		// A transcript tool row without a toolId must not produce a tool
+		// result with an EMPTY tool_call_id (the provider rejects it) — the
+		// heal synthesizes one id and uses it for BOTH the assistant
+		// tool_calls entry and the tool result.
+		const transcript: ChatMessage[] = [
+			{role: 'user', content: 'check ports'},
+			{
+				role: 'tool',
+				content: '✦ Bash(ss -tlnp)',
+				tool: {name: 'execute_bash', detail: '', output: 'ok'},
+			},
+			{role: 'assistant', content: 'ports are fine'},
+		];
+		const healed = healResumedContext([{role: 'user', content: 'old'}], transcript);
+		const declaration = healed.find(
+			message => message.role === 'assistant' && message.tool_calls,
+		);
+		const result = healed.find(
+			message => message.role === 'tool' && message.tool_call_id,
+		);
+		expect(declaration?.tool_calls?.[0]!.id).toBe('call-0');
+		expect(result?.tool_call_id).toBe('call-0');
+	});
 });
 
 describe('nanocoder session migration', () => {

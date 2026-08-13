@@ -189,6 +189,66 @@ export interface ChatMessageLike {
 	tool_calls?: Array<{id: string; name: string; arguments: string}>;
 }
 
+/**
+ * Auto-recovery for malformed tool-message sequences (legacy nanocoder
+ * conversions, /undo rebuilds, resumed sessions): assistant `tool_calls`
+ * with empty ids get synthesized `call-N` ids, and tool results with a
+ * missing/empty `tool_call_id` are matched to the NEXT pending tool-call
+ * declaration in order. A tool result with no declaration to match — or a
+ * whole degenerate `tool_calls` block whose calls are all unnamed — is
+ * DROPPED: sending it would 400 the request (`missing field
+ * tool_call_id`). A no-op on well-formed input, pure, unit-tested.
+ */
+export function sanitizeToolCallIds(
+	messages: ChatMessageLike[],
+): ChatMessageLike[] {
+	const out: ChatMessageLike[] = [];
+	let pending: string[] = [];
+	let callSeq = 0;
+	let skipResults = false;
+	for (const message of messages) {
+		if (message.role === 'assistant' && message.tool_calls?.length) {
+			const calls = message.tool_calls
+				.map(call => ({
+					id: call.id || `call-${callSeq++}`,
+					name: call.name,
+					arguments: call.arguments,
+				}))
+				.filter(call => Boolean(call.name.trim()));
+			if (calls.length === 0) {
+				// Degenerate block (e.g. legacy conversion lost the call
+				// metadata): its results below are orphans — drop them all.
+				pending = [];
+				skipResults = true;
+				continue;
+			}
+			skipResults = false;
+			pending.push(...calls.map(call => call.id));
+			out.push({...message, tool_calls: calls});
+			continue;
+		}
+		if (message.role === 'tool') {
+			if (skipResults) continue;
+			const id = (message.tool_call_id ?? '').trim();
+			if (id) {
+				const declared = pending.includes(id);
+				pending = pending.filter(next => next !== id);
+				if (declared) out.push(message);
+				// Undeclared id = orphan (its declaration was dropped or
+				// compacted away) — sending it 400s, so drop it.
+				continue;
+			}
+			// No id: match the next pending declaration, else drop.
+			const matched = pending.shift();
+			if (matched) out.push({...message, tool_call_id: matched});
+			continue;
+		}
+		skipResults = false;
+		out.push(message);
+	}
+	return out;
+}
+
 export interface MockToolCall {
 	id: string;
 	name: string;
@@ -446,6 +506,11 @@ async function streamOnce(
 	toolProfile?: string,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
+	// Auto-recovery: legacy/undo/resume conversations can carry tool
+	// messages without a matching `tool_call_id` (or tool_calls with empty
+	// ids) — providers reject the body with "missing field tool_call_id".
+	// Sanitize EVERY outgoing request so a bad history never 400s the turn.
+	messages = sanitizeToolCallIds(messages);
 	if (endpoint.sdkProvider === 'anthropic') {
 		return anthropicStreamOnce(
 			messages,

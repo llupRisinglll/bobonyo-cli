@@ -335,20 +335,28 @@ export function healResumedContext(
 	}> = [];
 	const flushTools = () => {
 		if (toolRun.length === 0) return;
+		// Each tool result must reference the SAME id its declaration uses
+		// (a missing transcript toolId synthesizes one for BOTH sides —
+		// mismatched ids would 400 the request body).
+		const calls = toolRun.map((tool, index) => {
+			const id = tool.id ?? `call-${index}`;
+			return {
+				id,
+				name: tool.name,
+				arguments: JSON.stringify(tool.args ?? {}),
+				output: tool.output ?? '',
+			};
+		});
 		out.push({
 			role: 'assistant',
 			content: '',
-			tool_calls: toolRun.map((tool, index) => ({
-				id: tool.id ?? `call-${index}`,
-				name: tool.name,
-				arguments: JSON.stringify(tool.args ?? {}),
-			})),
+			tool_calls: calls.map(({output: _output, ...call}) => call),
 		});
-		for (const tool of toolRun) {
+		for (const call of calls) {
 			out.push({
 				role: 'tool',
-				content: tool.output ?? '',
-				tool_call_id: tool.id ?? '',
+				content: call.output,
+				tool_call_id: call.id,
 			});
 		}
 		toolRun = [];
