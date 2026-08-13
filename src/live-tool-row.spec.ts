@@ -3,6 +3,19 @@ import {liveRowSegments, splitChunksByLine} from './live-tool-row';
 import {tokenizeBashRow} from './row-highlight';
 import {colors} from './theme';
 import {fence, formatOutputTail, rowLanguage} from './tool-display';
+import type {TextChunk} from '@opentui/core';
+
+function rgb(c: TextChunk): string | null {
+	if (!c.fg) return null;
+	return `rgb(${Math.round(c.fg.r * 255)},${Math.round(c.fg.g * 255)},${Math.round(c.fg.b * 255)})`;
+}
+
+function themeRgb(hex: string): string {
+	const r = parseInt(hex.slice(1, 3), 16);
+	const g = parseInt(hex.slice(3, 5), 16);
+	const b = parseInt(hex.slice(5, 7), 16);
+	return `rgb(${r},${g},${b})`;
+}
 
 /**
  * REGRESSION: the settled-memo fence classifier must accept the full-row-bg
@@ -133,6 +146,34 @@ describe('liveRowSegments', () => {
 			const match = SETTLED_FENCE_MATCH.exec(wrapped);
 			expect(match?.[1]).toBe('filediff');
 			expect(match?.[2]).toBe('done');
+		});
+	});
+
+	describe('file-row language detection (leading blank line)', () => {
+		test('a fenced filerow with the opener blank line still syntax-highlights .ts', () => {
+			// formatFilePreview emits ` ```filerow:done\n\n✦ Write …` — the
+			// filtered inner content starts with a BLANK line. rowPath must
+			// skip it, or the language resolves to '' and the Write preview
+			// renders plain (regression: no syntax colors on new files).
+			const raw = [
+				'```filerow:done',
+				'',
+				'✦ Write demo.ts',
+				' ⎿ Write: 1 line',
+				'```',
+				'```typescript',
+				'   1 const greeting = "hello world";',
+				'```',
+			].join('\n');
+			const {body} = liveRowSegments(raw, 'filerow', 'done', colors(), 84);
+			const codeLine = body.find(line =>
+				line.some(c => c.text.includes('const')),
+			);
+			expect(codeLine).toBeDefined();
+			const keyword = codeLine!.find(c => c.text === 'const');
+			expect(keyword).toBeDefined();
+			// `const` is a keyword → primary, NOT the plain default text fg.
+			expect(rgb(keyword!)).toBe(themeRgb(colors().primary));
 		});
 	});
 });

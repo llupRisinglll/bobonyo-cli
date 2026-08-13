@@ -2435,6 +2435,12 @@ export function App() {
 					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
 						(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
 				);
+				// The turn hit the round cap after a tool call — the model
+				// never got a chance to narrate the last result (e.g. a
+				// failing test run). Say so instead of stopping silently.
+				appendInfo(
+					`Turn hit the ${MAX_TURN_ROUNDS}-round limit after the last tool call — the model produced no final reply.`,
+				);
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {

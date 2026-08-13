@@ -54,7 +54,11 @@ export function splitChunksByLine(chunks: TextChunk[]): TextChunk[][] {
 
 /** Extract `<path>` from a row's first line (`✦ Write <path>`). */
 function rowPath(text: string): string {
-	const line = text.split('\n')[0] ?? '';
+	// The fenced content can start with the blank line after the opener
+	// (` ```filerow:done\n\n✦ Write …`), so the FIRST NON-EMPTY line is the
+	// header — reading index 0 would yield '' and the language detection
+	// would fall back to plain text (no syntax colors on Write/Edit rows).
+	const line = text.split('\n').find(candidate => candidate.trim()) ?? '';
 	return line.replace(/^[✦⚙]\s*[A-Za-z ]+?\s+/, '').trim();
 }
 
