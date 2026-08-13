@@ -23,6 +23,51 @@ export interface BackgroundTask {
 /** nanocoder's foreground budget (source/utils/streaming-bash-tool.tsx). */
 export const AUTO_BACKGROUND_MS = 15_000;
 
+/**
+ * Bash output capture caps (parity: opencode's `MAX_LINES` 2000 / `MAX_BYTES`
+ * 50 KB). The COLLECTED output keeps its TAIL — results/errors live at the
+ * end — and a single unbroken line (e.g. `grep` on a minified one-line file)
+ * is truncated to the char cap too, so it can never flood the transcript or
+ * the model context.
+ */
+export const MAX_BASH_OUTPUT_LINES = 2000;
+export const MAX_BASH_OUTPUT_CHARS = 50_000;
+
+/**
+ * Keep the tail of collected output lines within the capture caps. Pure and
+ * unit-tested: caps by line count first, then by total characters walking
+ * from the end (a huge single line is sliced to the char cap).
+ */
+export function capOutputTail(
+	lines: string[],
+	maxLines = MAX_BASH_OUTPUT_LINES,
+	maxChars = MAX_BASH_OUTPUT_CHARS,
+): {lines: string[]; truncated: boolean} {
+	const byLines =
+		lines.length > maxLines ? lines.slice(-maxLines) : lines;
+	let truncated = lines.length > maxLines;
+	const capped: string[] = [];
+	let chars = 0;
+	for (let i = byLines.length - 1; i >= 0; i--) {
+		const line = byLines[i]!;
+		const size = line.length + (capped.length > 0 ? 1 : 0);
+		if (chars + size > maxChars) {
+			const keep = maxChars - chars;
+			if (keep > 0) {
+				const piece = line.slice(-keep);
+				capped.unshift(
+					piece.length < line.length ? `…${piece}` : piece,
+				);
+			}
+			truncated = true;
+			break;
+		}
+		chars += size;
+		capped.unshift(line);
+	}
+	return {lines: capped, truncated};
+}
+
 export const [bgTasks, setBgTasks] = createSignal<BackgroundTask[]>([]);
 
 let taskSeq = 0;
@@ -59,6 +104,7 @@ export async function runBash(
 		stderr: 'pipe',
 	});
 
+	let truncated = false;
 	const pump = async (stream: ReadableStream<Uint8Array>) => {
 		const reader = stream.getReader();
 		const decoder = new TextDecoder();
@@ -69,6 +115,9 @@ export async function runBash(
 			for (const line of chunk.split('\n')) {
 				if (line) task.output.push(line);
 			}
+			const capped = capOutputTail(task.output);
+			if (capped.truncated) truncated = true;
+			task.output = capped.lines;
 			onProgress?.(task.output.join('\n'));
 		}
 	};
@@ -82,6 +131,12 @@ export async function runBash(
 		task.running = false;
 		task.exitCode = proc.exitCode ?? 0;
 		task.completedAt = Date.now();
+		if (truncated) {
+			task.output = [
+				`… [output truncated: kept the last ${MAX_BASH_OUTPUT_LINES} lines / ${MAX_BASH_OUTPUT_CHARS} chars]`,
+				...task.output,
+			];
+		}
 		setBgTasks(prev => [...prev]);
 	})();
 

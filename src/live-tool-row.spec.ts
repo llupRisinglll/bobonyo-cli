@@ -104,6 +104,46 @@ describe('liveRowSegments', () => {
 		}
 	});
 
+	test('a giant single line (minified file) cannot flood the preview rows', () => {
+		// `grep` on a one-line minified JS file outputs ONE line that is
+		// megabytes long. The old tail cap counted LINES, so the single line
+		// bypassed it and wrapped into thousands of rendered rows. It must
+		// now be truncated per line AND capped at a bounded row count.
+		const giant = 'x'.repeat(200_000);
+		const collapsed = formatOutputTail(giant, false).split('\n');
+		// The collapsed target is "3 lines of output": exactly 3 rendered
+		// rows + the row-cap footer.
+		expect(collapsed.length).toBe(4);
+		// The visible tail window ends with the per-line `…` marker and the
+		// row-cap footer reports the dropped rows.
+		expect(collapsed.at(-2)).toMatch(/x+…$/);
+		expect(collapsed.at(-1)).toMatch(/^… \+\d+ more line/);
+
+		const expanded = formatOutputTail(giant, true).split('\n');
+		expect(expanded.length).toBeLessThanOrEqual(201); // 200 rows + footer
+		expect(expanded.join('\n')).toMatch(/…$/);
+	});
+
+	test('per-line preview keeps the HEAD with a trailing … marker', () => {
+		const giant = 'head'.repeat(1000); // 4000 chars, no spaces
+		const tail = formatOutputTail(giant, false);
+		const body = tail.split('\n');
+		// The last visible row carries the trailing `…` — the line continues
+		// past the preview — and the row-cap footer reports the dropped rows.
+		expect(body.at(-2)).toMatch(/…$/);
+		expect(tail).toMatch(/… \+\d+ more line/);
+	});
+
+	test('normal multi-line output keeps the exact existing footer semantics', () => {
+		const output = 'a\nb\nc\nd\ne';
+		const tail = formatOutputTail(output, false).split('\n');
+		// Last 3 lines are shown, earlier ones roll into the footer.
+		expect(tail[0]).toBe('  └   c');
+		expect(tail[1]).toBe('      d');
+		expect(tail[2]).toBe('      e');
+		expect(tail[3]).toBe('… +2 more lines');
+	});
+
 	describe('settled-memo fence classifier (width marker)', () => {
 		// A string_replace row settles through the SAME shape singleToolRow
 		// produces: an OUTER ` `````filediff:done ` fence (4 backticks, the

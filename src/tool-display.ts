@@ -17,6 +17,26 @@ export const PREVIEW_COLLAPSED_LINES = 3;
 export const PREVIEW_EXPANDED_LINES = 50;
 export const COMMAND_MAX_LINES = 3;
 /**
+ * Max characters kept from ONE output line before wrapping. A single
+ * unbroken line (minified JS, a giant log entry) must not expand into
+ * hundreds of wrapped rows; the HEAD of the line is kept with a trailing
+ * `…` marker (parity: toolResultTail) so the truncation stays visible in
+ * the preview's tail rows.
+ */
+export const PREVIEW_LINE_MAX_CHARS = 2000;
+/**
+ * Hard cap on RENDERED (wrapped) rows per preview — the backstop that
+ * guarantees a huge line can never flood the transcript even when the
+ * capture-side cap did not apply (resumed sessions, saved transcripts).
+ * Collapsed shows exactly the "3 lines" target ON RENDERED ROWS (a wrapped
+ * long line must not grow the preview past it); expanded is the generous
+ * opt-in view (up to 200 rows from 50 raw lines).
+ */
+export const PREVIEW_MAX_ROWS = {
+	collapsed: PREVIEW_COLLAPSED_LINES,
+	expanded: PREVIEW_EXPANDED_LINES * 4,
+} as const;
+/**
  * Bordered-bash chrome. The command lives INSIDE the box on its own line
  * (`│ $ cmd`), so the wrap width is the box width minus the `│ ` left edge
  * and the `│` right edge.
@@ -370,13 +390,31 @@ export function formatOutputTail(
 	const WRAP = Math.max(1, width - BOX_EDGE_WIDTH);
 	const wrappedLines: string[] = [];
 	for (const line of tail) {
-		for (const piece of wordWrap(line, WRAP)) wrappedLines.push(piece);
+		// A single unbroken line (minified JS, giant log entry) must not
+		// wrap into hundreds of rows: keep the HEAD of the line with a
+		// trailing `…` marker (parity: toolResultTail).
+		const preview =
+			line.length > PREVIEW_LINE_MAX_CHARS
+				? `${line.slice(0, PREVIEW_LINE_MAX_CHARS)}…`
+				: line;
+		for (const piece of wordWrap(preview, WRAP)) wrappedLines.push(piece);
 	}
+	// Hard cap on RENDERED rows too — the per-line cap bounds each line, and
+	// this bounds the total even when the source is one huge blob.
+	const maxRows = expanded
+		? PREVIEW_MAX_ROWS.expanded
+		: PREVIEW_MAX_ROWS.collapsed;
+	const visibleRows = wrappedLines.slice(-maxRows);
+	const hiddenRows = wrappedLines.length - visibleRows.length;
 	const contPrefix = prefix === '  └   ' ? '      ' : '';
-	const bodyWithWrap = wrappedLines
+	const bodyWithWrap = visibleRows
 		.map((line, index) => `${index === 0 ? prefix : contPrefix}${line}`)
 		.join('\n');
-	const footer = hidden > 0 ? `\n… +${hidden} line${hidden === 1 ? '' : 's'}` : '';
+	const footerLines = hidden + hiddenRows;
+	const footer =
+		footerLines > 0
+			? `\n… +${footerLines} more line${footerLines === 1 ? '' : 's'}`
+			: '';
 	return `${bodyWithWrap}${footer}`;
 }
 
