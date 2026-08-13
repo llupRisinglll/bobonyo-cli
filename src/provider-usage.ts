@@ -31,6 +31,15 @@ export interface MonthlyUsage {
 	completionTokens: number;
 	cachedTokens: number;
 	totalTokens: number;
+	/**
+	 * DeepSeek prompt-cache split (`prompt_cache_hit_tokens` /
+	 * `prompt_cache_miss_tokens`), accumulated across the month so the
+	 * status line can show the real cost driver live (`100k/1.5m (10% miss)`)
+	 * instead of waiting on the 5-minute balance refresh. Absent on legacy
+	 * files / non-DeepSeek providers — treated as 0.
+	 */
+	cacheHitTokens?: number;
+	cacheMissTokens?: number;
 	/** Wall-clock ms of the last recorded usage in this bucket. */
 	at: number;
 }
@@ -110,6 +119,12 @@ export function recordProviderUsage(
 		(Number.isFinite(usage.promptCacheMissTokens)
 			? usage.promptCacheMissTokens!
 			: 0);
+	const cacheHit = Number.isFinite(usage.promptCacheHitTokens)
+		? usage.promptCacheHitTokens!
+		: 0;
+	const cacheMiss = Number.isFinite(usage.promptCacheMissTokens)
+		? usage.promptCacheMissTokens!
+		: 0;
 	const total = Number.isFinite(usage.total_tokens)
 		? usage.total_tokens!
 		: prompt + completion;
@@ -132,6 +147,8 @@ export function recordProviderUsage(
 		promptTokens: previous.promptTokens + prompt,
 		completionTokens: previous.completionTokens + completion,
 		cachedTokens: previous.cachedTokens + cached,
+		cacheHitTokens: (previous.cacheHitTokens ?? 0) + cacheHit,
+		cacheMissTokens: (previous.cacheMissTokens ?? 0) + cacheMiss,
 		totalTokens: previous.totalTokens + total,
 		at: now,
 	};
@@ -157,4 +174,23 @@ export function formatMonthlyUsage(
 ): string | undefined {
 	if (!usage || usage.totalTokens <= 0) return undefined;
 	return `used ${formatTokens(usage.totalTokens)}`;
+}
+
+/**
+ * DeepSeek prompt-cache rate label for the status line, e.g.
+ * `100K/1.5M (10% miss)` — cumulative cache-HIT input tokens over the total
+ * cache-accounted input, with the miss share. Updates every turn (the usage
+ * ledger accumulates per-turn `prompt_cache_hit/miss_tokens`). Undefined
+ * until the provider reports cache fields.
+ */
+export function formatCacheRate(
+	usage: MonthlyUsage | undefined,
+): string | undefined {
+	if (!usage) return undefined;
+	const hit = usage.cacheHitTokens ?? 0;
+	const miss = usage.cacheMissTokens ?? 0;
+	const total = hit + miss;
+	if (total <= 0) return undefined;
+	const missPct = Math.round((miss / total) * 100);
+	return `${formatTokens(hit)}/${formatTokens(total)} (${missPct}% miss)`;
 }

@@ -14,7 +14,7 @@ import {createTextAttributes} from '@opentui/core';
 import {resolveProfile} from '../tools';
 import {colors} from '../theme';
 import {statusPathLabel} from '../status-path';
-import {formatMonthlyUsage, formatTokens} from '../provider-usage';
+import {formatCacheRate, formatMonthlyUsage, formatTokens} from '../provider-usage';
 import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
 
 /**
@@ -56,6 +56,16 @@ export function Status() {
 					: `${balance.currency} `;
 		return ` · Cred: ${symbol}${balance.total.toFixed(2)}`;
 	};
+	// `· cache 100K/1.5M (10% miss)` (DeepSeek): the balance only refreshes
+	// every 5 minutes, but the per-turn usage block reports
+	// `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` — the monthly
+	// ledger accumulates them so the status line shows the REAL cost driver
+	// live, updating after every turn. Two-tone like `Cred:`.
+	const cacheRateSegment = () => {
+		if (!isDeepSeek(activeEndpoint())) return '';
+		const label = formatCacheRate(providerUsage());
+		return label ? ` · cache ${label}` : '';
+	};
 	// `used N.NM` (Xiaomi MiMo token plan): the quota endpoint is browser-
 	// cookie only, so the harness accumulates each turn's `usage` block into
 	// a monthly ledger (see src/provider-usage.ts). Same two-tone treatment
@@ -79,6 +89,7 @@ export function Status() {
 			`⏵⏵⏵ ${modeLabel()} · tune: ` +
 			`${tuneLabel().replace(/^tune:\s*/, '')}` +
 			credSegment() +
+			cacheRateSegment() +
 			usageSegment() +
 			// agents/bg counts appear mid-line, budget them too or a narrow
 			// pane clips the `bg: 1` digit at the status-line edge.
@@ -104,6 +115,13 @@ export function Status() {
 							? '¥'
 							: `${deepSeekBalance()!.currency} `}
 					{deepSeekBalance()!.total.toFixed(2)}
+				</text>
+			</Show>
+			<Show when={isDeepSeek(activeEndpoint()) && formatCacheRate(providerUsage())}>
+				<text fg={colors().secondary}> · cache</text>
+				<text fg={colors().primary}>
+					{' '}
+					{formatCacheRate(providerUsage())}
 				</text>
 			</Show>
 			<Show when={isXiaomiMiMo(activeEndpoint()) && formatMonthlyUsage(providerUsage())}>

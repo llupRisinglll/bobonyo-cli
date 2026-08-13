@@ -208,6 +208,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/case 'resumeCwd'/);
 	});
 
+	test('the DeepSeek status line surfaces the live cache rate, not just balance', () => {
+		// The balance refreshes every 5 minutes, so a long task looks free
+		// until it is not. The per-turn usage block reports cache hit/miss
+		// tokens; the ledger must accumulate them and the status line must
+		// render the cumulative rate (`100K/1.5M (10% miss)`) every turn.
+		const usage = read('./provider-usage.ts');
+		expect(usage).toMatch(/export function formatCacheRate/);
+		expect(usage).toMatch(/cacheHitTokens:/);
+		expect(usage).toMatch(/cacheMissTokens:/);
+		const status = read('./components/status.tsx');
+		expect(status).toMatch(/formatCacheRate\(providerUsage\(\)\)/);
+		expect(status).toMatch(/· cache/);
+	});
+
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
 		const input = read('./components/input-box.tsx');
 		// The arrow handler branches on ctrl and goes through the word-jump

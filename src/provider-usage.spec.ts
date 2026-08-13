@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	currentMonthUsage,
+	formatCacheRate,
 	formatMonthlyUsage,
 	formatTokens,
 	loadProviderUsage,
@@ -62,6 +63,8 @@ describe('recordProviderUsage / currentMonthUsage', () => {
 		);
 		expect(first?.totalTokens).toBe(150);
 		expect(first?.cachedTokens).toBe(100);
+		expect(first?.cacheHitTokens).toBe(40);
+		expect(first?.cacheMissTokens).toBe(60);
 		expect(first?.month).toBe('2026-08');
 
 		const second = recordProviderUsage(
@@ -73,6 +76,10 @@ describe('recordProviderUsage / currentMonthUsage', () => {
 		expect(second?.promptTokens).toBe(300);
 		expect(second?.completionTokens).toBe(80);
 		expect(second?.cachedTokens).toBe(100);
+		// Cache fields accumulate across turns; a turn without cache fields
+		// adds zero.
+		expect(second?.cacheHitTokens).toBe(40);
+		expect(second?.cacheMissTokens).toBe(60);
 	});
 
 	test('different providers keep separate ledgers', () => {
@@ -139,6 +146,43 @@ describe('formatMonthlyUsage', () => {
 				totalTokens: 0,
 				at: 0,
 			}),
+		).toBeUndefined();
+	});
+});
+
+describe('formatCacheRate (DeepSeek status-line cost driver)', () => {
+	const usage = (overrides: Partial<{
+		cacheHitTokens?: number;
+		cacheMissTokens?: number;
+	}> = {}) => ({
+		month: '2026-08',
+		promptTokens: 0,
+		completionTokens: 0,
+		cachedTokens: 0,
+		totalTokens: 0,
+		at: 0,
+		...overrides,
+	});
+
+	test('renders hit/total with the miss share', () => {
+		expect(
+			formatCacheRate(
+				usage({cacheHitTokens: 1_350_000, cacheMissTokens: 150_000}),
+			),
+		).toBe('1.35M/1.5M (10% miss)');
+	});
+
+	test('rounds the miss percentage', () => {
+		expect(
+			formatCacheRate(usage({cacheHitTokens: 2, cacheMissTokens: 1})),
+		).toBe('2/3 (33% miss)');
+	});
+
+	test('undefined until cache fields are reported', () => {
+		expect(formatCacheRate(undefined)).toBeUndefined();
+		expect(formatCacheRate(usage())).toBeUndefined();
+		expect(
+			formatCacheRate(usage({cacheHitTokens: 0, cacheMissTokens: 0})),
 		).toBeUndefined();
 	});
 });
