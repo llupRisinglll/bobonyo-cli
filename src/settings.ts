@@ -12,6 +12,13 @@ import {nanocoderConfigDir} from './nanocoder-paths';
 
 export type Mode = 'yolo' | 'auto-accept' | 'normal' | 'plan';
 export type ToolProfile = 'full' | 'minimal' | 'nano' | 'auto';
+/**
+ * Working directory to use when resuming a session (codex `ResumeCwdMode`
+ * parity): the session's recorded directory (cache-friendly — the system
+ * head stays byte-identical), the directory where bobonyo was launched, or
+ * ask the user when the two differ.
+ */
+export type ResumeCwdMode = 'session' | 'current' | 'ask';
 
 export interface Settings {
 	mode: Mode;
@@ -33,6 +40,8 @@ export interface Settings {
 	 * the toggle removes the caveman instructions from the system prompt.
 	 */
 	cavemanMode?: boolean;
+	/** Resume working-directory mode (session / current / ask). */
+	resumeCwd?: ResumeCwdMode;
 	/** Mouse-wheel scroll speed multiplier (parity: opencode scroll_speed, default 3). */
 	scrollSpeed?: number;
 	autoCompact: {enabled: boolean; threshold: number};
@@ -49,6 +58,7 @@ const DEFAULTS: Settings = {
 	maxMessages: 1000,
 	hideThinking: true,
 	cavemanMode: true,
+	resumeCwd: 'session',
 	scrollSpeed: 3,
 	autoCompact: {enabled: false, threshold: 75},
 	watchdogMs: 0,
@@ -107,6 +117,11 @@ export function loadSettings(): Settings {
 	const statusLine = settings.statusLine !== false;
 	const hideThinking = settings.hideThinking !== false;
 	const cavemanMode = settings.cavemanMode !== false;
+	const resumeCwd = ['session', 'current', 'ask'].includes(
+		settings.resumeCwd ?? '',
+	)
+		? (settings.resumeCwd as ResumeCwdMode)
+		: DEFAULTS.resumeCwd;
 	const scrollSpeed =
 		typeof settings.scrollSpeed === 'number' &&
 		Number.isFinite(settings.scrollSpeed)
@@ -123,6 +138,7 @@ export function loadSettings(): Settings {
 		statusLine,
 		hideThinking,
 		cavemanMode,
+		resumeCwd,
 		scrollSpeed,
 		autoCompact: {
 			enabled: rawAuto.enabled === true,
@@ -161,4 +177,20 @@ export function saveSettings(settings: Settings): void {
 		`${JSON.stringify(settings, null, 2)}\n`,
 		'utf8',
 	);
+}
+
+/**
+ * Which directory a resumed session should use (codex `ResumeCwdMode`
+ * parity). `session`/`current` are final; `ask` means the cwd DECISION is
+ * deferred to the user when the two directories differ (identical cwds need
+ * no prompt). Pure, unit-tested.
+ */
+export function resumeCwdDecision(
+	mode: ResumeCwdMode,
+	currentCwd: string,
+	sessionCwd: string | undefined,
+): 'session' | 'current' | 'ask' {
+	if (!sessionCwd || mode === 'current') return 'current';
+	if (mode === 'session') return 'session';
+	return currentCwd === sessionCwd ? 'session' : 'ask';
 }

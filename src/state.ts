@@ -1,6 +1,6 @@
 import {createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
-import type {Mode, ToolProfile} from './settings';
+import type {Mode, ResumeCwdMode, ToolProfile} from './settings';
 
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'tool';
@@ -405,6 +405,14 @@ export const [hideThinking, setHideThinking] = createSignal(false);
  * `cavemanMode`). Defaults ON; the Settings → Behavior toggle turns it off.
  */
 export const [cavemanMode, setCavemanMode] = createSignal(true);
+/**
+ * Resume working-directory mode (codex `ResumeCwdMode` parity, settings.json
+ * `resumeCwd`): `session` restores the session's recorded cwd (keeps the
+ * provider cache head byte-identical), `current` keeps the launch directory,
+ * `ask` prompts when the two differ. Defaults `session`.
+ */
+export const [resumeCwdMode, setResumeCwdMode] =
+	createSignal<ResumeCwdMode>('session');
 /** Welcome-banner shapes (Settings → Appearance). */
 export const [titleShape, setTitleShape] = createSignal('powerline-angled');
 /** Snapshot taken when the last user prompt was submitted (`/retry`). */

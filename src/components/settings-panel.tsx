@@ -9,6 +9,7 @@ import {
 	hideThinking,
 	mode,
 	maxMessages,
+	resumeCwdMode,
 	settingsIndex,
 	settingsTab,
 	setSettingsIndex,
@@ -52,6 +53,7 @@ export const SETTING_OPTIONS: Record<string, string[]> = {
 	statusLine: ['on', 'off'],
 	hideThinking: ['on', 'off'],
 	cavemanMode: ['on', 'off'],
+	resumeCwd: ['session', 'current', 'ask'],
 	mode: ['yolo', 'normal', 'plan', 'auto-accept'],
 	profile: ['full', 'minimal', 'nano', 'auto'],
 };
@@ -107,6 +109,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 					key: 'cavemanMode',
 					label: 'Caveman mode',
 					value: cavemanMode() ? 'on' : 'off',
+				},
+				{
+					key: 'resumeCwd',
+					label: 'Resume working dir',
+					value: resumeCwdMode(),
 				},
 				{
 					key: 'sessions',

@@ -56,7 +56,14 @@ import {
 	findCustomCommand,
 	runCommand,
 } from './commands';
-import {loadSettings, saveSettings, type Mode, type ToolProfile} from './settings';
+import {
+	loadSettings,
+	resumeCwdDecision,
+	saveSettings,
+	type Mode,
+	type ResumeCwdMode,
+	type ToolProfile,
+} from './settings';
 import {estimateTokens} from './tokenize';
 import {
 	classifyIntent,
@@ -181,6 +188,8 @@ import {
 	setCompletionTone,
 	setHideThinking,
 	setCavemanMode,
+	setResumeCwdMode,
+	resumeCwdMode,
 	setStartupLoading,
 	setMcpServers,
 	setDiagnosticsCount,
@@ -519,6 +528,7 @@ export function App() {
 		setStatusLineEnabled(settings.statusLine !== false);
 		setHideThinking(settings.hideThinking === true);
 		setCavemanMode(settings.cavemanMode === true);
+		setResumeCwdMode(settings.resumeCwd ?? 'session');
 		autoCompactRef.enabled = settings.autoCompact.enabled;
 		autoCompactRef.threshold = settings.autoCompact.threshold;
 		watchdogMsRef = settings.watchdogMs ?? 0;
@@ -729,40 +739,69 @@ export function App() {
 				);
 				return;
 			}
-			setMessages(resumed.messages);
-			// Heal pre-fix sessions whose provider context lagged the
-			// transcript (interrupted turns never committed their user
-			// messages) — otherwise a resumed conversation looks empty to
-			// the model even though the transcript shows everything. The
-			// heal is tail-lag only and capped to the live message budget,
-			// so a healthy capped context is reused byte-for-byte and the
-			// provider's prefix cache survives the resume.
-			setContext(
-				healResumedContext(
-					resumed.context,
-					resumed.messages,
-					maxMessages(),
-				),
-			);
-			// CACHE HEAD PARITY: the system prompt's volatile block carries
-			// the working directory + that dir's AGENTS.md (it reads
-			// process.cwd()). A session resumed from a DIFFERENT directory
-			// would rebuild a different head, and every continued turn would
-			// miss the provider's byte-anchored prefix cache (DeepSeek /
-			// Xiaomi automatic prefix caching) — the cost the user sees.
-			// Restore the session's original directory so the head stays
-			// byte-identical (codex/opencode resume restore it too).
-			let cwdChanged = false;
-			if (resumed.cwd && existsSync(resumed.cwd)) {
-				try {
-					const previousCwd = process.cwd();
-					process.chdir(resumed.cwd);
-					cwdChanged = process.cwd() !== previousCwd;
-				} catch {
-					// Original directory vanished/moved — keep the current
-					// one (a one-time cold start, not a per-turn cost).
+			// The resume body is async ONLY for the `ask` cwd mode (the user
+			// answers the directory prompt before the session fully loads);
+			// everything up to the first await runs synchronously, so the
+			// transcript/context render immediately.
+			void (async () => {
+				setMessages(resumed.messages);
+				// Heal pre-fix sessions whose provider context lagged the
+				// transcript (interrupted turns never committed their user
+				// messages) — otherwise a resumed conversation looks empty
+				// to the model even though the transcript shows everything.
+				// The heal is tail-lag only and capped to the live message
+				// budget, so a healthy capped context is reused byte-for-byte
+				// and the provider's prefix cache survives the resume.
+				setContext(
+					healResumedContext(
+						resumed.context,
+						resumed.messages,
+						maxMessages(),
+					),
+				);
+				// CACHE HEAD PARITY: the system prompt's volatile block
+				// carries the working directory + that dir's AGENTS.md (it
+				// reads process.cwd()). A session resumed from a DIFFERENT
+				// directory would rebuild a different head, and every
+				// continued turn would miss the provider's byte-anchored
+				// prefix cache (DeepSeek / Xiaomi automatic prefix caching)
+				// — the cost the user sees. Restore the session's original
+				// directory per the configured mode (codex ResumeCwdMode
+				// parity): session = always restore (byte-identical head),
+				// current = keep the launch dir, ask = prompt when they
+				// differ.
+				const tryChdir = (): boolean => {
+					try {
+						const previousCwd = process.cwd();
+						process.chdir(resumed.cwd!);
+						return process.cwd() !== previousCwd;
+					} catch {
+						// Original directory vanished/moved — keep the
+						// current one (a one-time cold start, not a
+						// per-turn cost).
+						return false;
+					}
+				};
+				let cwdChanged = false;
+				const cwdDecision = resumeCwdDecision(
+					resumeCwdMode(),
+					process.cwd(),
+					resumed.cwd,
+				);
+				if (cwdDecision === 'session') {
+					cwdChanged = tryChdir();
+				} else if (cwdDecision === 'ask') {
+					const answer = await new Promise<string>(resolve =>
+						setPendingPrompt({
+							question: `Use the session directory ${resumed.cwd}? (y/N)`,
+							resolve,
+							onCancel: () => resolve(''),
+						}),
+					);
+					if (/^y(es)?$/i.test(answer.trim())) {
+						cwdChanged = tryChdir();
+					}
 				}
-			}
 			// Arrow-up history parity: rebuild the prompt history from the
 			// resumed conversation so ↑/↓ recall the prompts this session
 			// actually sent (live sessions build the same list per turn,
@@ -834,6 +873,7 @@ export function App() {
 				setCompletionMessage('');
 				setCompletionTone('default');
 			}, 6000);
+			})();
 			return;
 		}
 		const id = newSessionId();
@@ -1275,7 +1315,7 @@ export function App() {
 								? `on (threshold ${autoCompactRef.threshold}%)`
 								: 'off'
 						}\n\n` +
-						`Set a value: /settings set <mode|profile|maxMessages|autoCompactThreshold> <value>`,
+						`Set a value: /settings set <mode|profile|maxMessages|autoCompactThreshold|resumeCwd> <value>`,
 				);
 		}
 	};
@@ -1407,9 +1447,21 @@ export function App() {
 				saveSettings({...settings, cavemanMode: on});
 				return;
 			}
+			case 'resumeCwd': {
+				const next = value.trim().toLowerCase() as ResumeCwdMode;
+				if (!['session', 'current', 'ask'].includes(next)) {
+					appendInfo(
+						`Invalid resume working dir '${value}'. Use session, current or ask.`,
+					);
+					return;
+				}
+				setResumeCwdMode(next);
+				saveSettings({...settings, resumeCwd: next});
+				return;
+			}
 			default:
 				appendInfo(
-					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, hideThinking, cavemanMode`,
+					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, hideThinking, cavemanMode, resumeCwd`,
 				);
 		}
 	};

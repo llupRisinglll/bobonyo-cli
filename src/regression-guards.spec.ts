@@ -180,7 +180,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(session).toMatch(/contextCoversTranscriptTail/);
 		expect(session).not.toMatch(/contextUsers >= transcriptUsers/);
 		const app = read('./app.tsx');
-		expect(app).toMatch(/process\.chdir\(resumed\.cwd\)/);
+		expect(app).toMatch(/process\.chdir\(resumed\.cwd!?\)/);
 	});
 
 	test('the current date rides the user-message tail, never the cached head', () => {
@@ -193,6 +193,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(client).toMatch(/export function currentDateFragment/);
 		const app = read('./app.tsx');
 		expect(app).toMatch(/datedUserMsg/);
+	});
+
+	test('resume cwd mode is configurable (codex ResumeCwdMode parity)', () => {
+		// The session directory restore must respect a user setting (session
+		// / current / ask) instead of always silently switching, and the
+		// `ask` mode must route through the pending prompt so the choice is
+		// visible and cancellable.
+		const settings = read('./settings.ts');
+		expect(settings).toMatch(/export function resumeCwdDecision/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/resumeCwdDecision\(/);
+		expect(app).toMatch(/setPendingPrompt\(\{/);
+		expect(app).toMatch(/case 'resumeCwd'/);
 	});
 
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {

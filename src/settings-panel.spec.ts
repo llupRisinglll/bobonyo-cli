@@ -43,4 +43,12 @@ describe('caveman mode setting', () => {
 		expect(['on', 'off']).toContain(row!.value);
 		expect(SETTING_OPTIONS.cavemanMode).toEqual(['on', 'off']);
 	});
+
+	test('Behavior exposes the Resume working dir mode selector', () => {
+		const rows = settingsRows(SETTINGS_TABS.indexOf('Behavior'));
+		const row = rows.find(candidate => candidate.key === 'resumeCwd');
+		expect(row?.label).toBe('Resume working dir');
+		expect(['session', 'current', 'ask']).toContain(row!.value);
+		expect(SETTING_OPTIONS.resumeCwd).toEqual(['session', 'current', 'ask']);
+	});
 });

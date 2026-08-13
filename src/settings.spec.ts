@@ -7,7 +7,7 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadSettings} from './settings';
+import {loadSettings, resumeCwdDecision} from './settings';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
 const ORIGINAL_CWD = process.cwd();
@@ -60,5 +60,46 @@ describe('cavemanMode default', () => {
 	test('explicit off is respected', () => {
 		writeFileSync(join(root, 'settings.json'), JSON.stringify({cavemanMode: false}));
 		expect(loadSettings().cavemanMode).toBe(false);
+	});
+});
+
+describe('resumeCwd (codex ResumeCwdMode parity)', () => {
+	test('defaults to session (cache-friendly resume)', () => {
+		expect(loadSettings().resumeCwd).toBe('session');
+	});
+
+	test('a saved mode is respected and invalid values fall back', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({resumeCwd: 'ask'}),
+		);
+		expect(loadSettings().resumeCwd).toBe('ask');
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({resumeCwd: 'bogus'}),
+		);
+		expect(loadSettings().resumeCwd).toBe('session');
+	});
+});
+
+describe('resumeCwdDecision (which directory a resumed session uses)', () => {
+	test('session mode always restores the session directory', () => {
+		expect(resumeCwdDecision('session', '/a', '/b')).toBe('session');
+		expect(resumeCwdDecision('session', '/a', '/a')).toBe('session');
+	});
+
+	test('current mode keeps the launch directory even when they differ', () => {
+		expect(resumeCwdDecision('current', '/a', '/b')).toBe('current');
+		expect(resumeCwdDecision('current', '/a', undefined)).toBe('current');
+	});
+
+	test('ask defers to the user ONLY when the directories differ', () => {
+		expect(resumeCwdDecision('ask', '/a', '/b')).toBe('ask');
+		expect(resumeCwdDecision('ask', '/a', '/a')).toBe('session');
+	});
+
+	test('a missing session directory always keeps the current one', () => {
+		expect(resumeCwdDecision('session', '/a', undefined)).toBe('current');
+		expect(resumeCwdDecision('ask', '/a', undefined)).toBe('current');
 	});
 });
