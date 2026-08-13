@@ -12,9 +12,16 @@ import {
 	ProviderError,
 	setFallbackEndpoints,
 	streamChat,
+	buildSystemPrompt,
 	type ChatMessageLike,
 	type MockToolCall,
 } from './client';
+import {
+	SYSTEM_PROMPT_STYLES,
+	seedCustomSystemPrompt,
+	systemPromptPath,
+	type SystemPromptStyle,
+} from './system-prompt';
 import {
 	discoverModels,
 	configDir,
@@ -1476,6 +1483,29 @@ export function App() {
 				}
 				setCavemanMode(on);
 				saveSettings({...settings, cavemanMode: on});
+				return;
+			}
+			case 'systemPrompt': {
+				const next = value.trim().toLowerCase();
+				if (
+					!SYSTEM_PROMPT_STYLES.includes(
+						next as SystemPromptStyle,
+					)
+				) {
+					appendInfo(
+						`Invalid system prompt '${value}'. Use ${SYSTEM_PROMPT_STYLES.join(', ')}.`,
+					);
+					return;
+				}
+				saveSettings({...settings, systemPrompt: next});
+				if (next === 'custom') {
+					// Seed SYSTEM.md with the built-in prompt so the user has
+					// a starting point to edit in any editor.
+					seedCustomSystemPrompt(buildSystemPrompt());
+					showToast(`Custom prompt: edit ${systemPromptPath()}`);
+				} else {
+					showToast(`System prompt: ${next}`);
+				}
 				return;
 			}
 			case 'resumeCwd': {

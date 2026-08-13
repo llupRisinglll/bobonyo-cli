@@ -53,6 +53,21 @@ describe('caveman mode setting', () => {
 	});
 });
 
+describe('system prompt setting', () => {
+	test('Behavior exposes the System prompt style selector', () => {
+		const rows = settingsRows(SETTINGS_TABS.indexOf('Behavior'));
+		const row = rows.find(candidate => candidate.key === 'systemPrompt');
+		expect(row?.label).toBe('System prompt');
+		expect(SETTING_OPTIONS.systemPrompt).toEqual([
+			'default',
+			'opencode',
+			'claudecode',
+			'codex',
+			'custom',
+		]);
+	});
+});
+
 describe('providers tab is replaced by the connect-provider modal entry', () => {
 	test('the Providers tab is GONE (the modal replaces it)', () => {
 		expect(SETTINGS_TABS).not.toContain('Providers');

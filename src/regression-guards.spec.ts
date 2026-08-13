@@ -337,6 +337,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/case 'connectProvider':/);
 	});
 
+	test('system prompt is a settings-selectable STYLE (custom = SYSTEM.md)', () => {
+		const panel = read('./components/settings-panel.tsx');
+		expect(panel).toMatch(/systemPrompt: \[\.\.\.SYSTEM_PROMPT_STYLES\]/);
+		expect(panel).toMatch(/key: 'systemPrompt'/);
+		const client = read('./client.ts');
+		expect(client).toMatch(/resolveSystemPrompt\(style, defaultBase\)/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/case 'systemPrompt':/);
+		expect(app).toMatch(/seedCustomSystemPrompt\(buildSystemPrompt\(\)\)/);
+		expect(read('./system-prompt.ts')).toMatch(
+			/export function seedCustomSystemPrompt/,
+		);
+	});
+
 	test('resume search covers the session id', () => {
 		const modal = read('./components/resume-modal.tsx');
 		// The filter must go through the pure helper that matches the id,

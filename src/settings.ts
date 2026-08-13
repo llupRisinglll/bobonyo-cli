@@ -42,6 +42,11 @@ export interface Settings {
 	cavemanMode?: boolean;
 	/** Resume working-directory mode (session / current / ask). */
 	resumeCwd?: ResumeCwdMode;
+	/**
+	 * System-prompt style (default / opencode / claudecode / codex / custom).
+	 * `custom` reads (and seeds) SYSTEM.md in the config dir.
+	 */
+	systemPrompt?: string;
 	/** Mouse-wheel scroll speed multiplier (parity: opencode scroll_speed, default 3). */
 	scrollSpeed?: number;
 	autoCompact: {enabled: boolean; threshold: number};
@@ -59,6 +64,7 @@ const DEFAULTS: Settings = {
 	hideThinking: true,
 	cavemanMode: true,
 	resumeCwd: 'session',
+	systemPrompt: 'default',
 	scrollSpeed: 3,
 	// ON by default: without compaction, a long conversation hits the
 	// message cap and silently trims its OLDEST messages — the byte-0 head
@@ -139,6 +145,11 @@ export function loadSettings(): Settings {
 		Number.isFinite(settings.scrollSpeed)
 			? settings.scrollSpeed
 			: DEFAULTS.scrollSpeed;
+	const systemPrompt =
+		typeof settings.systemPrompt === 'string' &&
+		settings.systemPrompt.length > 0
+			? settings.systemPrompt
+			: DEFAULTS.systemPrompt;
 	return {
 		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode) ? mode : DEFAULTS.mode,
 		toolProfile: ['full', 'minimal', 'nano', 'auto'].includes(toolProfile)
@@ -151,6 +162,7 @@ export function loadSettings(): Settings {
 		hideThinking,
 		cavemanMode,
 		resumeCwd,
+		systemPrompt,
 		scrollSpeed,
 		autoCompact: {
 			// Missing field → DEFAULTS (compaction is ON by default so long

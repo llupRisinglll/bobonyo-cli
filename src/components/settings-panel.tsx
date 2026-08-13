@@ -28,6 +28,7 @@ import {colors, themeName} from '../theme';
 import {loadSteeringConfig} from '../steering';
 import {loadMCPConfig} from '../mcp';
 import {loadCustomCommands, loadCustomTools, loadSkills} from '../custom';
+import {SYSTEM_PROMPT_STYLES} from '../system-prompt';
 import {activeRowPalette} from '../row-highlight';
 
 export const SETTINGS_TABS = [
@@ -54,6 +55,7 @@ export const SETTING_OPTIONS: Record<string, string[]> = {
 	resumeCwd: ['session', 'current', 'ask'],
 	mode: ['yolo', 'normal', 'plan', 'auto-accept'],
 	profile: ['full', 'minimal', 'nano', 'auto'],
+	systemPrompt: [...SYSTEM_PROMPT_STYLES],
 };
 
 /** Reactive row list for the active settings tab (GAP-19). */
@@ -107,6 +109,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 					key: 'cavemanMode',
 					label: 'Caveman mode',
 					value: cavemanMode() ? 'on' : 'off',
+				},
+				{
+					key: 'systemPrompt',
+					label: 'System prompt',
+					value: loadSettings().systemPrompt ?? 'default',
 				},
 				{
 					key: 'resumeCwd',

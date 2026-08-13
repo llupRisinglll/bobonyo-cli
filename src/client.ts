@@ -10,6 +10,11 @@ import {activeEndpoint, cavemanMode, sessionId, setRetryingAttempt} from './stat
 import {resolveRulesFile} from './rules-file';
 import {builtinCavemanSkill, loadSkills} from './custom';
 import {readCodexAuth} from './codex-auth';
+import {loadSettings} from './settings';
+import {
+	resolveSystemPrompt,
+	type SystemPromptStyle,
+} from './system-prompt';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -143,8 +148,15 @@ export function buildSystemParts(toolProfile?: string): {
 	stable: string;
 	volatile: string;
 } {
-	const base =
+	const defaultBase =
 		toolProfile === 'nano' ? NANO_SYSTEM_PROMPT : SYSTEM_PROMPT;
+	// System-prompt STYLE (Settings → Behavior → System prompt): default /
+	// opencode / claudecode / codex / custom (SYSTEM.md). A style change is
+	// a legitimate head change, never a per-turn one.
+	const style = (
+		loadSettings().systemPrompt ?? 'default'
+	) as SystemPromptStyle;
+	const base = resolveSystemPrompt(style, defaultBase);
 	// Built-in caveman mode (Settings → Behavior → Caveman mode). The
 	// instructions are part of the STABLE block so the cache head stays
 	// byte-identical per session; toggling the setting is a legitimate head
