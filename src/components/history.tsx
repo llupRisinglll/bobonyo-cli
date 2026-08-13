@@ -111,6 +111,33 @@ const COMPONENT_ROW_LANGS = new Set([
 	'filerow',
 	'filediff',
 ]);
+
+/**
+ * Pure hit-test for one settled block: map a terminal row to a DOC row
+ * inside the block's span. Uses the ACTUAL laid-out height (the pre-tool
+ * brief and the bash box borders render rows absent from docLines) and
+ * CLAMPS into the block's doc span so those extra rows never spill into
+ * the next block — that misalignment broke hover/click below every
+ * briefed entry (visible on resume). Pure + unit-tested.
+ */
+export function hitTestBlock(
+	entry: {
+		ref: {screenY: number; height?: number} | null;
+		start: number;
+		rows: number;
+	},
+	y: number,
+): number | null {
+	if (!entry.ref) return null;
+	const top = entry.ref.screenY;
+	const height = entry.ref.height ?? entry.rows;
+	if (y < top || y >= top + height) return null;
+	return Math.min(
+		entry.start + Math.max(0, y - top),
+		entry.start + Math.max(0, entry.rows - 1),
+	);
+}
+
 /**
  * Expanded per-call entries of every multi-call compact block, keyed by block
  * key. Clicking an expandable tally opens the DETAILS MODAL with these
@@ -438,7 +465,7 @@ export function History(props: {
 	// normalizes block constructs). Mouse mapping stays global via per-block
 	// row offsets.
 	const blockRefs: Array<{
-		ref: {screenY: number} | null;
+		ref: {screenY: number; height?: number} | null;
 		start: number;
 		rows: number;
 	}> = [];
@@ -716,6 +743,10 @@ export function History(props: {
 				// Replies render a leading blank row (breakline before the
 				// response) and tool blocks too (breakline before the block),
 				// so those blocks are one row taller.
+				// The pre-tool BRIEF renders an extra line above the row; the
+				// bash box draws TOP/BOTTOM borders. rowForEvent prefers the
+				// ACTUAL laid-out height, these counts are the pre-layout
+				// fallback.
 				rows:
 					renderIndex.length -
 					start +
@@ -723,7 +754,13 @@ export function History(props: {
 					// The bordered bash box draws a TOP and BOTTOM border
 					// around its content, so the click/hover range must span
 					// two extra rows (the border is part of the entry).
-					(group.kind === 'tool' && isBashBlock(group) ? 2 : 0),
+					(group.kind === 'tool' && isBashBlock(group) ? 2 : 0) +
+					// The model brief (when present) is one rendered line.
+					(group.kind === 'tool' &&
+					group.brief &&
+					group.brief.trim()
+						? 1
+						: 0),
 			});
 		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
@@ -733,6 +770,7 @@ export function History(props: {
 		baseRowCount = renderIndex.length;
 		return stableSettledBlocks(settledBlockCache, blocks);
 	});
+
 	/**
 	 * LIVE region, computed on the ticker signals ONLY so the settled blocks
 	 * stay untouched. The THOUGHT and the STREAMING REPLY are separate nodes:
@@ -876,11 +914,8 @@ export function History(props: {
 	 */
 	const rowForEvent = (event: MouseEvent): number => {
 		for (const entry of blockRefs) {
-			if (!entry.ref) continue;
-			const top = entry.ref.screenY;
-			if (event.y >= top && event.y < top + entry.rows) {
-				return entry.start + (event.y - top);
-			}
+			const row = hitTestBlock(entry, event.y);
+			if (row !== null) return row;
 		}
 		// LIVE nodes follow the settled base (the reply comes after the
 		// thought, so its rows include the thought's rendered lines).

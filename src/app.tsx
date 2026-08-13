@@ -253,7 +253,11 @@ import {
 	type ChatMessage,
 } from './state';
 
-const MAX_TURN_ROUNDS = 8;
+// Tool-round budget per user turn. Generous enough for long tasks (test
+// suites, refactors, multi-file changes) that legitimately chain many tool
+// calls; the REAL runaway-loop protection is the repeated-tool-signature
+// guard (MAX_REPEATED_TOOL_CALLS), not this cap.
+const MAX_TURN_ROUNDS = 24;
 const MAX_EMPTY_TURNS = 2;
 const MAX_REPEATED_TOOL_CALLS = 3;
 const MAX_MALFORMED_RETRIES = 2;
@@ -2444,9 +2448,12 @@ export function App() {
 				);
 				// The turn hit the round cap after a tool call — the model
 				// never got a chance to narrate the last result (e.g. a
-				// failing test run). Say so instead of stopping silently.
+				// failing test run). Say so instead of stopping silently,
+				// and give the user an ACTIONABLE path forward (the context
+				// is already persisted, so a plain "continue" prompt resumes
+				// from exactly where the loop stopped).
 				appendInfo(
-					`Turn hit the ${MAX_TURN_ROUNDS}-round limit after the last tool call — the model produced no final reply.`,
+					`Long-running task paused at the ${MAX_TURN_ROUNDS}-round safety cap (the model kept using tools without a final reply). Type "continue" to keep going — the conversation state is saved.`,
 				);
 			}
 		} catch (error) {

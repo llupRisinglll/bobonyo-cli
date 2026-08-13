@@ -427,6 +427,27 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(live).toMatch(/<BashToolRow/);
 	});
 
+	test('hover/click hit-testing uses the ACTUAL rendered height (brief-safe)', () => {
+		// The pre-tool brief and the bash box borders render rows that are
+		// NOT in docLines; the computed `rows` undercounts them, which
+		// shifted blockRanges and broke hover/click below every briefed
+		// entry (visible on resume). rowForEvent must read the laid-out ref
+		// height and clamp into the block's doc-line span.
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/export function hitTestBlock/);
+		expect(history).toMatch(/entry\.ref\.height \?\? entry\.rows/);
+		expect(history).toMatch(/entry\.start \+ Math\.max\(0, entry\.rows - 1\)/);
+	});
+
+	test('round-cap cutoff is actionable, never a dead-end message', () => {
+		// The old "Turn hit the 8-round limit … no final reply" told the
+		// user nothing and framed a safety cap as a model failure. The
+		// cutoff must point to the "continue" path (context is persisted).
+		const app = read('./app.tsx');
+		expect(app).not.toMatch(/no final reply\.'/);
+		expect(app).toMatch(/Type "continue" to keep going/);
+	});
+
 	test('the model brief before a tool call is rendered, never dropped', () => {
 		// claude code / openclaude render the model's "I'll check X"
 		// narration BEFORE the tool box, INTEGRATED with the tool entry.
