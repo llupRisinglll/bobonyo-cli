@@ -439,6 +439,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/entry\.start \+ Math\.max\(0, entry\.rows - 1\)/);
 	});
 
+	test('settled block refs survive memo recomputes (resume hover parity)', () => {
+		// stableSettledBlocks reuses UNCHANGED block objects, so Solid's For
+		// keeps their elements WITHOUT re-firing the ref callback. Resetting
+		// every blockRefs entry to null on recompute silently dropped hover/
+		// click from every kept block — on resume only the last (newly
+		// created) block stayed interactive. The memo must carry the
+		// previous ref over by block identity, not reset it.
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/prevRefsByBlock/);
+		expect(history).toMatch(/prevRefsByBlock\.set\(entry\.block, entry\.ref\)/);
+		expect(history).toMatch(/prevRefsByBlock\.get\(stableBlocks\[groupIndex\]!\) \?\? null/);
+	});
+
 	test('round-cap cutoff is actionable, never a dead-end message', () => {
 		// The old "Turn hit the 8-round limit … no final reply" told the
 		// user nothing and framed a safety cap as a model failure. The

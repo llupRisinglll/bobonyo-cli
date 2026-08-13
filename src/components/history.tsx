@@ -468,6 +468,9 @@ export function History(props: {
 		ref: {screenY: number; height?: number} | null;
 		start: number;
 		rows: number;
+		/** The stable block this entry maps to (carry-over refs across memo
+		 *  recomputes — see the memo below). */
+		block?: SettledBlock;
 	}> = [];
 	/** Global rendered-row offset of the SETTLED content (live rows follow). */
 	let baseRowCount = 0;
@@ -683,6 +686,22 @@ export function History(props: {
 		const renderIndex: number[] = [];
 		const ranges: Array<{key: string; start: number; end: number}> = [];
 		let block: {key: string; start: number} | null = null;
+		// stableSettledBlocks reuses UNCHANGED block objects so Solid's For
+		// keeps their elements WITHOUT re-firing the ref callback. If we
+		// reset every ref to null here, those kept elements lose their
+		// hover/click hit-target on EVERY recompute — on resume (where most
+		// blocks are cache hits from the previous conversation) only newly
+		// created blocks stayed interactive. Carry the ref over when the
+		// block object is unchanged: the element still exists and its
+		// screenY/height are kept live by the layout engine.
+		const stableBlocks = stableSettledBlocks(settledBlockCache, blocks);
+		const prevRefsByBlock = new Map<
+			SettledBlock,
+			{screenY: number; height?: number} | null
+		>();
+		for (const entry of blockRefs) {
+			if (entry.block) prevRefsByBlock.set(entry.block, entry.ref);
+		}
 		blockRefs.length = 0;
 		blocks.forEach((group, groupIndex) => {
 			const start = renderIndex.length;
@@ -738,7 +757,7 @@ export function History(props: {
 				}
 			});
 			blockRefs.push({
-				ref: null,
+				ref: prevRefsByBlock.get(stableBlocks[groupIndex]!) ?? null,
 				start,
 				// Replies render a leading blank row (breakline before the
 				// response) and tool blocks too (breakline before the block),
@@ -761,6 +780,7 @@ export function History(props: {
 					group.brief.trim()
 						? 1
 						: 0),
+				block: stableBlocks[groupIndex],
 			});
 		});
 		lineMap = renderIndex.map(index => docLines[index]?.key);
@@ -768,7 +788,7 @@ export function History(props: {
 		blockRanges = ranges;
 		currentBlock = block;
 		baseRowCount = renderIndex.length;
-		return stableSettledBlocks(settledBlockCache, blocks);
+		return stableBlocks;
 	});
 
 	/**
