@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import {writeFileSync} from 'node:fs';
+import {existsSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
@@ -732,8 +732,33 @@ export function App() {
 			// Heal pre-fix sessions whose provider context lagged the
 			// transcript (interrupted turns never committed their user
 			// messages) — otherwise a resumed conversation looks empty to
-			// the model even though the transcript shows everything.
-			setContext(healResumedContext(resumed.context, resumed.messages));
+			// the model even though the transcript shows everything. The
+			// heal is tail-lag only and capped to the live message budget,
+			// so a healthy capped context is reused byte-for-byte and the
+			// provider's prefix cache survives the resume.
+			setContext(
+				healResumedContext(
+					resumed.context,
+					resumed.messages,
+					maxMessages(),
+				),
+			);
+			// CACHE HEAD PARITY: the system prompt's volatile block carries
+			// the working directory + that dir's AGENTS.md (it reads
+			// process.cwd()). A session resumed from a DIFFERENT directory
+			// would rebuild a different head, and every continued turn would
+			// miss the provider's byte-anchored prefix cache (DeepSeek /
+			// Xiaomi automatic prefix caching) — the cost the user sees.
+			// Restore the session's original directory so the head stays
+			// byte-identical (codex/opencode resume restore it too).
+			if (resumed.cwd && existsSync(resumed.cwd)) {
+				try {
+					process.chdir(resumed.cwd);
+				} catch {
+					// Original directory vanished/moved — keep the current
+					// one (a one-time cold start, not a per-turn cost).
+				}
+			}
 			// Arrow-up history parity: rebuild the prompt history from the
 			// resumed conversation so ↑/↓ recall the prompts this session
 			// actually sent (live sessions build the same list per turn,

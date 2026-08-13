@@ -227,16 +227,24 @@ export function loadSession(id: string): SessionData | null {
  * skipped, and runs of tool rows reconstructed as one assistant
  * `tool_calls` message + per-call tool results (the real outputs live in
  * the transcript's `tool.output`). Pure, unit-tested.
+ *
+ * CACHE INVARIANT: the rebuild must only trigger on GENUINE tail lag, not
+ * on normal context capping. The live loop caps the provider context to the
+ * newest N messages (`capMessages`), so a long conversation legitimately
+ * has fewer users in context than in the full transcript — comparing raw
+ * user counts misread every capped session as broken, rebuilt the ENTIRE
+ * history on every resume, and sent a bigger, byte-different head that
+ * busted the provider's prefix cache (cost went up). The trigger is now the
+ * context's TAIL: heal only when the context does not already end where the
+ * transcript ends. Rebuilds are also capped to the same newest-N the live
+ * loop uses, so a repair never exceeds the original request size.
  */
 export function healResumedContext(
 	context: ChatMessageLike[],
 	messages: ChatMessage[],
+	max = Number.POSITIVE_INFINITY,
 ): ChatMessageLike[] {
-	const transcriptUsers = messages.filter(
-		message => message.role === 'user' && !message.error,
-	).length;
-	const contextUsers = context.filter(message => message.role === 'user').length;
-	if (contextUsers >= transcriptUsers) return context;
+	if (contextCoversTranscriptTail(context, messages)) return context;
 
 	const out: ChatMessageLike[] = [];
 	let toolRun: Array<{
@@ -287,7 +295,45 @@ export function healResumedContext(
 		}
 	}
 	flushTools();
+	// Keep the same newest-N the live loop keeps, so a repaired context never
+	// outgrows what the original conversation actually sent (bounded cost).
+	if (Number.isFinite(max) && out.length > max) {
+		const sliced = out.slice(-max);
+		let start = 0;
+		while (start < sliced.length && sliced[start]?.role === 'tool') start++;
+		return sliced.slice(start);
+	}
 	return out;
+}
+
+/**
+ * True when the context already ends where the transcript ends (a valid
+ * capped tail), so the rebuild can be skipped and the persisted bytes — the
+ * exact prefix the provider cached — are reused untouched.
+ */
+function contextCoversTranscriptTail(
+	context: ChatMessageLike[],
+	messages: ChatMessage[],
+): boolean {
+	if (context.length === 0) return messages.length === 0;
+	const last = context[context.length - 1]!;
+	// Scan from the newest transcript row for the first message that maps to
+	// a provider-context row (error rows, info rows and reasoning-only
+	// assistant rows never reach the context).
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]!;
+		if (message.kind === 'info' || message.kind === 'warning') continue;
+		if (message.error) continue;
+		if (message.role === 'assistant' && !message.content?.trim()) continue;
+		if (message.role === 'tool') {
+			return last.role === 'tool' && last.tool_call_id === message.toolId;
+		}
+		if (message.role === 'user') {
+			return last.role === 'user' && last.content === message.content;
+		}
+		return last.role === 'assistant' && last.content === message.content;
+	}
+	return true;
 }
 
 interface NanocoderSessionFile {

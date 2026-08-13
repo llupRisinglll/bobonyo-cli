@@ -169,6 +169,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(spec).toMatch(/matches by SESSION ID/);
 	});
 
+	test('resume heals tail-lag only and restores the session cwd (cache parity)', () => {
+		// Rebuilding the provider context on every resume sent a bigger,
+		// byte-different head and busted the prefix cache; the heal must
+		// only fire on genuine tail lag and stay within the live message
+		// budget. Resuming from a different directory changed the system
+		// prompt's cwd line — the whole head missed. Both are guarded so
+		// continued conversations keep their provider cache.
+		const session = read('./session.ts');
+		expect(session).toMatch(/contextCoversTranscriptTail/);
+		expect(session).not.toMatch(/contextUsers >= transcriptUsers/);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/process\.chdir\(resumed\.cwd\)/);
+	});
+
 	test('Ctrl+Left/Right jump WORD-WISE in the input (original parity)', () => {
 		const input = read('./components/input-box.tsx');
 		// The arrow handler branches on ctrl and goes through the word-jump

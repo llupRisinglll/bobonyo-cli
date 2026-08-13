@@ -161,8 +161,10 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 	});
 
 	test('divergent context is rebuilt: user rows kept, error rows dropped, tool runs batched', () => {
+		// The context ends BEFORE the transcript (missing the newest user
+		// turn — the interrupted-turn lag the heal exists for).
 		const stale: ChatMessageLike[] = [
-			{role: 'user', content: 'continue'},
+			{role: 'user', content: 'connect to the prod db'},
 		];
 		const healed = healResumedContext(stale, transcript);
 		expect(healed).toEqual([
@@ -190,6 +192,39 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 		expect(healed).toEqual([
 			{role: 'user', content: 'connect to the prod db'},
 			{role: 'assistant', content: 'Running fine'},
+		]);
+	});
+
+	test('a CAPPED context ending at the transcript tail is reused untouched (cache parity)', () => {
+		// The live loop caps the provider context to the newest N messages,
+		// so a long conversation legitimately has fewer users than the full
+		// transcript. Rebuilding it on resume sent a bigger, byte-different
+		// head that busted the prefix cache — the heal must skip it.
+		const longTranscript: ChatMessage[] = [
+			{role: 'user', content: 'oldest'},
+			{role: 'assistant', content: 'old reply'},
+			{role: 'user', content: 'newest'},
+			{role: 'assistant', content: 'new reply'},
+		];
+		const capped: ChatMessageLike[] = [
+			{role: 'user', content: 'newest'},
+			{role: 'assistant', content: 'new reply'},
+		];
+		expect(healResumedContext(capped, longTranscript)).toBe(capped);
+	});
+
+	test('rebuilt contexts respect the newest-N budget like the live loop', () => {
+		const longTranscript: ChatMessage[] = [
+			{role: 'user', content: 'u1'},
+			{role: 'assistant', content: 'a1'},
+			{role: 'user', content: 'u2'},
+			{role: 'assistant', content: 'a2'},
+			{role: 'user', content: 'u3'},
+		];
+		const healed = healResumedContext([], longTranscript, 2);
+		expect(healed).toEqual([
+			{role: 'assistant', content: 'a2'},
+			{role: 'user', content: 'u3'},
 		]);
 	});
 });

@@ -98,6 +98,12 @@ describe('undoExchange (opencode-style session revert)', () => {
 			{
 				role: 'tool',
 				content: '✦ Bash(ls)',
+				toolId: 'c1',
+				tool: {
+					name: 'execute_bash',
+					detail: 'ls',
+					output: 'file.txt',
+				},
 			} as ChatMessage,
 			user('now ship it'),
 			assistant('done'),
