@@ -100,4 +100,19 @@ describe('buildStatusRows', () => {
 			expect(labels).not.toContain(duplicate);
 		}
 	});
+
+	test('codex limit rows land at the BOTTOM, after Version (codex parity)', () => {
+		const rows = buildStatusRows({
+			...BASE,
+			codexLimitRows: [
+				{label: 'Monthly limit', value: '[████████████████████] 100% left'},
+				{label: 'Credits', value: 'Available'},
+			],
+		});
+		const labels = rows.map(row => row.label);
+		expect(labels.indexOf('Version')).toBeLessThan(
+			labels.indexOf('Monthly limit'),
+		);
+		expect(labels[labels.length - 1]).toBe('Credits');
+	});
 });

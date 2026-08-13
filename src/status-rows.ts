@@ -7,6 +7,8 @@ export interface StatusData {
 	messagesLabel: string;
 	/** Monthly usage label (`1.24M tokens · …`) or undefined when none. */
 	providerUsageLabel?: string;
+	/** Live codex usage-limit rows (`5h limit: [█…] 55% left …`). */
+	codexLimitRows?: StatusRow[];
 	checkpoints: number;
 	skills: number;
 	customCommands: number;
@@ -79,6 +81,10 @@ export function buildStatusRows(data: StatusData): StatusRow[] {
 		{label: 'Watchdog', value: data.watchdogLabel},
 		{label: 'Stream guard', value: data.streamGuardLabel},
 		{label: 'Version', value: data.version},
+		// Codex usage limits render at the BOTTOM of the card (parity: the
+		// codex CLI's /status lists limits after usage/context, never in the
+		// middle of the connection details).
+		...(data.codexLimitRows ?? []),
 	];
 }
 

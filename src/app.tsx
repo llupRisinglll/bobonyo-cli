@@ -126,6 +126,7 @@ import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {buildStatusRows} from './status-rows';
+import {fetchCodexLimits} from './codex-limits';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
 import {
@@ -3079,7 +3080,11 @@ export function App() {
 		);
 	};
 
+	// Guards async `/status` refresh appends (codex limits) against a newer
+	// open landing after an older fetch — a stale modal must never repaint.
+	let statusOpenSeq = 0;
 	const status = () => {
+		const openSeq = ++statusOpenSeq;
 		const endpoint = activeEndpoint();
 		// Event-triggered DeepSeek balance refresh: opening /status is a
 		// "terminal opened" moment the user asked to refresh on. The TTL
@@ -3102,52 +3107,64 @@ export function App() {
 		// `/status` opens as a MODAL (parity: settings) listing only the
 		// details NOT already visible on the status line (mode, tune, agents,
 		// bg, cwd) or the input corner (model[effort], ctx ~N%).
-		setStatusRows(
-			buildStatusRows({
-				sessionLabel: `${sessionName()} (${sessionId()})`,
-				provider: endpoint.id,
-				messagesLabel: `${messages().length} transcript · ${context().length} provider`,
-				providerUsageLabel: isXiaomiMiMo(endpoint)
-					? (() => {
-							const monthly = currentMonthUsage(endpoint.baseUrl);
-							return monthly
-								? `${formatTokens(monthly.totalTokens)} tokens total this month · ` +
-										`${formatTokens(monthly.promptTokens)} prompt · ` +
-										`${formatTokens(monthly.completionTokens)} completion · ` +
-										`${formatTokens(monthly.cachedTokens)} cached`
-								: undefined;
-						})()
-					: undefined,
-				checkpoints: listCheckpoints().length,
-				skills: loadSkills().length,
-				customCommands: loadCustomCommands().length,
-				mcpServers: mcpServers(),
-				mcpConfigured: loadMCPConfig().map(server => server.id),
-				cacheLabel,
-				// B21: auto-diagnostics refresh after EVERY tool turn, code
-				// changes (write/edit) never leave the LSP stale.
-				lspLabel:
-					(detectLanguageServers().join(', ') ||
-						'no language servers detected') +
-					(diagnosticsCount() > 0
-						? ` · ${diagnosticsCount()} issue${
-								diagnosticsCount() === 1 ? '' : 's'
-							}`
-						: ''),
-				// Exactly the file embedded in the system prompt (nearest
-				// AGENTS.md walking up from the cwd), so the user always
-				// knows which rules the model is running under.
-				rulesFile: resolveRulesFile(process.cwd()) ?? 'none',
-				steeringLabel: steeringRef.enabled
-					? `enabled · ${steeringRef.rules.length} rules`
-					: 'disabled',
-				watchdogLabel: watchdogMsRef > 0 ? `${watchdogMsRef}ms` : 'off',
-				streamGuardLabel: streamGuardRef.maxDurationMs
-					? `${streamGuardRef.maxDurationMs}ms`
-					: 'off',
-				version: `bobonyo ${VERSION}`,
-			}),
-		);
+		const baseStatusData = {
+			sessionLabel: `${sessionName()} (${sessionId()})`,
+			provider: endpoint.id,
+			messagesLabel: `${messages().length} transcript · ${context().length} provider`,
+			providerUsageLabel: isXiaomiMiMo(endpoint)
+				? (() => {
+						const monthly = currentMonthUsage(endpoint.baseUrl);
+						return monthly
+							? `${formatTokens(monthly.totalTokens)} tokens total this month · ` +
+									`${formatTokens(monthly.promptTokens)} prompt · ` +
+									`${formatTokens(monthly.completionTokens)} completion · ` +
+									`${formatTokens(monthly.cachedTokens)} cached`
+							: undefined;
+					})()
+				: undefined,
+			checkpoints: listCheckpoints().length,
+			skills: loadSkills().length,
+			customCommands: loadCustomCommands().length,
+			mcpServers: mcpServers(),
+			mcpConfigured: loadMCPConfig().map(server => server.id),
+			cacheLabel,
+			// B21: auto-diagnostics refresh after EVERY tool turn, code
+			// changes (write/edit) never leave the LSP stale.
+			lspLabel:
+				(detectLanguageServers().join(', ') ||
+					'no language servers detected') +
+				(diagnosticsCount() > 0
+					? ` · ${diagnosticsCount()} issue${
+							diagnosticsCount() === 1 ? '' : 's'
+						}`
+					: ''),
+			// Exactly the file embedded in the system prompt (nearest
+			// AGENTS.md walking up from the cwd), so the user always knows
+			// which rules the model is running under.
+			rulesFile: resolveRulesFile(process.cwd()) ?? 'none',
+			steeringLabel: steeringRef.enabled
+				? `enabled · ${steeringRef.rules.length} rules`
+				: 'disabled',
+			watchdogLabel: watchdogMsRef > 0 ? `${watchdogMsRef}ms` : 'off',
+			streamGuardLabel: streamGuardRef.maxDurationMs
+				? `${streamGuardRef.maxDurationMs}ms`
+				: 'off',
+			version: `bobonyo ${VERSION}`,
+		};
+		setStatusRows(buildStatusRows(baseStatusData));
+		// Live codex usage limits (`GET /wham/usage`), appended when the
+		// active connection is the ChatGPT-account codex backend. Same
+		// auth + silent-failure contract as the codex model discovery; the
+		// TTL cache keeps repeated opens cheap.
+		if (endpoint.codexAccount) {
+			void fetchCodexLimits(endpoint.baseUrl).then(rows => {
+				if (rows.length > 0 && openSeq === statusOpenSeq) {
+					setStatusRows(
+						buildStatusRows({...baseStatusData, codexLimitRows: rows}),
+					);
+				}
+			});
+		}
 		setStatusOpen(true);
 	};
 
