@@ -3205,10 +3205,12 @@ export function App() {
 	 */
 	const refreshModelCatalogs = () => {
 		for (const provider of listProviders()) {
-			const refresh = isDeepSeek(provider)
-				? refreshDeepSeekModels(provider)
-				: isXiaomiMiMo(provider) && provider.modelDiscoveryUrl
-					? refreshProviderModels(provider, provider.modelDiscoveryUrl)
+		const refresh = isDeepSeek(provider)
+			? refreshDeepSeekModels(provider)
+			: isXiaomiMiMo(provider) && provider.modelDiscoveryUrl
+				? refreshProviderModels(provider, provider.modelDiscoveryUrl)
+				: provider.modelDiscoveryUrl
+					? discoverModels(provider)
 					: undefined;
 			if (!refresh) continue;
 			void refresh.then(models => {
@@ -3533,8 +3535,12 @@ export function App() {
 							onEditProvider={(providerId) => {
 								// Open the connect MODAL prefilled with the
 								// provider (opencode-style edit), never the
-								// input-row wizard. The settings list stays
-								// open behind the modal.
+								// input-row wizard. CLOSE the settings list
+								// first: both surfaces register useKeyboard,
+								// so a key aimed at the connect modal would
+								// also hit the settings search behind it.
+								setSettingsList(null);
+								setSettingsOpen(false);
 								setConnectOpen({editId: providerId});
 							}}
 							onInsert={(text) => {
@@ -3563,9 +3569,11 @@ export function App() {
 					currentModel={activeEndpoint().model}
 					onSelect={selectModel}
 					onConnectProvider={() => {
-						// The connect modal floats ABOVE the model picker
-						// (zIndex 3200 > 3000); once connected, the picker
-						// refreshes with the new provider behind it.
+						// Close the model picker first: BOTH modals register
+						// useKeyboard, so an Esc meant for the connect modal
+						// would also close the picker behind it. On connect,
+						// saveConnectedProvider reopens the picker fresh.
+						setModelOpen(false);
 						setConnectOpen({});
 					}}
 					onClose={() => {

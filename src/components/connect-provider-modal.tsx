@@ -500,6 +500,8 @@ export function ConnectProviderModal(props: {
 		setError('');
 	});
 
+	// The provider OPTIONS stay a single settings-style column (multi-column
+	// layouts are for model DETAILS, not the option list).
 	const pickerRows = (): PickerRow[] => {
 		const configured = listProviders();
 		const rows: PickerRow[] = [];
@@ -510,7 +512,7 @@ export function ConnectProviderModal(props: {
 				lastCategory = preset.category;
 			}
 			rows.push({
-				kind: preset.id === 'custom' ? 'custom' : 'provider',
+				kind: preset.id === 'custom' ? ('custom' as const) : ('provider' as const),
 				preset,
 				count: presetConnectionCount(preset, configured),
 			});
@@ -718,8 +720,12 @@ export function ConnectProviderModal(props: {
 		return true;
 	});
 
+	// Settings-modal shell: the card uses as much of the screen as the
+	// content needs — tall terminals grow the card up to the window height.
 	const cardWidth = () => Math.min(78, Math.max(60, dims().width - 6));
-	const cardHeight = () => Math.min(20, Math.max(12, dims().height - 8));
+	const listVisible = () => Math.max(4, Math.min(60, dims().height - 9));
+	const cardHeight = () =>
+		Math.min(dims().height - 2, Math.max(12, listVisible() + 8));
 	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
@@ -748,7 +754,6 @@ export function ConnectProviderModal(props: {
 			all.findIndex(candidate => candidate.preset === selected.preset),
 		);
 	};
-	const listVisible = () => Math.max(4, cardHeight() - 9);
 	const visiblePickerRows = (): PickerRow[] => {
 		const all = pickerRows();
 		const full = Math.min(fullRowIndex(), Math.max(0, all.length - 1));

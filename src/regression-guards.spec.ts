@@ -154,8 +154,16 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The initial row index must come from the pure helper (current
 		// model first, then first navigable row) — never a hardcoded 0,
 		// which lands on the provider header and shows no highlight.
-		expect(modal).toMatch(/initialModelRowIndex\(buildRows\(\)\)/);
-		expect(modal).not.toMatch(/rowIndex, setRowIndex\] = createSignal\(0\)/);
+		expect(modal).toMatch(/initialCursor\(\)/);
+		expect(modal).toMatch(/cells\.findIndex\(cell => cell\.isCurrent\)/);
+		expect(modal).not.toMatch(/\[cursor, setCursor\] = createSignal\(0\)/);
+		// Effort is folded INTO the grid cells (the OpenTUI reconciler's
+		// <For> only re-renders when the `each` array changes — reading the
+		// override inside the child never repaints the [effort] badge).
+		expect(modal).toMatch(/shownEffort: effectiveEffort/);
+		// The query re-snap must track ONLY the query: an unfenced effect
+		// re-runs on every E press and snaps the cursor back to current.
+		expect(modal).toMatch(/createEffect\(on\(query,/);
 		// Query changes re-snap through the same helper.
 		expect(modal).toMatch(/createEffect/);
 	});
@@ -712,6 +720,24 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(read('./app.tsx')).toMatch(/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/);
 		expect(read('./components/input-box.tsx')).toMatch(
 			/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/,
+		);
+	});
+
+	test('ANY provider with a discovery URL fetches its models', () => {
+		// DeepSeek/Xiaomi have dedicated fetchers; every other preset
+		// (OpenAI, OpenRouter, Mistral, ...) carries a modelDiscoveryUrl and
+		// must go through the generic catalog fetch — otherwise the model
+		// picker shows only the seeds and never the full supported list.
+		const app = read('./app.tsx');
+		const refresh = app.slice(
+			app.indexOf('const refreshModelCatalogs'),
+			app.indexOf('const selectModel'),
+		);
+		expect(refresh).toMatch(
+			/isXiaomiMiMo\(provider\) && provider\.modelDiscoveryUrl/,
+		);
+		expect(refresh).toMatch(
+			/provider\.modelDiscoveryUrl\s*\n\s*\?\s*discoverModels\(provider\)/,
 		);
 	});
 });

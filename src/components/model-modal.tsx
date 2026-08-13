@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import {createEffect, createSignal, For, Show} from 'solid-js';
+import {createEffect, createSignal, For, on, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
@@ -55,12 +55,35 @@ export function connectProviderShortcut(
 	return key === 'c' && focus === 'list';
 }
 
+interface ModelCell {
+	provider: ModelProvider;
+	model: string;
+	isCurrent: boolean;
+	/** Effort folded INTO the cell: the OpenTUI reconciler's <For> only
+	 *  re-renders when the `each` array changes, so signals read inside the
+	 *  child (effort overrides) never trigger a repaint on their own. */
+	shownEffort?: string;
+	/** Global index in the flattened model-cell list. */
+	index: number;
+}
+
+interface DisplayLine {
+	kind: 'inherit' | 'provider' | 'grid' | 'spacer' | 'empty';
+	provider?: ModelProvider;
+	isCurrent?: boolean;
+	/** One grid ROW of cells (padding cells are null). */
+	cells?: Array<ModelCell | null>;
+}
+
 /**
- * `/model` MODAL (parity: nanocoder's grouped ModelSelector), providers
- * grouped and expandable, searchable (Tab toggles search/list focus, `C`
- * connects a provider from the list), ↑/↓ + Enter, ←/→ cycles the reasoning
- * effort on a highlighted model, Esc closes. Selecting a model calls
- * `onSelect(providerId, model, effort)`.
+ * `/model` MODAL (parity: nanocoder's grouped ModelSelector). Providers stay
+ * as grouped headers, but the model DETAILS flow into a RESPONSIVE GRID:
+ * 3 columns on wide terminals, 2 on small ones (and 1 when truly narrow),
+ * while the card grows with the screen (settings-modal parity) so a fetched
+ * catalog of hundreds of models never forces a tiny scrollbox. ↑↓←→ move
+ * through the grid, `E` cycles the reasoning effort (←/→ now owns column
+ * navigation), Tab toggles search/list focus, `C` connects a provider from
+ * the list, Enter selects, Esc closes.
  */
 export function ModelModal(props: {
 	providers: ModelProvider[];
@@ -90,137 +113,15 @@ export function ModelModal(props: {
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
-
 	const matches = (text: string): boolean => {
 		const q = query().trim().toLowerCase();
 		return !q || text.toLowerCase().includes(q);
 	};
 
-	const buildRows = (): Row[] => {
-		const rows: Row[] = [];
-		if (props.inheritLabel) {
-			rows.push({kind: 'inherit'});
-			rows.push({kind: 'spacer'});
-		}
-		// CURRENT provider is ALWAYS first (parity: the reference sorts the active
-		// group to the top); the rest stay in config order.
-		const sorted = [...props.providers].sort((a, b) => {
-			const aCurrent = a.id === props.currentProvider ? 0 : 1;
-			const bCurrent = b.id === props.currentProvider ? 0 : 1;
-			return aCurrent !== bCurrent
-				? aCurrent - bCurrent
-				: (a.name ?? a.id).localeCompare(b.name ?? b.id);
-		});
-		for (const provider of sorted) {
-			const isCurrent = provider.id === props.currentProvider;
-			const nameMatches = matches(provider.name ?? provider.id);
-			const visibleModels = provider.models.filter(
-				model => nameMatches || matches(model),
-			);
-			if (query().trim() && !nameMatches && visibleModels.length === 0) {
-				continue;
-			}
-			// Blank line BETWEEN provider groups (before every header except
-			// the first) + after each header, parity with the resume
-			// picker's grouping so the list never feels cluttered.
-			if (rows.length > 0) rows.push({kind: 'spacer'});
-			// NO expand/collapse, every provider is a HEADER row with its
-			// models listed flat underneath (parity: the reference grouped list).
-			rows.push({
-				kind: 'provider',
-				provider,
-				expanded: true,
-				isCurrent,
-			});
-			// Blank line after every provider header, groups breathe
-			// (parity with the resume picker's date-group spacing).
-			rows.push({kind: 'spacer'});
-			for (const model of provider.models) {
-				if (!nameMatches && !matches(model)) continue;
-				rows.push({
-					kind: 'model',
-					provider,
-					model,
-					isCurrent: isCurrent && model === props.currentModel,
-				});
-			}
-		}
-		if (rows.length === 0) rows.push({kind: 'empty'});
-		return rows;
-	};
-
-	const cardWidth = () => Math.min(80, Math.max(56, dims().width - 6));
-	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
-	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	// Bound the card so it NEVER overlaps the input box/status line below
-	// (parity: the reference popover floats over the composer area).
-	const cardHeight = () =>
-		Math.min(24, Math.max(10, dims().height - cardY() - 5));
-	const listVisible = () => Math.max(3, cardHeight() - 9);
-
-	const [confirming, setConfirming] = createSignal<{
-		providerId: string;
-		model: string;
-		effort?: string;
-	} | null>(null);
-	// Open on the CURRENT model row: the highlight starts there and ↑/↓
-	// navigate from it, and the list scrolls so that row is VISIBLE even on
-	// short terminals (parity: the reference highlights the active model).
-	const initialIndex = initialModelRowIndex(buildRows());
-	const [rowIndex, setRowIndex] = createSignal<number>(initialIndex);
-	const [scrollStart, setScrollStart] = createSignal(
-		Math.max(0, initialIndex - listVisible() + 1),
-	);
-	// Per-model effort OVERRIDE selected with ←/→ (keyed provider\0model).
+	// Per-model effort OVERRIDE selected with E (keyed provider\0model).
 	const [effortOverrides, setEffortOverrides] = createSignal<
 		Record<string, string>
 	>({});
-	const bold = () => createTextAttributes({bold: true});
-	const dim = () => createTextAttributes({dim: true});
-	// Active-row palette: info tint + guaranteed-readable foreground.
-	const activeRow = () => activeRowPalette(colors());
-
-	// Navigation moves between MODEL/INHERIT rows only, provider headers are
-	// display-only.
-	const moveRow = (delta: number): void => {
-		const rows = buildRows();
-		if (rows.length === 0) return;
-		let next = rowIndex() + delta;
-		while (
-			rows[next]?.kind === 'provider' ||
-			rows[next]?.kind === 'spacer' ||
-			rows[next]?.kind === 'empty'
-		) {
-			next += delta;
-		}
-		if (next < 0 || next >= rows.length) return;
-		setRowIndex(next);
-		const maxVisible = listVisible();
-		setScrollStart(prev =>
-			next < prev
-				? next
-				: next >= prev + maxVisible
-					? next - maxVisible + 1
-					: prev,
-		);
-	};
-
-	// The OpenTUI reconciler's <For> only re-renders when the `each` array
-	// reference changes, fold selection into the item array.
-	// Fold the effort override INTO the item array, the OpenTUI reconciler's
-	// <For> only re-renders when the `each` array reference changes.
-	const items = () =>
-		buildRows().map((row, index) => ({
-			row,
-			index,
-			active: rowIndex() === index,
-			shownEffort:
-				row.kind === 'model'
-					? effectiveEffort(row.provider, row.model)
-					: undefined,
-		}));
-
-	const currentRow = (): Row | undefined => items()[rowIndex()]?.row;
 	const effortKey = (provider: string, model: string): string =>
 		`${provider}\u0000${model}`;
 	const effectiveEffort = (
@@ -230,31 +131,290 @@ export function ModelModal(props: {
 		effortOverrides()[effortKey(provider.id, model)] ??
 		provider.modelEfforts[model];
 
-	// After a QUERY change the selection re-snaps to a REAL row: the current
-	// model when it still matches, otherwise the first model/Inherit row
-	// (typing sets index 0, which is a header or spacer).
-	createEffect(() => {
-		const rows = buildRows();
-		const row = rows[rowIndex()];
-		if (row?.kind === 'model' || row?.kind === 'inherit') return;
-		const target = initialModelRowIndex(rows);
-		if (target !== -1 && target !== rowIndex()) {
-			setRowIndex(target);
-			setScrollStart(prev =>
-				target < prev
-					? target
-					: target >= prev + listVisible()
-						? target - listVisible() + 1
-						: prev,
+	// RESPONSIVE SHELL (settings-modal parity): the card grows with the
+	// screen height; the width grows so model details can use 3 columns on
+	// big terminals, 2 on small ones.
+	const cardWidth = () => Math.min(120, Math.max(60, dims().width - 4));
+	const listVisible = () => Math.max(3, Math.min(60, dims().height - 9));
+	const cardHeight = () =>
+		Math.min(dims().height - 2, Math.max(10, listVisible() + 7));
+	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
+	const modelColumns = () => (cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1);
+	const cellWidth = () => Math.floor((cardWidth() - 4) / modelColumns());
+
+	/** Filtered provider groups in display order (current provider first). */
+	const groups = (): Array<{
+		provider: ModelProvider;
+		isCurrent: boolean;
+		models: string[];
+	}> => {
+		const sorted = [...props.providers].sort((a, b) => {
+			const aCurrent = a.id === props.currentProvider ? 0 : 1;
+			const bCurrent = b.id === props.currentProvider ? 0 : 1;
+			return aCurrent !== bCurrent
+				? aCurrent - bCurrent
+				: (a.name ?? a.id).localeCompare(b.name ?? b.id);
+		});
+		const out: Array<{
+			provider: ModelProvider;
+			isCurrent: boolean;
+			models: string[];
+		}> = [];
+		for (const provider of sorted) {
+			const isCurrent = provider.id === props.currentProvider;
+			const nameMatches = matches(provider.name ?? provider.id);
+			const visibleModels = provider.models.filter(
+				model => nameMatches || matches(model),
 			);
+			if (query().trim() && !nameMatches && visibleModels.length === 0) {
+				continue;
+			}
+			out.push({provider, isCurrent, models: visibleModels});
 		}
-	});
+		return out;
+	};
+
+	/** Display lines: inherit → spacers → provider headers → model GRID rows. */
+	const displayLines = (): DisplayLine[] => {
+		const lines: DisplayLine[] = [];
+		if (props.inheritLabel) {
+			lines.push({kind: 'inherit'});
+			lines.push({kind: 'spacer'});
+		}
+		const cols = modelColumns();
+		let cellIndex = 0;
+		for (const group of groups()) {
+			// Blank line BETWEEN provider groups (before every header except
+			// the first), parity with the resume picker's grouping.
+			if (lines.length > 0) lines.push({kind: 'spacer'});
+			lines.push({
+				kind: 'provider',
+				provider: group.provider,
+				isCurrent: group.isCurrent,
+			});
+			const gridRows = Math.ceil(group.models.length / cols);
+			for (let r = 0; r < gridRows; r++) {
+				const cells: Array<ModelCell | null> = [];
+				for (let c = 0; c < cols; c++) {
+					const i = r * cols + c;
+					if (i < group.models.length) {
+						cells.push({
+							provider: group.provider,
+							model: group.models[i]!,
+							isCurrent:
+								group.isCurrent &&
+								group.models[i] === props.currentModel,
+							shownEffort: effectiveEffort(
+								group.provider,
+								group.models[i]!,
+							),
+							index: cellIndex,
+						});
+						cellIndex += 1;
+					} else {
+						cells.push(null);
+					}
+				}
+				lines.push({kind: 'grid', cells});
+			}
+		}
+		if (lines.length === 0) lines.push({kind: 'empty'});
+		return lines;
+	};
+
+	const modelCells = (): ModelCell[] => {
+		const cells: ModelCell[] = [];
+		for (const line of displayLines()) {
+			for (const cell of line.cells ?? []) {
+				if (cell) cells.push(cell);
+			}
+		}
+		return cells;
+	};
+
+	// Cursor over flattened model cells; -1 = the Inherit row.
+	const initialCursor = (): number => {
+		const cells = modelCells();
+		const current = cells.findIndex(cell => cell.isCurrent);
+		if (current !== -1) return current;
+		if (props.inheritLabel) return -1;
+		return cells.length > 0 ? 0 : -1;
+	};
+	const [cursor, setCursor] = createSignal<number>(initialCursor());
+	const [scrollStart, setScrollStart] = createSignal(0);
+
+	const [confirming, setConfirming] = createSignal<{
+		providerId: string;
+		model: string;
+		effort?: string;
+	} | null>(null);
+	const bold = () => createTextAttributes({bold: true});
+	const dim = () => createTextAttributes({dim: true});
+	const activeRow = () => activeRowPalette(colors());
+
+	const currentCell = (): ModelCell | undefined => {
+		const cells = modelCells();
+		return cursor() >= 0 ? cells[cursor()] : undefined;
+	};
+	/** Map a global cell index to its provider group + local index. */
+	const locateCell = (
+		index: number,
+	): {groupIndex: number; local: number} | null => {
+		const list = groups();
+		let remaining = index;
+		for (let g = 0; g < list.length; g++) {
+			const count = list[g]!.models.length;
+			if (remaining < count) return {groupIndex: g, local: remaining};
+			remaining -= count;
+		}
+		return null;
+	};
+	const groupOffset = (groupIndex: number): number => {
+		const list = groups();
+		let offset = 0;
+		for (let g = 0; g < groupIndex; g++) offset += list[g]!.models.length;
+		return offset;
+	};
+
+	// Grid navigation (row-major per provider group). Moving past a group's
+	// last row jumps to the NEXT group's first cell so long catalogs stay
+	// reachable with ↓ alone; ↑ from a group's first cell wraps to the
+	// previous group's last cell (or the Inherit row).
+	const moveCell = (direction: 'up' | 'down' | 'left' | 'right'): void => {
+		const cells = modelCells();
+		if (cells.length === 0) return;
+		if (cursor() === -1) {
+			if (direction === 'down') setCursor(0);
+			return;
+		}
+		const located = locateCell(cursor());
+		if (!located) return;
+		const {groupIndex, local} = located;
+		const list = groups();
+		const group = list[groupIndex]!;
+		const count = group.models.length;
+		const cols = modelColumns();
+		const col = local % cols;
+		switch (direction) {
+			case 'left': {
+				if (local > 0) {
+					setCursor(groupOffset(groupIndex) + local - 1);
+				} else if (groupIndex > 0) {
+					// previous group's last cell
+					const prev = list[groupIndex - 1]!;
+					setCursor(groupOffset(groupIndex - 1) + prev.models.length - 1);
+				}
+				return;
+			}
+			case 'right': {
+				if (local + 1 < count) {
+					setCursor(groupOffset(groupIndex) + local + 1);
+				}
+				return;
+			}
+			case 'up': {
+				let next = local - cols;
+				if (next < 0) {
+					// wrap to the bottom of the same column within this group
+					const bottomRow = Math.max(0, Math.floor((count - 1) / cols));
+					const bottom = bottomRow * cols + col;
+					next = bottom < count ? bottom : Math.max(0, bottom - cols);
+					if (next === local) {
+						// already at the group's top: previous group's last cell
+						// or the Inherit row.
+						if (groupIndex > 0) {
+							const prev = list[groupIndex - 1]!;
+							setCursor(
+								groupOffset(groupIndex - 1) + prev.models.length - 1,
+							);
+						} else if (props.inheritLabel) {
+							setCursor(-1);
+						}
+						return;
+					}
+				}
+				setCursor(groupOffset(groupIndex) + next);
+				return;
+			}
+			case 'down': {
+				const next = local + cols;
+				if (next < count) {
+					setCursor(groupOffset(groupIndex) + next);
+					return;
+				}
+				if (groupIndex + 1 < list.length && list[groupIndex + 1]!.models.length > 0) {
+					setCursor(groupOffset(groupIndex + 1));
+					return;
+				}
+				// last group: wrap to the top of the same column
+				setCursor(groupOffset(groupIndex) + (col < count ? col : 0));
+				return;
+			}
+		}
+	};
+
+	const selectCell = (cell: ModelCell): void => {
+		const target = {
+			providerId: cell.provider.id,
+			model: cell.model,
+			effort: effectiveEffort(cell.provider, cell.model),
+		};
+		// Mid-conversation model switches RESEND the whole history,
+		// confirm first (parity: the reference warns about usage).
+		if (props.hasMessages) setConfirming(target);
+		else props.onSelect(target.providerId, target.model, target.effort);
+	};
+
+	// The display LINE holding the cursor (for the scroll window).
+	const activeLine = (): number => {
+		const lines = displayLines();
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i]!;
+			if (line.kind === 'inherit' && cursor() === -1) return i;
+			if (line.kind === 'grid') {
+				for (const cell of line.cells ?? []) {
+					if (cell && cell.index === cursor()) return i;
+				}
+			}
+		}
+		return 0;
+	};
+	const visibleLines = (): DisplayLine[] => {
+		const lines = displayLines();
+		const visible = Math.max(1, listVisible());
+		const start = Math.max(
+			0,
+			Math.min(
+				activeLine() - visible + 1,
+				Math.max(0, lines.length - visible),
+			),
+		);
+		setScrollStart(start);
+		return lines.slice(start, start + visible);
+	};
+
+	const truncateCell = (text: string, width: number): string =>
+		text.length > width
+			? text.slice(0, Math.max(1, width - 1)) + '…'
+			: text;
+
+	// After a QUERY change the selection re-snaps to a REAL cell: the current
+	// model when it still matches, otherwise the first cell (or Inherit).
+	// Track ONLY the query: the cell list folds the effort override, and an
+	// unfenced effect would re-run on every `E` press and snap the cursor
+	// back to the current model.
+	createEffect(on(query, () => {
+		const cells = modelCells();
+		const current = cells.findIndex(cell => cell.isCurrent);
+		setCursor(current !== -1 ? current : props.inheritLabel ? -1 : cells.length > 0 ? 0 : -1);
+	}));
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
 			if (confirming()) setConfirming(null);
 			else props.onClose();
-			return;
+			return true;
 		}
 		if (confirming()) {
 			if (event.name === 'y' || event.name === 'Y') {
@@ -264,87 +424,71 @@ export function ModelModal(props: {
 			} else if (event.name === 'n' || event.name === 'N') {
 				setConfirming(null);
 			}
-			return;
+			return true;
 		}
 		if (event.name === 'tab') {
 			setFocus(prev => (prev === 'search' ? 'list' : 'search'));
-			return;
+			return true;
 		}
 		if (event.name === 'up' || event.name === 'down') {
 			setFocus('list');
-			moveRow(event.name === 'down' ? 1 : -1);
-			return;
-		}
-		if (connectProviderShortcut(focus(), event.name)) {
-			props.onConnectProvider();
-			return;
+			moveCell(event.name === 'down' ? 'down' : 'up');
+			return true;
 		}
 		if (event.name === 'left' || event.name === 'right') {
-			const row = currentRow();
-			if (row?.kind === 'model') {
-				const current = effectiveEffort(row.provider, row.model) ?? 'medium';
+			setFocus('list');
+			moveCell(event.name === 'right' ? 'right' : 'left');
+			return true;
+		}
+		if (event.name === 'e' && focus() === 'list') {
+			const cell = currentCell();
+			if (cell) {
+				const current = effectiveEffort(cell.provider, cell.model) ?? 'medium';
 				const base = EFFORT_LEVELS.indexOf(
 					current as (typeof EFFORT_LEVELS)[number],
 				);
 				const start = base === -1 ? EFFORT_LEVELS.indexOf('medium') : base;
-				const delta = event.name === 'right' ? 1 : -1;
 				const next =
-					EFFORT_LEVELS[(start + delta + EFFORT_LEVELS.length) % EFFORT_LEVELS.length] ??
+					EFFORT_LEVELS[(start + 1) % EFFORT_LEVELS.length] ??
 					'medium';
 				setEffortOverrides(prev => ({
 					...prev,
-					[effortKey(row.provider.id, row.model)]: next,
+					[effortKey(cell.provider.id, cell.model)]: next,
 				}));
 			}
-			return;
+			return true;
+		}
+		if (connectProviderShortcut(focus(), event.name)) {
+			props.onConnectProvider();
+			return true;
 		}
 		if (event.name === 'return') {
-			const row = currentRow();
-			if (!row) return;
-			if (row.kind === 'inherit') {
+			if (cursor() === -1) {
 				props.onInherit?.();
-				return;
+				return true;
 			}
-			if (row.kind === 'model') {
-				const target = {
-					providerId: row.provider.id,
-					model: row.model,
-					effort: effectiveEffort(row.provider, row.model),
-				};
-				// Mid-conversation model switches RESEND the whole history,
-				// confirm first (parity: the reference warns about usage).
-				if (props.hasMessages) {
-					setConfirming(target);
-				} else {
-					props.onSelect(target.providerId, target.model, target.effort);
-				}
-				return;
-			}
-			return;
+			const cell = currentCell();
+			if (cell) selectCell(cell);
+			return true;
 		}
 		if (event.name === 'backspace') {
 			setFocus('search');
 			setQuery(prev => prev.slice(0, -1));
-			return;
+			return true;
 		}
 		if (event.name === 'space' && !event.ctrl && !event.meta) {
 			setFocus('search');
 			setQuery(prev => prev + ' ');
-			setRowIndex(0);
-			return;
+			return true;
 		}
 		const char = event.name;
 		if (char && char.length === 1 && !event.ctrl && !event.meta) {
 			setFocus('search');
 			setQuery(prev => prev + char);
-			setRowIndex(0);
 		}
+		return true;
 	});
 
-	const visibleItems = () => {
-		const all = items();
-		return all.slice(scrollStart(), scrollStart() + listVisible());
-	};
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
 		x <= cardX() + cardWidth() &&
@@ -377,6 +521,7 @@ export function ModelModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
 				paddingX={2}
 				paddingY={2}
@@ -411,8 +556,6 @@ export function ModelModal(props: {
 						</text>
 					</box>
 					<box height={1} />
-					{/* opencode-style title spacing: a comfortable gap before
-					    the search field. */}
 					<box height={1} />
 					<box
 						border
@@ -431,140 +574,119 @@ export function ModelModal(props: {
 						</Show>
 					</box>
 					<box height={1} />
-					<For each={visibleItems()}>
-						{(item) => {
-							const row = item.row;
-							if (row.kind === 'empty') {
+					<For each={visibleLines()}>
+						{(line) => {
+							if (line.kind === 'empty') {
 								return (
 									<text fg={colors().secondary} attributes={dim()}>
 										No models match "{query()}"
 									</text>
 								);
 							}
-							if (row.kind === 'inherit') {
+							if (line.kind === 'spacer') {
+								return <box height={1} />;
+							}
+							if (line.kind === 'inherit') {
+								const active = cursor() === -1;
 								return (
 									<box
 										flexDirection="row"
 										height={1}
 										backgroundColor={
-											item.active ? activeRow().bg : undefined
+											active ? activeRow().bg : undefined
 										}
+										{...({
+											onMouseUp: () => props.onInherit?.(),
+										} as any)}
 									>
 										<text
 											fg={
-												item.active
+												active
 													? activeRow().fg
 													: colors().text
 											}
-											attributes={item.active ? bold() : undefined}
+											attributes={active ? bold() : undefined}
 										>
-											{item.active ? '❯ ' : '  '}
+											{active ? '❯ ' : '  '}
 											{props.inheritLabel}
 										</text>
 									</box>
 								);
 							}
-							if (row.kind === 'provider') {
+							if (line.kind === 'provider') {
 								return (
-									<box
-										flexDirection="row"
-										height={1}
-									>
-										<text
-											fg={colors().primary}
-											attributes={bold()}
-										>
+									<box flexDirection="row" height={1}>
+										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
-											{row.provider.name ?? row.provider.id}
-											{row.isCurrent ? ' (current)' : ''}
+											{line.provider?.name ?? line.provider?.id}
+											{line.isCurrent ? ' (current)' : ''}
 										</text>
 									</box>
 								);
 							}
-							if (row.kind === 'spacer') {
-								return <box height={1} />;
-							}
+							// Model DETAILS grid row: every cell is one model.
 							return (
-								<box
-									flexDirection="row"
-									height={1}
-									backgroundColor={
-										item.active ? activeRow().bg : undefined
-									}
-								>
-									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().text
-										}
-										attributes={item.active ? bold() : undefined}
-									>
-										{'    '}
-										{row.model}
-										{row.isCurrent ? ' (current)' : ''}
-									</text>
-									{/* Effort in its OWN column so model names
-									    and sizes align across rows. */}
-									<text
-										width={16}
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={
-											item.active ? bold() : dim()
-										}
-									>
-										{item.shownEffort
-											? ` [${item.shownEffort}]`
-											: ''}
-									</text>
-									<box flexGrow={1} />
-									{/* Model SIZE on the right (parity: the reference). */}
-								<text
-									fg={
-										item.active
-											? activeRow().fg
-											: colors().secondary
-									}
-									attributes={item.active ? bold() : dim()}
-								>
-									{(() => {
-										const size =
-											row.provider.modelContextWindows?.[row.model] ??
-											row.provider.contextWindow;
-										return size ? formatContextLength(size) : '-';
-									})()}
-								</text>
-									{item.active ? (
-										<text fg={activeRow().fg} attributes={dim()}>
-											{'  ←/→ effort'}
-										</text>
-									) : (
-										<></>
-									)}
+								<box flexDirection="row" height={1}>
+									<For each={line.cells}>
+										{(cell, colIndex) => {
+											if (!cell) {
+												return (
+													<box width={cellWidth()} height={1} />
+												);
+											}
+											const active = cursor() === cell.index;
+											const effort = cell.shownEffort;
+											return (
+												<box
+													width={cellWidth()}
+													flexDirection="row"
+													height={1}
+													backgroundColor={
+														active ? activeRow().bg : undefined
+													}
+													{...({
+														onMouseMove: () => setCursor(cell.index),
+														onMouseUp: () => selectCell(cell),
+													} as any)}
+												>
+													<text
+														fg={
+															active
+																? activeRow().fg
+																: colors().text
+														}
+														attributes={
+															active ? bold() : undefined
+														}
+													>
+														{active ? '❯ ' : '  '}
+														{truncateCell(
+															cell.model,
+															Math.max(8, cellWidth() - 6),
+														)}
+													</text>
+													<Show when={active && effort}>
+														<text
+															fg={activeRow().fg}
+															attributes={dim()}
+														>
+															[{effort}]
+														</text>
+													</Show>
+												</box>
+											);
+										}}
+									</For>
 								</box>
 							);
 						}}
 					</For>
 					<box height={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						Tab search/list · ↑/↓ select · Enter choose · ←/→ effort · C connect (list) · Esc close
+						Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect (list) · Esc close
 					</text>
 				</Show>
 			</box>
 		</box>
 	);
-}
-
-function formatContextLength(contextLength: number): string {
-	if (contextLength >= 1_000_000) {
-		return `${(contextLength / 1_000_000).toFixed(1)}M`;
-	}
-	if (contextLength >= 1000) {
-		return `${Math.round(contextLength / 1000)}K`;
-	}
-	return `${contextLength}`;
 }
