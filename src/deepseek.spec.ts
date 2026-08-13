@@ -335,6 +335,27 @@ describe('disk cache (TTL + atomic write + multi-instance freshness)', () => {
 		expect(auth).toBe('Bearer sk-real');
 	});
 
+	test('a failed token keeps the STALE cached catalog (never seeds)', async () => {
+		const at = Date.now();
+		const stale = at - DEEPSEEK_MODELS_TTL_MS - 60_000;
+		saveDeepSeekCache({
+			[key]: {
+				models: {
+					ids: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+					at: stale,
+				},
+			},
+		});
+		stubFetch(async () => {
+			throw new Error('token expired');
+		});
+		const models = await refreshDeepSeekModels(
+			{id: 'DeepSeek', baseUrl: 'https://api.deepseek.com', apiKey: 'sk-bad'},
+			at,
+		);
+		expect(models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+	});
+
 	test('balance TTL is independent and shorter', async () => {
 		const at = Date.now();
 		saveDeepSeekCache({

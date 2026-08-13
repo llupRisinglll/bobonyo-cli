@@ -30,7 +30,10 @@ const CODEX_MODELS = [
 	'gpt-5.4-codex-mini',
 ];
 
-const DEEPSEEK_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+// The CURRENT DeepSeek catalog (the /models endpoint returns v4-flash/v4-pro;
+// the live fetch refreshes it after connect, these seeds just keep the picker
+// honest before/without a key).
+const DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
 
 const XIAOMI_MODELS = [
 	'mimo-v2.5',
@@ -114,7 +117,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 	{
 		id: 'deepseek',
 		title: 'DeepSeek',
-		description: 'deepseek-chat / deepseek-reasoner',
+		description: 'deepseek-v4-flash / deepseek-v4-pro',
 		category: 'Popular',
 		baseUrl: 'https://api.deepseek.com',
 		models: DEEPSEEK_MODELS,
@@ -815,7 +818,7 @@ export function ConnectProviderModal(props: {
 			case 'custom-base':
 				return 'e.g. https://api.deepseek.com/v1';
 			case 'custom-models':
-				return 'e.g. deepseek-chat, deepseek-reasoner';
+				return 'e.g. deepseek-v4-flash, deepseek-v4-pro';
 			case 'custom-name':
 				return `optional — empty uses ${editProvider?.id ?? defaultProviderName('custom')}`;
 			default:

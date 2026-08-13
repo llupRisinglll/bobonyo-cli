@@ -8,7 +8,7 @@
  * configured provider wins.
  */
 
-import {existsSync, readFileSync, writeFileSync, mkdirSync} from 'node:fs';
+import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {nanocoderConfigDir} from './nanocoder-paths';
 
@@ -431,19 +431,65 @@ export function resolveApiKey(value: string | undefined): string {
 }
 
 const DISCOVERY_TTL_MS = 5 * 60 * 1000;
+/** Disk-cache TTL for fetched model catalogs (models change rarely). A warm
+ *  cache stops every startup / every /model from re-fetching the catalog. */
+export const MODEL_CATALOG_TTL_MS = 60 * 60 * 1000;
 const discoveryCache = new Map<string, {at: number; models: string[]}>();
+
+interface ModelCatalogCacheFile {
+	entries: Record<string, {models: string[]; at: number}>;
+}
+
+export function modelCatalogCachePath(): string {
+	return join(configDir(), 'model-catalogs.json');
+}
+
+function loadModelCatalogCache(): ModelCatalogCacheFile {
+	try {
+		if (!existsSync(modelCatalogCachePath())) return {entries: {}};
+		const parsed = JSON.parse(
+			readFileSync(modelCatalogCachePath(), 'utf8'),
+		) as ModelCatalogCacheFile;
+		return {entries: parsed.entries ?? {}};
+	} catch {
+		// corrupt or missing, start fresh
+		return {entries: {}};
+	}
+}
+
+function saveModelCatalogCache(
+	entries: Record<string, {models: string[]; at: number}>,
+): void {
+	mkdirSync(configDir(), {recursive: true});
+	const file = modelCatalogCachePath();
+	const tmp = `${file}.tmp`;
+	writeFileSync(tmp, `${JSON.stringify({entries}, null, 2)}\n`, 'utf8');
+	renameSync(tmp, file);
+}
 
 /**
  * Live model discovery (`modelDiscoveryUrl`): the value IS the complete
  * catalog URL (e.g. `https://token-plan-sgp.xiaomimimo.com/v1/models`) —
- * fetch it directly, cache by URL with a 5-minute TTL, and NEVER throw,
- * stale-but-usable fallback to the static list (parity: model-discovery.ts).
+ * fetch it directly, cache by URL (5-minute in-memory + 1-hour DISK cache
+ * so restarts do not re-fetch), and NEVER throw: a failed token falls back
+ * to the last known disk catalog, then to the static list — a stale list
+ * beats losing the models entirely.
  */
 export async function discoverModels(provider: ResolvedProvider): Promise<string[]> {
 	const discoveryUrl = provider.modelDiscoveryUrl;
 	if (!discoveryUrl) return provider.models;
+	const now = Date.now();
 	const cached = discoveryCache.get(discoveryUrl);
-	if (cached && Date.now() - cached.at < DISCOVERY_TTL_MS) return cached.models;
+	if (cached && now - cached.at < DISCOVERY_TTL_MS) return cached.models;
+	const disk = loadModelCatalogCache();
+	const freshDisk = disk.entries[discoveryUrl];
+	if (freshDisk && now - freshDisk.at < MODEL_CATALOG_TTL_MS) {
+		discoveryCache.set(discoveryUrl, {
+			at: freshDisk.at,
+			models: freshDisk.models,
+		});
+		return freshDisk.models;
+	}
 	try {
 		const response = await fetch(
 			discoveryUrl.replace(/\/+$/, ''),
@@ -459,9 +505,15 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 		};
 		const ids = (body.data ?? []).map(item => item.id).filter(Boolean) as string[];
 		if (ids.length === 0) return provider.models;
-		discoveryCache.set(discoveryUrl, {at: Date.now(), models: ids});
+		discoveryCache.set(discoveryUrl, {at: now, models: ids});
+		disk.entries[discoveryUrl] = {models: ids, at: now};
+		saveModelCatalogCache(disk.entries);
 		return ids;
 	} catch {
+		// Token failed / network down: keep the last known catalog when it
+		// exists (even stale), so the model list never collapses to seeds.
+		const stale = disk.entries[discoveryUrl]?.models;
+		if (stale && stale.length > 0) return stale;
 		return provider.models;
 	}
 }

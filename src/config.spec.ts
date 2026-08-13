@@ -1,8 +1,11 @@
-import {afterEach, describe, expect, test} from 'bun:test';
-import {mkdirSync, writeFileSync} from 'node:fs';
+import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
+import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {
 	discoverModels,
 	listProviders,
+	MODEL_CATALOG_TTL_MS,
+	modelCatalogCachePath,
 	modelsDevContextWindow,
 	normalizeModels,
 	type ModelsDevCatalog,
@@ -157,6 +160,18 @@ describe('MiMo token-plan model discovery', () => {
 });
 
 describe('discoverModels (full-URL contract)', () => {
+	const ORIGINAL_DIR = process.env.NANOCODER_CONFIG_DIR;
+	const configDir = `${tmpdir()}/bobonyo-config-spec-${Date.now()}`;
+	beforeEach(() => {
+		process.env.NANOCODER_CONFIG_DIR = configDir;
+		mkdirSync(configDir, {recursive: true});
+	});
+	afterEach(() => {
+		if (ORIGINAL_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+		else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_DIR;
+		rmSync(configDir, {recursive: true, force: true});
+	});
+
 	test('fetches modelDiscoveryUrl AS-IS and never appends /v1/models', async () => {
 		let requested = '';
 		const originalFetch = globalThis.fetch;
@@ -166,7 +181,7 @@ describe('discoverModels (full-URL contract)', () => {
 				JSON.stringify({data: [{id: 'mimo-v2.5'}, {id: 'mimo-v2.5-pro'}]}),
 				{status: 200},
 			);
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 		try {
 			const models = await discoverModels({
 				id: 'Xiaomi',
@@ -179,6 +194,124 @@ describe('discoverModels (full-URL contract)', () => {
 			});
 			expect(requested).toBe('https://token-plan-sgp.xiaomimimo.com/v1/models');
 			expect(models).toEqual(['mimo-v2.5', 'mimo-v2.5-pro']);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('a fresh DISK cache skips the network entirely', async () => {
+		writeFileSync(
+			modelCatalogCachePath(),
+			JSON.stringify({
+				entries: {
+					'https://api.openai.com/v1/models': {
+						models: ['gpt-5.5', 'gpt-5.5-mini'],
+						at: Date.now(),
+					},
+				},
+			}),
+			'utf8',
+		);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => {
+			throw new Error('fetch must not be called on a warm disk cache');
+		}) as unknown as typeof fetch;
+		try {
+			const models = await discoverModels({
+				id: 'openai',
+				baseUrl: 'https://api.openai.com',
+				apiKeyResolved: 'sk-x',
+				models: ['seed'],
+				modelEfforts: {},
+				alwaysAllow: [],
+				modelDiscoveryUrl: 'https://api.openai.com/v1/models',
+			});
+			expect(models).toEqual(['gpt-5.5', 'gpt-5.5-mini']);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('a FAILED token keeps the last known catalog (stale beats seeds)', async () => {
+		writeFileSync(
+			modelCatalogCachePath(),
+			JSON.stringify({
+				entries: {
+					'https://openrouter.ai/api/v1/models': {
+						models: ['openrouter/auto', 'deepseek/deepseek-v4'],
+						at: Date.now() - MODEL_CATALOG_TTL_MS - 60_000,
+					},
+				},
+			}),
+			'utf8',
+		);
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({
+			ok: false,
+			status: 401,
+		})) as unknown as typeof fetch;
+		try {
+			const models = await discoverModels({
+				id: 'openrouter',
+				baseUrl: 'https://openrouter.ai/api',
+				apiKeyResolved: 'sk-bad',
+				models: ['seed-model'],
+				modelEfforts: {},
+				alwaysAllow: [],
+				modelDiscoveryUrl: 'https://openrouter.ai/api/v1/models',
+			});
+			expect(models).toEqual(['openrouter/auto', 'deepseek/deepseek-v4']);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('no cache and a failed token falls back to the static seeds', async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({
+			ok: false,
+			status: 401,
+		})) as unknown as typeof fetch;
+		try {
+			const models = await discoverModels({
+				id: 'openai',
+				baseUrl: 'https://api.openai.com',
+				apiKeyResolved: 'sk-bad',
+				models: ['gpt-5.5'],
+				modelEfforts: {},
+				alwaysAllow: [],
+				modelDiscoveryUrl: 'https://api.anthropic.com/v1/models',
+			});
+			expect(models).toEqual(['gpt-5.5']);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test('a successful fetch persists the catalog to the disk cache', async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(
+				JSON.stringify({data: [{id: 'mimo-v2.5'}]}),
+				{status: 200},
+			)) as unknown as typeof fetch;
+		try {
+			await discoverModels({
+				id: 'xiaomi',
+				baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+				apiKeyResolved: 'tp-x',
+				models: ['mimo-v2.5'],
+				modelEfforts: {},
+				alwaysAllow: [],
+				modelDiscoveryUrl: 'https://api.together.xyz/v1/models',
+			});
+			const saved = JSON.parse(
+				readFileSync(modelCatalogCachePath(), 'utf8'),
+			) as {entries: Record<string, {models: string[]; at: number}>};
+			const savedModels =
+				saved.entries['https://api.together.xyz/v1/models']
+					?.models;
+			expect(savedModels).toEqual(['mimo-v2.5']);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

@@ -215,6 +215,30 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
+	test('model catalogs are cached on disk with a stale fallback', () => {
+		// The generic /models fetch must persist to disk (no refetch per
+		// startup) and keep the last known catalog when the token fails —
+		// otherwise the model list collapses to seeds on a 401.
+		const config = read('./config.ts');
+		expect(config).toMatch(/MODEL_CATALOG_TTL_MS/);
+		expect(config).toMatch(/modelCatalogCachePath\(\)/);
+		expect(config).toMatch(/saveModelCatalogCache\(disk\.entries\)/);
+		expect(config).toMatch(/const stale = disk\.entries\[discoveryUrl\]/);
+		// DeepSeek/MiMo fetchers fall back to the stale DISK catalog too.
+		const deepseek = read('./deepseek.ts');
+		expect(deepseek).toMatch(
+			/staleCachedModels\(loadDeepSeekCache\(\), key\)/,
+		);
+	});
+
+	test('the DeepSeek preset seeds the CURRENT v4 catalog', () => {
+		const modal = read('./components/connect-provider-modal.tsx');
+		expect(modal).toMatch(
+			/DEEPSEEK_MODELS = \['deepseek-v4-flash', 'deepseek-v4-pro'\]/,
+		);
+		expect(modal).not.toMatch(/deepseek-chat/);
+	});
+
 	test('resume search covers the session id', () => {
 		const modal = read('./components/resume-modal.tsx');
 		// The filter must go through the pure helper that matches the id,

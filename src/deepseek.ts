@@ -169,6 +169,18 @@ export function staleCachedBalance(
 }
 
 /**
+ * Stale model-catalog fallback: when the /models fetch fails (bad/expired
+ * token, network), return the LAST known catalog regardless of age — a
+ * stale list is far better than collapsing to the static seeds.
+ */
+export function staleCachedModels(
+	entries: Record<string, DeepSeekCacheEntry>,
+	key: string,
+): string[] | undefined {
+	return entries[key]?.models?.ids;
+}
+
+/**
  * Fresh model catalog from the DISK cache for a provider. Lets the app pick
  * the initial model from the REAL DeepSeek catalog without waiting for a
  * network round trip, so a config that omits the static `models` list (the
@@ -305,7 +317,11 @@ export async function refreshDeepSeekModels(
 			saveDeepSeekCache(entries);
 			return ids;
 		} catch {
-			return provider.models ?? [];
+			return (
+				staleCachedModels(loadDeepSeekCache(), key) ??
+				provider.models ??
+				[]
+			);
 		}
 	})();
 	inFlight.set(inflightKey, promise);
@@ -350,7 +366,11 @@ export async function refreshProviderModels(
 			saveDeepSeekCache(entries);
 			return ids;
 		} catch {
-			return provider.models ?? [];
+			return (
+				staleCachedModels(loadDeepSeekCache(), key) ??
+				provider.models ??
+				[]
+			);
 		}
 	})();
 	inFlight.set(inflightKey, promise);

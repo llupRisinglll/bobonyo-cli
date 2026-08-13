@@ -119,7 +119,7 @@ describe('provider presets (known endpoints, never asked)', () => {
 			baseUrl: 'https://api.deepseek.com',
 			apiKey: 'sk-1',
 			modelDiscoveryUrl: 'https://api.deepseek.com/models',
-			models: ['deepseek-chat', 'deepseek-reasoner'],
+			models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
 		});
 		// Multiple instances under different names are allowed (model org).
 		expect(deepseekProvider('deepseek-pro', 'sk-1').id).toBe('deepseek-pro');
