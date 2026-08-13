@@ -8,6 +8,7 @@ import {
 	deepseekProvider,
 	filterConnectPicker,
 	openAICompatibleProvider,
+	presetConnectionCount,
 	PROVIDER_PRESETS,
 	xiaomiProvider,
 } from './components/connect-provider-modal';
@@ -15,7 +16,7 @@ import {
 const rows = PROVIDER_PRESETS.map(preset => ({
 	kind: (preset.id === 'custom' ? 'custom' : 'provider') as 'provider' | 'custom',
 	preset,
-	connected: false,
+	count: 0,
 }));
 
 describe('filterConnectPicker (opencode-style provider list)', () => {
@@ -194,5 +195,63 @@ describe('defaultProviderName ((n) duplicate suffix)', () => {
 		expect(defaultProviderName('DeepSeek', [{id: 'deepseek'}])).toBe(
 			'DeepSeek (2)',
 		);
+	});
+});
+
+describe('presetConnectionCount (n connected)', () => {
+	const deepseek = PROVIDER_PRESETS.find(
+		preset => preset.id === 'deepseek',
+	)!;
+	const xiaomi = PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')!;
+	const codex = PROVIDER_PRESETS.find(preset => preset.id === 'codex')!;
+	const custom = PROVIDER_PRESETS.find(preset => preset.id === 'custom')!;
+
+	test('counts by the default id and by the same endpoint under other names', () => {
+		expect(
+			presetConnectionCount(deepseek, [
+				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
+				{id: 'deepseek (2)', baseUrl: 'https://api.deepseek.com'},
+				{id: 'other', baseUrl: 'https://example.com'},
+			]),
+		).toBe(2);
+	});
+
+	test('normalizes the /v1 suffix so preset + stored endpoints match', () => {
+		expect(
+			presetConnectionCount(deepseek, [
+				{id: 'ds-pro', baseUrl: 'https://api.deepseek.com/v1'},
+			]),
+		).toBe(1);
+	});
+
+	test('xiaomi counts every token-plan connection (same gateway, split models)', () => {
+		expect(
+			presetConnectionCount(xiaomi, [
+				{id: 'xiaomi', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+				{id: 'mimo-pro', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+			]),
+		).toBe(2);
+	});
+
+	test('codex counts API-key AND ChatGPT-account connections', () => {
+		expect(
+			presetConnectionCount(codex, [
+				{id: 'codex', baseUrl: 'https://api.openai.com'},
+				{
+					id: 'codex-account',
+					baseUrl: 'https://chatgpt.com/backend-api/codex',
+				},
+			]),
+		).toBe(2);
+	});
+
+	test('custom counts only explicit custom-id connections', () => {
+		expect(
+			presetConnectionCount(custom, [
+				{id: 'custom', baseUrl: 'https://a.example.com'},
+				{id: 'custom (2)', baseUrl: 'https://b.example.com'},
+				{id: 'deepseek', baseUrl: 'https://api.deepseek.com'},
+			]),
+		).toBe(2);
 	});
 });

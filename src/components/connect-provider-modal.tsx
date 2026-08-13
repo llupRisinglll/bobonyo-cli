@@ -216,7 +216,8 @@ type View =
 export interface PickerRow {
 	kind: 'provider' | 'custom' | 'header' | 'empty';
 	preset?: ProviderPreset;
-	connected?: boolean;
+	/** How many configured providers are instances of this preset. */
+	count?: number;
 	label?: string;
 }
 
@@ -264,6 +265,34 @@ export function defaultProviderName(
 	let n = 2;
 	while (ids.has(`${base} (${n})`.toLowerCase())) n += 1;
 	return `${base} (${n})`;
+}
+
+/**
+ * How many configured providers are instances of a preset: matching by the
+ * default id, by the (normalized) endpoint, or — for Codex — by the
+ * ChatGPT-account backend. Same endpoint under different names counts once
+ * per connection (pure, unit-tested).
+ */
+export function presetConnectionCount(
+	preset: ProviderPreset,
+	providers?: Array<{id: string; baseUrl: string}>,
+): number {
+	const list = providers ?? listProviders();
+	const normalize = (url: string): string =>
+		url.replace(/\/+$/, '').replace(/\/v1$/, '');
+	const presetBase = normalize(preset.baseUrl);
+	const codexAccountBase = normalize('https://chatgpt.com/backend-api/codex');
+	return list.filter(provider => {
+		const id = provider.id.toLowerCase();
+		// Default-id connections and their `(n)` suffixes count as instances
+		// (a custom flow that kept the default name is still a custom).
+		if (id === preset.id.toLowerCase()) return true;
+		if (id.startsWith(`${preset.id.toLowerCase()} (`)) return true;
+		if (preset.id === 'custom') return false;
+		const base = normalize(provider.baseUrl);
+		if (base === presetBase) return true;
+		return preset.id === 'codex' && base === codexAccountBase;
+	}).length;
 }
 
 /** Codex provider payloads (pure, unit-tested). */
@@ -473,8 +502,6 @@ export function ConnectProviderModal(props: {
 
 	const pickerRows = (): PickerRow[] => {
 		const configured = listProviders();
-		const connected = (id: string): boolean =>
-			configured.some(provider => provider.id.toLowerCase() === id);
 		const rows: PickerRow[] = [];
 		let lastCategory: string | null = null;
 		for (const preset of PROVIDER_PRESETS) {
@@ -485,7 +512,7 @@ export function ConnectProviderModal(props: {
 			rows.push({
 				kind: preset.id === 'custom' ? 'custom' : 'provider',
 				preset,
-				connected: connected(preset.id),
+				count: presetConnectionCount(preset, configured),
 			});
 		}
 		return filterConnectPicker(rows, query());
@@ -708,6 +735,48 @@ export function ConnectProviderModal(props: {
 			row.preset === navigableRows()[index()]?.preset
 		);
 	};
+	// Settings-list scrolling: rows are 2 lines (title + examples) so the
+	// window walks line counts, not row indexes.
+	const rowLines = (row: PickerRow): number =>
+		row.kind === 'header' || row.kind === 'empty' ? 1 : 2;
+	const fullRowIndex = (): number => {
+		const all = pickerRows();
+		const selected = navigableRows()[index()];
+		if (!selected) return 0;
+		return Math.max(
+			0,
+			all.findIndex(candidate => candidate.preset === selected.preset),
+		);
+	};
+	const listVisible = () => Math.max(4, cardHeight() - 9);
+	const visiblePickerRows = (): PickerRow[] => {
+		const all = pickerRows();
+		const full = Math.min(fullRowIndex(), Math.max(0, all.length - 1));
+		// Walk BACK from the selection so it ALWAYS fits in the window, then
+		// extend forward; a forward-only window dropped the selected row
+		// when the next row overflowed.
+		let start = full;
+		let lines = rowLines(all[full] ?? all[0]!);
+		while (start > 0) {
+			const rl = rowLines(all[start - 1]!);
+			// Stop BEFORE the walk-back fills the whole window: the
+			// selection must stay inside, with room left for rows after it.
+			if (lines + rl >= listVisible()) break;
+			start -= 1;
+			lines += rl;
+		}
+		// Rows from start THROUGH the selection were counted in `lines`;
+		// take them all, then extend forward with whatever budget is left.
+		const out = all.slice(start, full + 1);
+		let used = lines;
+		for (let i = full + 1; i < all.length; i++) {
+			const rl = rowLines(all[i]!);
+			if (used + rl > listVisible()) break;
+			out.push(all[i]!);
+			used += rl;
+		}
+		return out;
+	};
 
 	const title = (): string => {
 		switch (view().kind) {
@@ -840,7 +909,7 @@ export function ConnectProviderModal(props: {
 						</text>
 					</box>
 					<box height={1} />
-					<For each={pickerRows()}>
+					<For each={visiblePickerRows()}>
 						{(row) => {
 							if (row.kind === 'empty') {
 								return (
@@ -865,8 +934,8 @@ export function ConnectProviderModal(props: {
 							const active = pickerSelection(row);
 							return (
 								<box
-									flexDirection="row"
-									height={1}
+									flexDirection="column"
+									height={2}
 									backgroundColor={
 										active ? activeRow().bg : undefined
 									}
@@ -894,23 +963,37 @@ export function ConnectProviderModal(props: {
 										},
 									} as any)}
 								>
-									{/* Settings-list navigation language: label is
-									    ALWAYS bold, active row swaps fg + bg. */}
-									<text
-										fg={
-											active
-												? activeRow().fg
-												: colors().text
-										}
-										attributes={bold()}
-									>
-										{active ? '❯ ' : '  '}
-										{row.preset?.title ?? 'Custom provider'}
-									</text>
-									<box flexGrow={1} />
-									<text fg={colors().secondary} attributes={dim()}>
-										{row.connected ? '✓ connected' : row.preset?.description ?? 'Custom provider'}
-									</text>
+									{/* Settings-list layout: title + count on the
+									    first line, the model examples BELOW it —
+									    never same-line (OpenTUI clips the title
+									    when the row overflows). */}
+									<box flexDirection="row" height={1}>
+										<text
+											fg={
+												active
+													? activeRow().fg
+													: colors().text
+											}
+											attributes={bold()}
+										>
+											{active ? '❯ ' : '  '}
+											{row.preset?.title ?? 'Custom provider'}
+										</text>
+										<box flexGrow={1} />
+										<Show when={row.count && row.count > 0}>
+											<text
+												fg={colors().success}
+												attributes={dim()}
+											>
+												{row.count} connected
+											</text>
+										</Show>
+									</box>
+									<box height={1} paddingLeft={2}>
+										<text fg={colors().secondary} attributes={dim()}>
+											{row.preset?.description ?? 'Custom provider'}
+										</text>
+									</box>
 								</box>
 							);
 						}}
