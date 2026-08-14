@@ -103,6 +103,42 @@ export function isSubmitKey(event: {
 }
 
 /**
+ * Whether an OpenTUI key event should INSERT a newline (multiline input)
+ * instead of submitting.
+ *
+ * Shift+Enter inserts a newline. Real terminals deliver it as a shifted
+ * `return`/`enter`; herdr delivers it as a SHIFTED `linefeed`. Both must
+ * insert, never submit. Ctrl+J is the classic alternative, and any literal
+ * LF that is NOT the submit Enter (plain herdr Enter is an unmodified
+ * linefeed, excluded by `isSubmitKey`) also inserts. Pure, unit-tested.
+ */
+export function isMultilineInsert(event: {
+	name: string;
+	sequence?: string;
+	raw?: string;
+	shift?: boolean;
+	ctrl?: boolean;
+	meta?: boolean;
+}): boolean {
+	if (
+		event.shift &&
+		(event.name === 'return' ||
+			event.name === 'enter' ||
+			event.name === 'linefeed')
+	) {
+		return true;
+	}
+	if (event.ctrl && event.name === 'j') return true;
+	// A literal LF that is not herdr's submit Enter inserts a newline.
+	// NOTE: do NOT re-add an `event.name !== 'linefeed'` guard here — plain
+	// herdr Enter is already excluded by `!isSubmitKey`, and the extra guard
+	// silently swallowed SHIFTED linefeeds (Shift+Enter stopped working).
+	return (
+		(event.sequence === '\n' || event.raw === '\n') && !isSubmitKey(event)
+	);
+}
+
+/**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
  * hint. ↑/↓ navigate prompt history (draft preserved), typing `/` opens a
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
@@ -519,19 +555,7 @@ export function InputBox(props: {
 		// A6: Shift+Enter / Ctrl+J / a literal LF insert a newline AT THE
 		// CURSOR, handled BEFORE the suggestion popups so a popup never
 		// swallows the key (plain Enter still selects/completes/submits).
-		const isReturnKey = isSubmitKey(event);
-		// A bare `\n` from herdr's Enter is a SUBMIT (isSubmitKey above);
-		// only an unmodified LF that is NOT herdr's submit shape inserts a
-		// literal newline (paste chunks arrive through usePaste instead).
-		const isLiteralNewline =
-			(event.sequence === '\n' || event.raw === '\n') &&
-			!isReturnKey &&
-			event.name !== 'linefeed';
-		if (
-			(event.shift && isReturnKey) ||
-			(event.ctrl && event.name === 'j') ||
-			isLiteralNewline
-		) {
+		if (isMultilineInsert(event)) {
 			event.preventDefault();
 			insertAtCursor('\n');
 			setSelectedCompletion(0);
@@ -776,7 +800,7 @@ export function InputBox(props: {
 			}
 			return;
 		}
-		if (isReturnKey) {
+		if (isSubmitKey(event)) {
 			event.preventDefault();
 			// Enter on a selected queued item loads it back into the input
 			// for editing (and removes it from the queue).

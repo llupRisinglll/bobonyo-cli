@@ -4,6 +4,7 @@ import {
 	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
+	isMultilineInsert,
 	isSubmitKey,
 	moveToNextWord,
 	moveToPrevWord,
@@ -71,6 +72,59 @@ describe('isSubmitKey (herdr Enter is a linefeed)', () => {
 	test('ordinary characters are never submits', () => {
 		expect(isSubmitKey({name: 'a'})).toBe(false);
 		expect(isSubmitKey({name: 'space'})).toBe(false);
+	});
+});
+
+describe('isMultilineInsert (Shift+Enter inserts a newline, never submits)', () => {
+	test('herdr Shift+Enter — a SHIFTED linefeed — inserts a newline (regression)', () => {
+		// The `name !== 'linefeed'` guard on the literal-LF branch made
+		// isSubmitKey return true for shift+linefeed and silently swallowed
+		// the key: Shift+Enter stopped working in herdr panes.
+		expect(
+			isMultilineInsert({
+				name: 'linefeed',
+				sequence: '\n',
+				raw: '\n',
+				shift: true,
+			}),
+		).toBe(true);
+	});
+
+	test('plain herdr Enter (unmodified linefeed) still submits, never inserts', () => {
+		expect(
+			isMultilineInsert({
+				name: 'linefeed',
+				sequence: '\n',
+				raw: '\n',
+			}),
+		).toBe(false);
+	});
+
+	test('Shift+Return and Shift+Enter insert a newline', () => {
+		expect(isMultilineInsert({name: 'return', shift: true})).toBe(true);
+		expect(isMultilineInsert({name: 'enter', shift: true})).toBe(true);
+	});
+
+	test('Ctrl+J inserts a newline', () => {
+		expect(isMultilineInsert({name: 'j', ctrl: true})).toBe(true);
+	});
+
+	test('plain Return/Enter submit, never insert', () => {
+		expect(isMultilineInsert({name: 'return'})).toBe(false);
+		expect(isMultilineInsert({name: 'enter'})).toBe(false);
+	});
+
+	test('a literal LF that is not the submit Enter still inserts', () => {
+		expect(
+			isMultilineInsert({name: 'x', sequence: '\n', raw: '\n'}),
+		).toBe(true);
+		expect(
+			isMultilineInsert({
+				name: 'return',
+				sequence: '\r',
+				raw: '\r',
+			}),
+		).toBe(false);
 	});
 });
 
