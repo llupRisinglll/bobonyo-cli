@@ -139,8 +139,13 @@ const renderer = await createCliRenderer({
 // terminal). Flag 1 (disambiguate) makes ghostty encode physical
 // Shift+Enter as `ESC[13;2u` (distinct from Enter) while unmodified keys
 // stay raw bytes, so Backspace/Ctrl+C are untouched.
-(renderer as unknown as {enableKittyKeyboard(flags: number): void})
-	.enableKittyKeyboard(1);
+try {
+	(renderer as unknown as {enableKittyKeyboard(flags: number): void})
+		.enableKittyKeyboard(1);
+} catch {
+	// Some OpenTUI builds lack the native kitty API — the raw push below
+	// still negotiates the protocol, so Shift+Enter keeps working.
+}
 // Belt-and-braces: emit the kitty keyboard push (`CSI > flags u`, flag 1 =
 // disambiguate) directly so the terminal negotiates it even if the native
 // renderer defers it. ghostty replies `CSI ? 1 u` when active.
