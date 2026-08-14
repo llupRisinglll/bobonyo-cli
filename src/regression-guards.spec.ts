@@ -605,7 +605,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			/if \(event\.name === 'space'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
 		);
 		expect(input).toMatch(
-			/if \(isDeleteKey\(event\.name\)\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+			/if \(isDeleteKey\(event\)\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
 		);
 		expect(input).toMatch(
 			/if \(isReturnKey\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
