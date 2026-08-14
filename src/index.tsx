@@ -134,6 +134,20 @@ const renderer = await createCliRenderer({
 		: {}),
 });
 
+// Actually PUSH the kitty keyboard protocol (OpenTUI's `useKittyKeyboard`
+// config only sets PARSING flags — it never enables the protocol on the
+// terminal). Flag 1 (disambiguate) makes ghostty encode physical
+// Shift+Enter as `ESC[13;2u` (distinct from Enter) while unmodified keys
+// stay raw bytes, so Backspace/Ctrl+C are untouched.
+(renderer as unknown as {enableKittyKeyboard(flags: number): void})
+	.enableKittyKeyboard(1);
+// Belt-and-braces: emit the kitty keyboard push (`CSI > flags u`, flag 1 =
+// disambiguate) directly so the terminal negotiates it even if the native
+// renderer defers it. ghostty replies `CSI ? 1 u` when active.
+process.stdout.write('\x1b[>1u');
+// Self-check: query the negotiated kitty flags (`?1u` = disambiguate active).
+process.stdout.write('\x1b[?u');
+
 
 // Preview mode: spawn the keyword mock provider and clean it up on exit.
 if (PREVIEW_TUI) {
