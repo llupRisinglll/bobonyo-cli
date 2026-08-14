@@ -303,6 +303,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/presetConnections\(row\.preset\)\.length > 0/);
 		expect(modal).toMatch(/<ManageList/);
 		expect(modal).toMatch(/setEditTargetId\(selected\.id\)/);
+		// Manage-step delete (`d` → confirm → `y`), hinted in the footer.
+		expect(modal).toMatch(/onDelete\?: \(id: string\) => void/);
+		expect(modal).toMatch(/Enter edit · d delete · Esc back/);
 		// Editing preserves the wire fields (responses/anthropic, codexAccount…).
 		expect(modal).toMatch(/editProvider(\(\)!?)?\.sdkProvider/);
 		expect(modal).toMatch(/editProvider(\(\)!?)?\.codexAccount/);
@@ -314,9 +317,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const app = read('./app.tsx');
 		expect(app).toMatch(/action === 'delete'/);
 		expect(app).toMatch(
-			/lastProvider\.toLowerCase\(\) === idArg\.toLowerCase\(\)/,
+			/lastProvider\.toLowerCase\(\) === id\.toLowerCase\(\)/,
 		);
-		expect(app).toMatch(/lastProvider: undefined, lastModel: undefined/);
+		expect(app).toMatch(
+			/lastProvider: undefined,\s*lastModel: undefined/,
+		);
 	});
 
 	test('modal input placeholders use the blinking caret (input-box parity)', () => {

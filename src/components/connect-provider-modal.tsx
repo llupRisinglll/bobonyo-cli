@@ -617,6 +617,8 @@ export function ConnectProviderModal(props: {
 	provider?: string;
 	editId?: string;
 	onConnect: (provider: ProviderConfig) => void;
+	/** Delete an existing connection from the manage step (d → y). */
+	onDelete?: (id: string) => void;
 	onClose: () => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
@@ -691,6 +693,10 @@ export function ConnectProviderModal(props: {
 		PROVIDER_PRESETS[0]!,
 	);
 	const [manageIndex, setManageIndex] = createSignal(0);
+	/** Connection id pending a delete confirmation (manage step `d`). */
+	const [confirmingDelete, setConfirmingDelete] = createSignal<string | null>(
+		null,
+	);
 	/** Stashed API key entered BEFORE the optional name step. */
 	const [presetKey, setPresetKey] = createSignal('');
 	/** Codex auth mode chosen in the methods step. */
@@ -1055,6 +1061,26 @@ export function ConnectProviderModal(props: {
 			return true;
 		}
 		if (current.kind === 'manage') {
+			// Delete confirmation owns every key: (y) deletes the selected
+			// connection, (n)/Esc cancels back to the manage list.
+			if (confirmingDelete()) {
+				if (event.name === 'y' || event.name === 'Y') {
+					const id = confirmingDelete()!;
+					setConfirmingDelete(null);
+					props.onDelete?.(id);
+					// Close after a successful delete: the manage list sits
+					// inside a frozen Show child (it cannot refresh in
+					// place), and closing is the standard delete UX anyway.
+					props.onClose();
+				} else if (
+					event.name === 'n' ||
+					event.name === 'N' ||
+					event.name === 'escape'
+				) {
+					setConfirmingDelete(null);
+				}
+				return true;
+			}
 			if (event.name === 'escape') {
 				back();
 				return true;
@@ -1064,6 +1090,13 @@ export function ConnectProviderModal(props: {
 					const next = event.name === 'down' ? prev + 1 : prev - 1;
 					return Math.max(0, Math.min(manageRows().length - 1, next));
 				});
+				return true;
+			}
+			// `d` deletes the selected EXISTING connection (the "Connect a
+			// new" row is not deletable).
+			if (event.name === 'd' && !event.ctrl && !event.meta) {
+				const selected = manageRows()[manageIndex()];
+				if (selected) setConfirmingDelete(selected.id);
 				return true;
 			}
 			if (event.name === 'return') {
@@ -1372,13 +1405,39 @@ export function ConnectProviderModal(props: {
 									</Show>
 								}
 							>
-								<ManageList
-									presetTitle={managePreset().title}
-									rows={manageRows()}
-									index={manageIndex}
-									onMove={setManageIndex}
-									onSelect={activateManage}
-								/>
+								<Show
+									when={confirmingDelete() === null}
+									fallback={
+										<box flexDirection="column">
+											<text
+												fg={colors().warning}
+												attributes={bold()}
+											>
+												Delete provider
+											</text>
+											<box height={1} />
+											<text fg={colors().text}>
+												Delete "{confirmingDelete()}"?
+												This cannot be undone.
+											</text>
+											<box height={1} />
+											<text
+												fg={colors().secondary}
+												attributes={dim()}
+											>
+												(y) delete · (n) cancel
+											</text>
+										</box>
+									}
+								>
+									<ManageList
+										presetTitle={managePreset().title}
+										rows={manageRows()}
+										index={manageIndex}
+										onMove={setManageIndex}
+										onSelect={activateManage}
+									/>
+								</Show>
 							</Show>
 						</Show>
 					}
@@ -1697,7 +1756,7 @@ function ManageList(props: {
 			</For>
 			<box flexGrow={1} />
 			<text fg={colors().secondary} attributes={dim()}>
-				↑/↓ select · Enter choose · Esc back
+				↑/↓ select · Enter edit · d delete · Esc back
 			</text>
 		</box>
 	);

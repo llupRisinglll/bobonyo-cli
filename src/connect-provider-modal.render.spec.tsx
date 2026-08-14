@@ -282,3 +282,83 @@ describe('connect-provider paste handling', () => {
 		}
 	});
 });
+
+describe('connect-provider delete flow (manage step d → y)', () => {
+	test('d confirms, y deletes, n cancels, and the new-connection row is not deletable', async () => {
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({
+			providers: [PROVIDER],
+		});
+		let deleted: string | undefined;
+		let closed = 0;
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					onConnect={() => {}}
+					onDelete={id => {
+						deleted = id;
+						// Mirror the app's deleteProvider: remove from config.
+						const config = JSON.parse(
+							process.env.BOBONYO_PROVIDERS!,
+						);
+						config.providers = config.providers.filter(
+							(provider: {id: string}) =>
+								provider.id.toLowerCase() !== id.toLowerCase(),
+						);
+						process.env.BOBONYO_PROVIDERS = JSON.stringify(config);
+					}}
+					onClose={() => {
+						closed += 1;
+					}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await mockInput.typeText('deepseek');
+			await setup.flush();
+			mockInput.pressEnter(); // manage list
+			await setup.flush();
+
+			// `d` on the existing connection opens the delete confirm.
+			await mockInput.typeText('d');
+			await setup.flush();
+			let frame = setup.captureSpans();
+			expect(frameHas(frame, 'Delete provider')).toBe(true);
+			expect(frameHas(frame, 'Delete "deepseek"?')).toBe(true);
+
+			// `n` cancels: nothing deleted, back to the manage list.
+			await mockInput.typeText('n');
+			await setup.flush();
+			expect(deleted).toBeUndefined();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'connections')).toBe(true);
+			expect(frameHas(frame, 'Delete provider')).toBe(false);
+
+			// The "Connect a new" row (↓) is NOT deletable.
+			mockInput.pressArrow('down');
+			await setup.flush();
+			await mockInput.typeText('d');
+			await setup.flush();
+			expect(deleted).toBeUndefined();
+			expect(frameHas(setup.captureSpans(), 'Delete provider')).toBe(
+				false,
+			);
+
+			// Back up and `d` → `y` deletes the connection.
+			mockInput.pressArrow('up');
+			await setup.flush();
+			await mockInput.typeText('d');
+			await setup.flush();
+			await mockInput.typeText('y');
+			await setup.flush();
+			expect(deleted).toBe('deepseek');
+			// The modal closes after a successful delete (the manage list
+			// cannot refresh in place — it is a frozen Show child).
+			expect(closed).toBe(1);
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+});

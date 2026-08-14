@@ -1539,25 +1539,7 @@ export function App() {
 		}
 		const [action, idArg] = args.trim().split(/\s+/);
 		if (action === 'delete' && idArg) {
-			const config = loadConfig();
-			config.providers = config.providers.filter(
-				provider => provider.id.toLowerCase() !== idArg.toLowerCase(),
-			);
-			saveConfig(config);
-			// Deleting the provider that the saved preference points at must
-			// clear the preference — otherwise the next start resolves a
-			// provider that no longer exists and falls back to the mock
-			// provider (`mock-model-1`).
-			const prefs = loadPreferences();
-			if (
-				prefs.lastProvider &&
-				prefs.lastProvider.toLowerCase() === idArg.toLowerCase()
-			) {
-				savePreferences({...prefs, lastProvider: undefined, lastModel: undefined});
-			}
-			// One-off confirmations are TOASTS — never transcript rows (the
-			// chat history must only ever contain actual conversation).
-			showToast(`Provider '${idArg}' deleted`);
+			deleteProvider(idArg);
 			return;
 		}
 		if (action === 'edit' && idArg) {
@@ -1639,6 +1621,64 @@ export function App() {
 			setFallbackTarget(null);
 			setModelOpen(true);
 		}
+	};
+
+	/**
+	 * Delete a provider from the config: `/provider delete <id>` AND the
+	 * connect modal's manage step (`d` → `y`). Clears the saved preference
+	 * when it points at the deleted provider, and switches the ACTIVE
+	 * endpoint away so the next turn never dials a deleted endpoint.
+	 */
+	const deleteProvider = (id: string) => {
+		const config = loadConfig();
+		config.providers = config.providers.filter(
+			provider => provider.id.toLowerCase() !== id.toLowerCase(),
+		);
+		saveConfig(config);
+		// Deleting the provider that the saved preference points at must
+		// clear the preference — otherwise the next start resolves a
+		// provider that no longer exists and falls back to the mock
+		// provider (`mock-model-1`).
+		const prefs = loadPreferences();
+		if (
+			prefs.lastProvider &&
+			prefs.lastProvider.toLowerCase() === id.toLowerCase()
+		) {
+			savePreferences({
+				...prefs,
+				lastProvider: undefined,
+				lastModel: undefined,
+			});
+		}
+		if (activeEndpoint().id.toLowerCase() === id.toLowerCase()) {
+			const next = listProviders()[0];
+			if (next) {
+				setActiveEndpoint({
+					...activeEndpoint(),
+					id: next.id,
+					name: next.name ?? next.id,
+					baseUrl: next.baseUrl,
+					apiKey: next.apiKeyResolved,
+					model: next.models[0] ?? 'mock-model-1',
+					models: next.models,
+					modelEfforts: next.modelEfforts,
+					contextWindow: next.contextWindow ?? 128_000,
+					sdkProvider: next.sdkProvider,
+					codexAccount: next.codexAccount,
+					providerOptions: next.providerOptions,
+					promptCacheKey: next.promptCacheKey,
+					alwaysAllow: next.alwaysAllow,
+				});
+				savePreferences({
+					...loadPreferences(),
+					lastProvider: next.id,
+					lastModel: next.models[0] ?? 'mock-model-1',
+				});
+			}
+		}
+		// One-off confirmations are TOASTS — never transcript rows (the
+		// chat history must only ever contain actual conversation).
+		showToast(`Provider '${id}' deleted`);
 	};
 
 	const submit = async (
@@ -3765,6 +3805,7 @@ export function App() {
 					provider={connectOpen()!.provider}
 					editId={connectOpen()!.editId}
 					onConnect={saveConnectedProvider}
+					onDelete={deleteProvider}
 					onClose={() => setConnectOpen(null)}
 				/>
 			</Show>
