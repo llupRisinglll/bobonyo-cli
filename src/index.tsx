@@ -106,20 +106,13 @@ const renderer = await createCliRenderer({
 	targetFps: 60,
 	exitOnCtrlC: false,
 	useMouse: true,
-	// herdr's terminal (ghostty) does NOT support xterm's modifyOtherKeys
-	// (DECRQM mode 27 answers `0` = unrecognized) — its native protocol is
-	// the KITTY keyboard protocol. Enable it with ONLY the DISAMBIGUATE
-	// flag: physical Shift+Enter then arrives as `ESC[13;2u` (distinct from
-	// Enter) so multiline input works, while unmodified keys stay raw
-	// (Backspace stays DEL 0x7f — the `isDeleteKey` control-char handling
-	// is a defensive backstop for terminals that encode it as `ESC[8u`).
-	useKittyKeyboard: {
-		disambiguate: true,
-		alternateKeys: false,
-		events: false,
-		allKeysAsEscapes: false,
-		reportText: false,
-	} as never,
+	// herdr conflict: the kitty keyboard protocol breaks the PHYSICAL
+	// Backspace key inside herdr (openopcode/this rewrite both hit it; the
+	// Ink-based nanocoder doesn't enable kitty). Legacy key parsing forwards
+	// backspace as DEL (0x7f), which herdr delivers correctly.
+	// NOTE: must be `false`, not `null`, OpenTUI resolves
+	// `options.useKittyKeyboard ?? true`, so null still enables kitty mode.
+	useKittyKeyboard: false as unknown as null,
 	...(process.env.NANOCODER_KEYLOG
 		? {
 				// Log the RAW bytes BEFORE OpenTUI parses them, this shows
@@ -133,26 +126,6 @@ const renderer = await createCliRenderer({
 			}
 		: {}),
 });
-
-// Actually PUSH the kitty keyboard protocol (OpenTUI's `useKittyKeyboard`
-// config only sets PARSING flags — it never enables the protocol on the
-// terminal). Flag 1 (disambiguate) makes ghostty encode physical
-// Shift+Enter as `ESC[13;2u` (distinct from Enter) while unmodified keys
-// stay raw bytes, so Backspace/Ctrl+C are untouched.
-try {
-	(renderer as unknown as {enableKittyKeyboard(flags: number): void})
-		.enableKittyKeyboard(1);
-} catch {
-	// Some OpenTUI builds lack the native kitty API — the raw push below
-	// still negotiates the protocol, so Shift+Enter keeps working.
-}
-// Belt-and-braces: emit the kitty keyboard push (`CSI > flags u`, flag 1 =
-// disambiguate) directly so the terminal negotiates it even if the native
-// renderer defers it. ghostty replies `CSI ? 1 u` when active.
-process.stdout.write('\x1b[>1u');
-// Self-check: query the negotiated kitty flags (`?1u` = disambiguate active).
-process.stdout.write('\x1b[?u');
-
 
 // Preview mode: spawn the keyword mock provider and clean it up on exit.
 if (PREVIEW_TUI) {
@@ -189,7 +162,7 @@ renderer.once('destroy', () => {
 	// after exit (parity: nanocoder restores the terminal on quit).
 	try {
 		process.stdout.write(
-			'\x1b[?27l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
+			'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
 		);
 	} catch {
 		// stdout may already be gone

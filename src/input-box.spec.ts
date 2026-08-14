@@ -4,8 +4,6 @@ import {
 	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
-	isDeleteKey,
-	isMultilineInsert,
 	isSubmitKey,
 	moveToNextWord,
 	moveToPrevWord,
@@ -73,79 +71,6 @@ describe('isSubmitKey (herdr Enter is a linefeed)', () => {
 	test('ordinary characters are never submits', () => {
 		expect(isSubmitKey({name: 'a'})).toBe(false);
 		expect(isSubmitKey({name: 'space'})).toBe(false);
-	});
-});
-
-describe('isMultilineInsert (Shift+Enter inserts a newline, never submits)', () => {
-	test('herdr Shift+Enter — a SHIFTED linefeed — inserts a newline (regression)', () => {
-		// The `name !== 'linefeed'` guard on the literal-LF branch made
-		// isSubmitKey return true for shift+linefeed and silently swallowed
-		// the key: Shift+Enter stopped working in herdr panes.
-		expect(
-			isMultilineInsert({
-				name: 'linefeed',
-				sequence: '\n',
-				raw: '\n',
-				shift: true,
-			}),
-		).toBe(true);
-	});
-
-	test('plain herdr Enter (unmodified linefeed) still submits, never inserts', () => {
-		expect(
-			isMultilineInsert({
-				name: 'linefeed',
-				sequence: '\n',
-				raw: '\n',
-			}),
-		).toBe(false);
-	});
-
-	test('Shift+Return and Shift+Enter insert a newline', () => {
-		expect(isMultilineInsert({name: 'return', shift: true})).toBe(true);
-		expect(isMultilineInsert({name: 'enter', shift: true})).toBe(true);
-	});
-
-	test('Ctrl+J inserts a newline', () => {
-		expect(isMultilineInsert({name: 'j', ctrl: true})).toBe(true);
-	});
-
-	test('plain Return/Enter submit, never insert', () => {
-		expect(isMultilineInsert({name: 'return'})).toBe(false);
-		expect(isMultilineInsert({name: 'enter'})).toBe(false);
-	});
-
-	test('a literal LF that is not the submit Enter still inserts', () => {
-		expect(
-			isMultilineInsert({name: 'x', sequence: '\n', raw: '\n'}),
-		).toBe(true);
-		expect(
-			isMultilineInsert({
-				name: 'return',
-				sequence: '\r',
-				raw: '\r',
-			}),
-		).toBe(false);
-	});
-});
-
-describe('isDeleteKey (kitty Backspace is a control char, not a literal)', () => {
-	test('plain backspace/delete names delete', () => {
-		expect(isDeleteKey('backspace')).toBe(true);
-		expect(isDeleteKey('delete')).toBe(true);
-	});
-
-	test('kitty Backspace (ESC[8u -> literal \\x08) deletes — regression', () => {
-		// With the kitty keyboard protocol enabled, physical Backspace
-		// arrives as codepoint 8; OpenTUI parses it as a literal control
-		// char instead of `backspace`. It must DELETE, never be typed.
-		expect(isDeleteKey('\x08')).toBe(true);
-		expect(isDeleteKey('\x7f')).toBe(true);
-	});
-
-	test('ordinary characters are never deletes', () => {
-		expect(isDeleteKey('a')).toBe(false);
-		expect(isDeleteKey('space')).toBe(false);
 	});
 });
 

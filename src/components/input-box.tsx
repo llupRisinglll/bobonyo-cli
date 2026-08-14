@@ -103,60 +103,6 @@ export function isSubmitKey(event: {
 }
 
 /**
- * Whether an OpenTUI key event should INSERT a newline (multiline input)
- * instead of submitting.
- *
- * Shift+Enter inserts a newline. Real terminals deliver it as a shifted
- * `return`/`enter`; herdr delivers it as a SHIFTED `linefeed`. Both must
- * insert, never submit. Ctrl+J is the classic alternative, and any literal
- * LF that is NOT the submit Enter (plain herdr Enter is an unmodified
- * linefeed, excluded by `isSubmitKey`) also inserts. Pure, unit-tested.
- */
-export function isMultilineInsert(event: {
-	name: string;
-	sequence?: string;
-	raw?: string;
-	shift?: boolean;
-	ctrl?: boolean;
-	meta?: boolean;
-}): boolean {
-	if (
-		event.shift &&
-		(event.name === 'return' ||
-			event.name === 'enter' ||
-			event.name === 'linefeed')
-	) {
-		return true;
-	}
-	if (event.ctrl && event.name === 'j') return true;
-	// A literal LF that is not herdr's submit Enter inserts a newline.
-	// NOTE: do NOT re-add an `event.name !== 'linefeed'` guard here — plain
-	// herdr Enter is already excluded by `!isSubmitKey`, and the extra guard
-	// silently swallowed SHIFTED linefeeds (Shift+Enter stopped working).
-	return (
-		(event.sequence === '\n' || event.raw === '\n') && !isSubmitKey(event)
-	);
-}
-
-/**
- * Whether an OpenTUI key event name should DELETE (backspace/delete).
- *
- * The kitty keyboard protocol (enabled for Shift+Enter support) delivers
- * Backspace as `ESC[8u` — OpenTUI maps codepoint 127 to `backspace` but
- * codepoint 8 falls through as a literal `\x08`, which used to get TYPED
- * into the input instead of deleting. Both control encodings are treated
- * as delete. Pure, unit-tested.
- */
-export function isDeleteKey(name: string): boolean {
-	return (
-		name === 'backspace' ||
-		name === 'delete' ||
-		name === '\x08' ||
-		name === '\x7f'
-	);
-}
-
-/**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
  * hint. ↑/↓ navigate prompt history (draft preserved), typing `/` opens a
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
@@ -281,6 +227,8 @@ export function InputBox(props: {
 	// Some terminals/herdr clients send the DELETE key sequence (`ESC[3~`,
 	// parsed as `delete`) for the physical Backspace key. The input is
 	// single-line with the cursor at the end, so both must delete backward.
+	const isDeleteKey = (name: string): boolean =>
+		name === 'backspace' || name === 'delete';
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
 	const typedChar = (event: {name: string; shift?: boolean}): string => {
 		const char = event.name;
@@ -571,7 +519,19 @@ export function InputBox(props: {
 		// A6: Shift+Enter / Ctrl+J / a literal LF insert a newline AT THE
 		// CURSOR, handled BEFORE the suggestion popups so a popup never
 		// swallows the key (plain Enter still selects/completes/submits).
-		if (isMultilineInsert(event)) {
+		const isReturnKey = isSubmitKey(event);
+		// A bare `\n` from herdr's Enter is a SUBMIT (isSubmitKey above);
+		// only an unmodified LF that is NOT herdr's submit shape inserts a
+		// literal newline (paste chunks arrive through usePaste instead).
+		const isLiteralNewline =
+			(event.sequence === '\n' || event.raw === '\n') &&
+			!isReturnKey &&
+			event.name !== 'linefeed';
+		if (
+			(event.shift && isReturnKey) ||
+			(event.ctrl && event.name === 'j') ||
+			isLiteralNewline
+		) {
 			event.preventDefault();
 			insertAtCursor('\n');
 			setSelectedCompletion(0);
@@ -816,7 +776,7 @@ export function InputBox(props: {
 			}
 			return;
 		}
-		if (isSubmitKey(event)) {
+		if (isReturnKey) {
 			event.preventDefault();
 			// Enter on a selected queued item loads it back into the input
 			// for editing (and removes it from the queue).
@@ -1219,28 +1179,19 @@ export function InputBox(props: {
 											: undefined
 									}
 								>
-									{(() => {
-										const idx = caretIndexFor(
-											line,
-											cursorInfo().column,
-										);
-										const char = line[idx];
-										if (char !== undefined) return char;
-										// Synthetic caret cell at end-of-line:
-										// the VISIBLE phase is the blinking
-										// block cursor (so the caret never
-										// disappears after Shift+Enter). The
-										// HIDDEN phase keeps a plain space only
-										// on lines with content; an EMPTY
-										// continuation line renders just its
-										// 2-space indent (no phantom third
-										// column that read as over-indent).
-										return cursorVisible()
-											? ' '
-											: line.length > 0
-												? ' '
-												: '';
-									})()}
+									{cursorVisible()
+										? (line[
+												caretIndexFor(
+													line,
+													cursorInfo().column,
+												)
+											] ?? ' ')
+										: (line[
+												caretIndexFor(
+													line,
+													cursorInfo().column,
+												)
+											] ?? ' ')}
 								</text>
 								<For
 									each={tokenizeInputLine(
