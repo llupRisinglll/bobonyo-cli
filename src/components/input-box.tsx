@@ -64,6 +64,7 @@ import {
 import {CHALK_GREY, colors} from '../theme';
 import {loadSettings, saveSettings} from '../settings';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 
 /**
  * Hide-thinking indicator label: "Thinking…" ONLY while the model is in the
@@ -224,19 +225,6 @@ export function InputBox(props: {
 		);
 	};
 
-	// Some terminals/herdr clients send the DELETE key sequence (`ESC[3~`,
-	// parsed as `delete`) for the physical Backspace key. The input is
-	// single-line with the cursor at the end, so both must delete backward.
-	const isDeleteKey = (event: {name: string; ctrl?: boolean}): boolean =>
-		event.name === 'backspace' ||
-		event.name === 'delete' ||
-		// herdr/ghostty sends the PHYSICAL Backspace key as the kitty
-		// encoding of Ctrl+H (`ESC[104;5u` → {name:'h', ctrl:true}) — Ctrl+H
-		// IS the backspace control char (0x08), so treat it as delete. The
-		// raw BS/DEL bytes are covered too.
-		(event.name === 'h' && event.ctrl === true) ||
-		event.name === '\x08' ||
-		event.name === '\x7f';
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
 	const typedChar = (event: {name: string; shift?: boolean}): string => {
 		const char = event.name;

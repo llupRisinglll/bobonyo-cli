@@ -4,6 +4,7 @@ import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 import {loadPreferences} from '../config';
 import {wrapText} from '../text-wrap';
 
@@ -562,7 +563,7 @@ export function ModelModal(props: {
 			if (cell) selectCell(cell);
 			return true;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setFocus('search');
 			setQuery(prev => prev.slice(0, -1));
 			return true;

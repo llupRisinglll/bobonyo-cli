@@ -4,6 +4,7 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 import {listProviders, type ProviderConfig} from '../config';
 import {spinnerFrame} from '../state';
 import {wrapText} from '../text-wrap';
@@ -887,7 +888,7 @@ export function ConnectProviderModal(props: {
 				activatePicker();
 				return true;
 			}
-			if (event.name === 'backspace') {
+			if (isDeleteKey(event)) {
 				setQuery(prev => prev.slice(0, -1));
 				setIndex(0);
 				return true;
@@ -969,7 +970,7 @@ export function ConnectProviderModal(props: {
 			else submitCustom();
 			return true;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setInput(prev => prev.slice(0, -1));
 			return true;
 		}

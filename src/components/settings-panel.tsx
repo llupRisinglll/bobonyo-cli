@@ -25,6 +25,7 @@ import {loadSettings} from '../settings';
 import {loadPreferences} from '../config';
 import {bgTasks} from '../bash';
 import {colors, themeName} from '../theme';
+import {isDeleteKey} from '../input-keys';
 import {loadSteeringConfig} from '../steering';
 import {loadMCPConfig} from '../mcp';
 import {loadCustomCommands, loadCustomTools, loadSkills} from '../custom';
@@ -597,7 +598,7 @@ export function SettingsModal(props: {
 			}
 			return;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setQuery(prev => prev.slice(0, -1));
 			return;
 		}

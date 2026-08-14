@@ -4,6 +4,7 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 import {wrapDescription} from '../description-wrap';
 import {wrapText} from '../text-wrap';
 
@@ -156,7 +157,7 @@ export function SettingsListModal(props: {
 			if (row?.onActivate) row.onActivate();
 			return;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setQuery(prev => prev.slice(0, -1));
 			setIndex(0);
 			return;

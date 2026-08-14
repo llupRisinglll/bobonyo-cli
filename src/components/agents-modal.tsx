@@ -4,6 +4,7 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 import {SUBAGENT_TYPES} from '../tools';
 import {loadSubagents, type Subagent} from '../subagents';
 import {DetailsModal} from './details-modal';
@@ -111,7 +112,7 @@ export function AgentsModal(props: {onClose: () => void}) {
 			}
 			return;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setQuery(prev => prev.slice(0, -1));
 			setIndex(0);
 			return;

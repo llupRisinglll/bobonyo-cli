@@ -4,6 +4,7 @@ import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
+import {isDeleteKey} from '../input-keys';
 
 export interface ResumeSession {
 	id: string;
@@ -276,7 +277,7 @@ export function ResumeModal(props: {
 			if (row?.kind === 'session') props.onResume(row.session.id);
 			return;
 		}
-		if (event.name === 'backspace') {
+		if (isDeleteKey(event)) {
 			setQuery(prev => prev.slice(0, -1));
 			return;
 		}
