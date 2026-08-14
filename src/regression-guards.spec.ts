@@ -304,8 +304,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/<ManageList/);
 		expect(modal).toMatch(/setEditTargetId\(selected\.id\)/);
 		// Editing preserves the wire fields (responses/anthropic, codexAccount…).
-		expect(modal).toMatch(/editProvider\.sdkProvider/);
-		expect(modal).toMatch(/editProvider\.codexAccount/);
+		expect(modal).toMatch(/editProvider(\(\)!?)?\.sdkProvider/);
+		expect(modal).toMatch(/editProvider(\(\)!?)?\.codexAccount/);
 	});
 
 	test('modal input placeholders use the blinking caret (input-box parity)', () => {

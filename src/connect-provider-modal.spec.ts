@@ -6,7 +6,9 @@ import {
 	customProvider,
 	defaultProviderName,
 	deepseekProvider,
+	editPlaceholder,
 	filterConnectPicker,
+	maskSecret,
 	openAICompatibleProvider,
 	presetConnectionCount,
 	presetConnections,
@@ -242,6 +244,72 @@ describe('provider presets (known endpoints, never asked)', () => {
 			apiKey: 'sk-1',
 			models: ['a', 'b'],
 		});
+	});
+});
+
+describe('maskSecret (edit-placeholder API key masking)', () => {
+	test('long keys keep the first 4 and last 4 characters readable', () => {
+		expect(maskSecret('sk-abc123456789wxyz')).toBe('sk-a…wxyz');
+	});
+
+	test('short keys keep 2 + 2; very short keys mask fully', () => {
+		expect(maskSecret('abcdefgh')).toBe('ab…gh');
+		expect(maskSecret('abcd')).toBe('••••');
+	});
+
+	test('empty keys stay empty', () => {
+		expect(maskSecret('')).toBe('');
+		expect(maskSecret('   ')).toBe('');
+	});
+
+	test('ENV:VAR references keep their shape, never leak the secret', () => {
+		expect(maskSecret('ENV:OPENAI_API_KEY')).toContain('ENV:');
+		expect(maskSecret('ENV:OPENAI_API_KEY')).toContain('…');
+		expect(maskSecret('ENV:OPENAI_API_KEY')).not.toContain(
+			'OPENAI_API_KEY',
+		);
+	});
+});
+
+describe('editPlaceholder (blank = keep old value, edit flow)', () => {
+	const provider = {
+		id: 'deepseek',
+		name: 'deepseek',
+		baseUrl: 'https://api.deepseek.com',
+		apiKey: 'sk-abc123456789wxyz',
+		models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+		apiKeyResolved: 'sk-abc123456789wxyz',
+		modelEfforts: {} as Record<string, string>,
+		alwaysAllow: [] as string[],
+	};
+
+	test('every step says leave blank to keep and shows the current value', () => {
+		expect(editPlaceholder('custom-base', provider)).toBe(
+			'leave blank to keep https://api.deepseek.com',
+		);
+		expect(editPlaceholder('custom-key', provider)).toBe(
+			'leave blank to keep sk-a…wxyz',
+		);
+		expect(editPlaceholder('custom-models', provider)).toBe(
+			'leave blank to keep deepseek-v4-flash, deepseek-v4-pro',
+		);
+		expect(editPlaceholder('custom-name', provider)).toBe(
+			'leave blank to keep deepseek',
+		);
+	});
+
+	test('key/models hints degrade gracefully when unset', () => {
+		const noKey = {...provider, apiKey: undefined};
+		expect(editPlaceholder('custom-key', noKey)).toBe(
+			'optional — no key set',
+		);
+		const noModels = {...provider, models: []};
+		expect(editPlaceholder('custom-models', noModels)).toBe('optional');
+	});
+
+	test('no provider means no edit hint (fresh custom connect)', () => {
+		expect(editPlaceholder('custom-name', undefined)).toBeUndefined();
+		expect(editPlaceholder('custom-key', undefined)).toBeUndefined();
 	});
 });
 

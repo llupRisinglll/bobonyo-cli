@@ -5,7 +5,11 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
-import {listProviders, type ProviderConfig} from '../config';
+import {
+	listProviders,
+	type ProviderConfig,
+	type ResolvedProvider,
+} from '../config';
 import {spinnerFrame} from '../state';
 import {wrapText} from '../text-wrap';
 import {
@@ -523,6 +527,49 @@ export function customProvider(config: {
 	};
 }
 
+/**
+ * Mask a stored API key for the edit placeholder: the first and last few
+ * characters stay readable (so the user can recognize WHICH key it is),
+ * the middle is hidden. `ENV:VAR` references keep their shape (`ENV:…VAR`).
+ * Pure, unit-tested.
+ */
+export function maskSecret(secret: string): string {
+	const value = secret.trim();
+	if (!value) return '';
+	if (value.length <= 8) {
+		return value.length <= 4 ? '•'.repeat(value.length) : `${value.slice(0, 2)}…${value.slice(-2)}`;
+	}
+	return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+/**
+ * Edit-mode placeholder for a custom-form step: the input stays BLANK (a
+ * blank field means KEEP the current value), and the placeholder shows the
+ * existing value with a "leave blank to keep" note. The API key is masked
+ * (maskSecret). Returns undefined for non-edit steps (the caller keeps the
+ * fresh-connect hint). Pure, unit-tested.
+ */
+export function editPlaceholder(
+	step: 'custom-base' | 'custom-key' | 'custom-models' | 'custom-name',
+	provider?: ResolvedProvider,
+): string | undefined {
+	if (!provider) return undefined;
+	switch (step) {
+		case 'custom-base':
+			return `leave blank to keep ${provider.baseUrl}`;
+		case 'custom-key':
+			return provider.apiKey
+				? `leave blank to keep ${maskSecret(provider.apiKey)}`
+				: 'optional — no key set';
+		case 'custom-models':
+			return provider.models.length > 0
+				? `leave blank to keep ${provider.models.join(', ')}`
+				: 'optional';
+		case 'custom-name':
+			return `leave blank to keep ${provider.id}`;
+	}
+}
+
 export function ConnectProviderModal(props: {
 	provider?: string;
 	editId?: string;
@@ -588,41 +635,30 @@ export function ConnectProviderModal(props: {
 	const [editTargetId, setEditTargetId] = createSignal<string | null>(
 		props.editId ?? null,
 	);
-	const editProvider = editTargetId()
-		? listProviders().find(
-				provider =>
-					provider.id.toLowerCase() === editTargetId()!.toLowerCase(),
-			)
-		: undefined;
+	// REACTIVE on purpose: the manage step switches the edit target
+	// mid-modal (editTargetId starts null and is set on selection). A plain
+	// const would capture `undefined` at mount and the edit flow would lose
+	// the keep-old fallbacks (name/key/models) AND the edit placeholders.
+	// REACTIVE on purpose: the manage step switches the edit target
+	// mid-modal (editTargetId starts null and is set on selection). A plain
+	// const would capture `undefined` at mount and the edit flow would lose
+	// the keep-old fallbacks (name/key/models) AND the edit placeholders.
+	const editProvider = createMemo(() =>
+		editTargetId()
+			? listProviders().find(
+					provider =>
+						provider.id.toLowerCase() ===
+						editTargetId()!.toLowerCase(),
+				)
+			: undefined,
+	);
 
-	const [customBase, setCustomBase] = createSignal(
-		editProvider?.baseUrl ?? '',
-	);
+	// The custom edit fields stay BLANK: editing an existing connection
+	// means "blank = keep the current value" (the placeholder shows the old
+	// value + the keep hint). Nothing is ever staged from the old provider.
+	const [customBase, setCustomBase] = createSignal('');
 	const [customKey, setCustomKey] = createSignal('');
-	const [customModels, setCustomModels] = createSignal(
-		editProvider?.models.join(', ') ?? '',
-	);
-	// Re-seed the custom edit fields when the EDIT TARGET changes (the
-	// manage step switches targets mid-modal; mount-time seeding only covers
-	// the props.editId path).
-	createEffect(() => {
-		const targetId = editTargetId();
-		if (!targetId) return;
-		const provider = listProviders().find(
-			candidate => candidate.id.toLowerCase() === targetId.toLowerCase(),
-		);
-		if (!provider) return;
-		setCustomBase(provider.baseUrl);
-		setCustomModels(provider.models.join(', '));
-		setCustomKey('');
-		// Prefill the CURRENT step's input immediately (the manage step
-		// switches edit targets mid-modal; without this the field briefly
-		// shows the placeholder before the value lands).
-		if (view().kind === 'custom-base') setInput(provider.baseUrl);
-		else if (view().kind === 'custom-models') {
-			setInput(provider.models.join(', '));
-		} else if (view().kind === 'custom-key') setInput('');
-	});
+	const [customModels, setCustomModels] = createSignal('');
 
 	const stepDefault = (current: View): string => {
 		switch (current.kind) {
@@ -784,6 +820,14 @@ export function ConnectProviderModal(props: {
 			case 'custom-base': {
 				const baseUrl = input().trim();
 				if (!baseUrl) {
+					// Editing an existing connection: a blank field KEEPS the
+					// current endpoint (the placeholder says so). A fresh
+					// custom connect still requires a base URL.
+					if (editProvider()?.baseUrl) {
+						setCustomBase(editProvider()!.baseUrl);
+						push({kind: 'custom-key'});
+						return;
+					}
 					setError('Base URL is required.');
 					return;
 				}
@@ -808,55 +852,68 @@ export function ConnectProviderModal(props: {
 					.filter(Boolean);
 				const id =
 					input().trim() ||
-					(editProvider?.id || defaultProviderName('custom'));
+					(editProvider()?.id || defaultProviderName('custom'));
 				const provider = customProvider({
 					id,
 					baseUrl: customBase(),
 					apiKey:
 						customKey() ||
-						(editProvider?.apiKeyResolved ? editProvider.apiKey : undefined),
-					models: models.length > 0 ? models : (editProvider?.models ?? []),
+						(editProvider()?.apiKeyResolved
+							? editProvider()!.apiKey
+							: undefined),
+					models:
+						models.length > 0
+							? models
+							: (editProvider()?.models ?? []),
 				});
 				if (!provider) return;
 				// Editing an existing connection keeps its wire fields
 				// (responses/anthropic, codexAccount, discovery, context
 				// window) — the custom form only edits id/base/key/models.
 				props.onConnect(
-					editProvider
+					editProvider()
 						? {
 								...provider,
-								...(editProvider.sdkProvider
-									? {sdkProvider: editProvider.sdkProvider}
+								...(editProvider()!.sdkProvider
+									? {sdkProvider: editProvider()!.sdkProvider}
 									: {}),
-								...(editProvider.codexAccount
-									? {codexAccount: editProvider.codexAccount}
+								...(editProvider()!.codexAccount
+									? {
+											codexAccount:
+												editProvider()!.codexAccount,
+										}
 									: {}),
-								...(editProvider.modelDiscoveryUrl
+								...(editProvider()!.modelDiscoveryUrl
 									? {
 											modelDiscoveryUrl:
-												editProvider.modelDiscoveryUrl,
+												editProvider()!
+													.modelDiscoveryUrl,
 										}
 									: {}),
-								...(editProvider.contextWindow
+								...(editProvider()!.contextWindow
 									? {
 											contextWindow:
-												editProvider.contextWindow,
+												editProvider()!.contextWindow,
 										}
 									: {}),
-								...(editProvider.providerOptions
+								...(editProvider()!.providerOptions
 									? {
 											providerOptions:
-												editProvider.providerOptions,
+												editProvider()!
+													.providerOptions,
 										}
 									: {}),
-								...(editProvider.promptCacheKey
+								...(editProvider()!.promptCacheKey
 									? {
 											promptCacheKey:
-												editProvider.promptCacheKey,
+												editProvider()!.promptCacheKey,
 										}
 									: {}),
-								...(editProvider.alwaysAllow?.length
-									? {alwaysAllow: editProvider.alwaysAllow}
+								...(editProvider()!.alwaysAllow?.length
+									? {
+											alwaysAllow:
+												editProvider()!.alwaysAllow,
+										}
 									: {}),
 							}
 						: provider,
@@ -1114,11 +1171,21 @@ export function ConnectProviderModal(props: {
 			case 'name':
 				return `optional — empty uses ${defaultProviderName(selectedPreset().id)}`;
 			case 'custom-base':
-				return 'e.g. https://api.deepseek.com/v1';
+				return editProvider()
+					? editPlaceholder('custom-base', editProvider())
+					: 'e.g. https://api.deepseek.com/v1';
+			case 'custom-key':
+				return editProvider()
+					? editPlaceholder('custom-key', editProvider())
+					: undefined;
 			case 'custom-models':
-				return 'e.g. deepseek-v4-flash, deepseek-v4-pro';
+				return editProvider()
+					? editPlaceholder('custom-models', editProvider())
+					: 'e.g. deepseek-v4-flash, deepseek-v4-pro';
 			case 'custom-name':
-				return `optional — empty uses ${editProvider?.id ?? defaultProviderName('custom')}`;
+				return editProvider()
+					? editPlaceholder('custom-name', editProvider())
+					: `optional — empty uses ${defaultProviderName('custom')}`;
 			default:
 				return undefined;
 		}

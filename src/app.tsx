@@ -1590,8 +1590,17 @@ export function App() {
 	 * settings surface, where the modal closes back to the settings list.
 	 */
 	const saveConnectedProvider = (provider: ProviderConfig) => {
-		const wasEdit = Boolean(connectOpen()?.editId);
 		const config = loadConfig();
+		// An EDIT is also a save whose id ALREADY exists (the connect modal's
+		// manage step edits an existing connection without a settings
+		// editId). Only a genuinely NEW id drops into the model picker
+		// afterwards.
+		const wasEdit =
+			Boolean(connectOpen()?.editId) ||
+			config.providers.some(
+				candidate =>
+					candidate.id.toLowerCase() === provider.id.toLowerCase(),
+			);
 		config.providers = config.providers.filter(
 			candidate => candidate.id.toLowerCase() !== provider.id.toLowerCase(),
 		);
