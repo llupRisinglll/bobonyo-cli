@@ -1544,6 +1544,17 @@ export function App() {
 				provider => provider.id.toLowerCase() !== idArg.toLowerCase(),
 			);
 			saveConfig(config);
+			// Deleting the provider that the saved preference points at must
+			// clear the preference — otherwise the next start resolves a
+			// provider that no longer exists and falls back to the mock
+			// provider (`mock-model-1`).
+			const prefs = loadPreferences();
+			if (
+				prefs.lastProvider &&
+				prefs.lastProvider.toLowerCase() === idArg.toLowerCase()
+			) {
+				savePreferences({...prefs, lastProvider: undefined, lastModel: undefined});
+			}
 			// One-off confirmations are TOASTS — never transcript rows (the
 			// chat history must only ever contain actual conversation).
 			showToast(`Provider '${idArg}' deleted`);

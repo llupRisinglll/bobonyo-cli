@@ -308,6 +308,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/editProvider(\(\)!?)?\.codexAccount/);
 	});
 
+	test('deleting a provider clears the saved lastProvider preference', () => {
+		// Otherwise the next start resolves a provider that no longer exists
+		// and silently falls back to the mock provider (`mock-model-1`).
+		const app = read('./app.tsx');
+		expect(app).toMatch(/action === 'delete'/);
+		expect(app).toMatch(
+			/lastProvider\.toLowerCase\(\) === idArg\.toLowerCase\(\)/,
+		);
+		expect(app).toMatch(/lastProvider: undefined, lastModel: undefined/);
+	});
+
 	test('modal input placeholders use the blinking caret (input-box parity)', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
 		expect(modal).toMatch(/spinnerFrame\(\) >> 2\) % 2 === 0/);
