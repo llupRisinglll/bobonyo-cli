@@ -139,6 +139,24 @@ export function isMultilineInsert(event: {
 }
 
 /**
+ * Whether an OpenTUI key event name should DELETE (backspace/delete).
+ *
+ * The kitty keyboard protocol (enabled for Shift+Enter support) delivers
+ * Backspace as `ESC[8u` — OpenTUI maps codepoint 127 to `backspace` but
+ * codepoint 8 falls through as a literal `\x08`, which used to get TYPED
+ * into the input instead of deleting. Both control encodings are treated
+ * as delete. Pure, unit-tested.
+ */
+export function isDeleteKey(name: string): boolean {
+	return (
+		name === 'backspace' ||
+		name === 'delete' ||
+		name === '\x08' ||
+		name === '\x7f'
+	);
+}
+
+/**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
  * hint. ↑/↓ navigate prompt history (draft preserved), typing `/` opens a
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
@@ -263,8 +281,6 @@ export function InputBox(props: {
 	// Some terminals/herdr clients send the DELETE key sequence (`ESC[3~`,
 	// parsed as `delete`) for the physical Backspace key. The input is
 	// single-line with the cursor at the end, so both must delete backward.
-	const isDeleteKey = (name: string): boolean =>
-		name === 'backspace' || name === 'delete';
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
 	const typedChar = (event: {name: string; shift?: boolean}): string => {
 		const char = event.name;
@@ -1203,19 +1219,28 @@ export function InputBox(props: {
 											: undefined
 									}
 								>
-									{cursorVisible()
-										? (line[
-												caretIndexFor(
-													line,
-													cursorInfo().column,
-												)
-											] ?? ' ')
-										: (line[
-												caretIndexFor(
-													line,
-													cursorInfo().column,
-												)
-											] ?? ' ')}
+									{(() => {
+										const idx = caretIndexFor(
+											line,
+											cursorInfo().column,
+										);
+										const char = line[idx];
+										if (char !== undefined) return char;
+										// Synthetic caret cell at end-of-line:
+										// the visible block cursor renders as a
+										// highlighted space; while HIDDEN it stays
+										// a plain space to keep the row width
+										// stable. EXCEPTION: on an EMPTY line
+										// that hidden space reads as a third
+										// indent column (the Shift+Enter
+										// over-indent that corrected itself once
+										// typed) — render nothing there.
+										return cursorVisible()
+											? ' '
+											: line.length > 0
+												? ' '
+												: '';
+									})()}
 								</text>
 								<For
 									each={tokenizeInputLine(

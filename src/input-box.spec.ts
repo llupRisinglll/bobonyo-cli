@@ -4,6 +4,7 @@ import {
 	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
+	isDeleteKey,
 	isMultilineInsert,
 	isSubmitKey,
 	moveToNextWord,
@@ -125,6 +126,26 @@ describe('isMultilineInsert (Shift+Enter inserts a newline, never submits)', () 
 				raw: '\r',
 			}),
 		).toBe(false);
+	});
+});
+
+describe('isDeleteKey (kitty Backspace is a control char, not a literal)', () => {
+	test('plain backspace/delete names delete', () => {
+		expect(isDeleteKey('backspace')).toBe(true);
+		expect(isDeleteKey('delete')).toBe(true);
+	});
+
+	test('kitty Backspace (ESC[8u -> literal \\x08) deletes — regression', () => {
+		// With the kitty keyboard protocol enabled, physical Backspace
+		// arrives as codepoint 8; OpenTUI parses it as a literal control
+		// char instead of `backspace`. It must DELETE, never be typed.
+		expect(isDeleteKey('\x08')).toBe(true);
+		expect(isDeleteKey('\x7f')).toBe(true);
+	});
+
+	test('ordinary characters are never deletes', () => {
+		expect(isDeleteKey('a')).toBe(false);
+		expect(isDeleteKey('space')).toBe(false);
 	});
 });
 

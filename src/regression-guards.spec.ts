@@ -608,7 +608,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			/if \(isDeleteKey\(event\.name\)\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
 		);
 		expect(input).toMatch(
-			/if \(isReturnKey\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
+			/if \(isSubmitKey\(event\)\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
 		);
 		expect(input).toMatch(
 			/if \(event\.name === 'tab'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
