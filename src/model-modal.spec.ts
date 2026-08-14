@@ -2,10 +2,44 @@ import {describe, expect, test} from 'bun:test';
 import {
 	connectProviderShortcut,
 	initialModelRowIndex,
+	modelWithProvider,
 	nextModelCursor,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
+
+const provider = (name: string) => ({
+	id: name,
+	name,
+	models: [],
+	modelEfforts: {},
+});
+
+describe('modelWithProvider (provider name in parentheses)', () => {
+	test('appends the provider display name in parentheses', () => {
+		expect(
+			modelWithProvider('deepseek-v4-flash', provider('deepseek')),
+		).toBe('deepseek-v4-flash (deepseek)');
+		expect(
+			modelWithProvider('gpt-5.6-luna', provider('opencode-go')),
+		).toBe('gpt-5.6-luna (opencode-go)');
+	});
+
+	test('falls back to the provider id when the display name is missing', () => {
+		expect(
+			modelWithProvider('mimo-v2.5', {
+				...provider('xiaomi'),
+				name: '',
+			}),
+		).toBe('mimo-v2.5 (xiaomi)');
+	});
+
+	test('no provider means no parentheses', () => {
+		expect(modelWithProvider('mock-model-1', undefined)).toBe(
+			'mock-model-1',
+		);
+	});
+});
 
 const model = (isCurrent = false): Row => ({kind: 'model', isCurrent});
 

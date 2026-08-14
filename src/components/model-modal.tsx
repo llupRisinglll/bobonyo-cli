@@ -24,6 +24,21 @@ export interface ModelProvider {
 	modelContextWindows?: Record<string, number>;
 }
 
+/**
+ * A model name with its provider in parentheses (`deepseek-v4-flash
+ * (deepseek)`). The same model name can exist under several providers
+ * (e.g. a DeepSeek catalog routed through OpenCode Go), so every place the
+ * modal shows a BARE model name outside its group header carries the
+ * provider. Pure, unit-tested.
+ */
+export function modelWithProvider(
+	model: string,
+	provider?: ModelProvider,
+): string {
+	const label = provider?.name || provider?.id;
+	return label && model ? `${model} (${label})` : model;
+}
+
 type Row =
 	| {kind: 'provider'; provider: ModelProvider; expanded: boolean; isCurrent: boolean}
 	| {kind: 'model'; provider: ModelProvider; model: string; isCurrent: boolean}
@@ -460,6 +475,9 @@ export function ModelModal(props: {
 		text.length > width
 			? text.slice(0, Math.max(1, width - 1)) + '…'
 			: text;
+	/** Provider display label for a bare model name (effort/confirm steps). */
+	const providerForId = (id?: string): ModelProvider | undefined =>
+		props.providers.find(provider => provider.id === id);
 
 	// After a QUERY change the selection re-snaps to a REAL cell: the current
 	// model when it still matches, otherwise the first cell (or Inherit).
@@ -639,9 +657,13 @@ export function ModelModal(props: {
 									</text>
 									<box height={1} />
 									<text fg={colors().warning}>
-										Switching to "{confirming()?.model}" will RESEND the
-										entire conversation to the new model and take
-										additional usage.
+										Switching to "
+										{modelWithProvider(
+											confirming()?.model ?? '',
+											providerForId(confirming()?.providerId),
+										)}
+										" will RESEND the entire conversation to the new
+										model and take additional usage.
 									</text>
 									<box height={1} />
 									<text fg={colors().secondary} attributes={dim()}>
@@ -658,7 +680,10 @@ export function ModelModal(props: {
 								</text>
 								<box height={1} />
 								<text fg={colors().text}>
-									{effortStep()?.model}
+									{modelWithProvider(
+										effortStep()?.model ?? '',
+										providerForId(effortStep()?.providerId),
+									)}
 								</text>
 								<box height={1} />
 								<For each={EFFORT_OPTIONS}>
@@ -819,10 +844,26 @@ export function ModelModal(props: {
 												active && cell.shownEffort
 													? `[${cell.shownEffort}]`
 													: '';
+											// Provider in parentheses after
+											// the model name (secondary, dim):
+											// the same model can exist under
+											// several providers (DeepSeek
+											// catalogs routed through OpenCode
+											// Go). The model name budget shrinks
+											// by the parens' width so the cell
+											// never overflows.
+											const providerLabel =
+												cell.provider?.name ??
+												cell.provider?.id ??
+												'';
+											const providerParens = providerLabel
+												? `(${providerLabel})`
+												: '';
 											const nameWidth = Math.max(
 												6,
 												cellWidth() -
 													4 -
+													providerParens.length -
 													(size ? size.length + 1 : 0) -
 													(effortBadge
 														? effortBadge.length
@@ -857,6 +898,18 @@ export function ModelModal(props: {
 															nameWidth,
 														)}
 													</text>
+													{providerParens ? (
+														<text
+															fg={
+																colors().secondary
+															}
+															attributes={dim()}
+														>
+															{providerParens}
+														</text>
+													) : (
+														<></>
+													)}
 													<Show
 														when={active && cell.shownEffort}
 													>
