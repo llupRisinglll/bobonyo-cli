@@ -106,15 +106,20 @@ const renderer = await createCliRenderer({
 	targetFps: 60,
 	exitOnCtrlC: false,
 	useMouse: true,
-	// herdr conflict: the kitty keyboard protocol breaks the PHYSICAL
-	// Backspace key inside herdr (openopcode/this rewrite both hit it; the
-	// Ink-based nanocoder doesn't enable kitty). Legacy key parsing forwards
-	// backspace as DEL (0x7f), which herdr delivers correctly. Shift+Enter
-	// is handled by the input box (isMultilineInsert), which accepts the
-	// shifted-linefeed encoding herdr sends — no kitty protocol needed.
-	// NOTE: must be `false`, not `null`, OpenTUI resolves
-	// `options.useKittyKeyboard ?? true`, so null still enables kitty mode.
-	useKittyKeyboard: false as unknown as null,
+	// herdr's terminal (ghostty) does NOT support xterm's modifyOtherKeys
+	// (DECRQM mode 27 answers `0` = unrecognized) — its native protocol is
+	// the KITTY keyboard protocol. Enable it with ONLY the DISAMBIGUATE
+	// flag: physical Shift+Enter then arrives as `ESC[13;2u` (distinct from
+	// Enter) so multiline input works, while unmodified keys stay raw
+	// (Backspace stays DEL 0x7f — the `isDeleteKey` control-char handling
+	// is a defensive backstop for terminals that encode it as `ESC[8u`).
+	useKittyKeyboard: {
+		disambiguate: true,
+		alternateKeys: false,
+		events: false,
+		allKeysAsEscapes: false,
+		reportText: false,
+	} as never,
 	...(process.env.NANOCODER_KEYLOG
 		? {
 				// Log the RAW bytes BEFORE OpenTUI parses them, this shows
@@ -129,13 +134,6 @@ const renderer = await createCliRenderer({
 		: {}),
 });
 
-// modifyOtherKeys LEVEL 1 (DECSET 27): the terminal encodes ONLY modified
-// keys distinctly — physical Shift+Enter arrives as `ESC[27;2;13~` instead
-// of a plain CR, so multiline input works in herdr. Unmodified keys (Enter,
-// Backspace, Ctrl+C) stay raw bytes, so NOTHING else changes. This is the
-// safe alternative to the kitty keyboard protocol, which broke the physical
-// Backspace key inside herdr.
-process.stdout.write('\x1b[?27h');
 
 // Preview mode: spawn the keyword mock provider and clean it up on exit.
 if (PREVIEW_TUI) {
