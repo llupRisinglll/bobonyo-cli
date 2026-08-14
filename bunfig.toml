@@ -1,1 +1,8 @@
 preload = ["@opentui/solid/preload"]
+
+[test]
+# Render-level specs mount real OpenTUI components (e.g. InputBox caret
+# regression tests). The solid-js SERVER build breaks the reconciler, so the
+# transform plugin must be registered before the first solid-js import.
+# Top-level `preload` only applies to `bun run`; bun test needs its own.
+preload = ["@opentui/solid/preload"]
