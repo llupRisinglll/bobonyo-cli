@@ -227,8 +227,16 @@ export function InputBox(props: {
 	// Some terminals/herdr clients send the DELETE key sequence (`ESC[3~`,
 	// parsed as `delete`) for the physical Backspace key. The input is
 	// single-line with the cursor at the end, so both must delete backward.
-	const isDeleteKey = (name: string): boolean =>
-		name === 'backspace' || name === 'delete';
+	const isDeleteKey = (event: {name: string; ctrl?: boolean}): boolean =>
+		event.name === 'backspace' ||
+		event.name === 'delete' ||
+		// herdr/ghostty sends the PHYSICAL Backspace key as the kitty
+		// encoding of Ctrl+H (`ESC[104;5u` → {name:'h', ctrl:true}) — Ctrl+H
+		// IS the backspace control char (0x08), so treat it as delete. The
+		// raw BS/DEL bytes are covered too.
+		(event.name === 'h' && event.ctrl === true) ||
+		event.name === '\x08' ||
+		event.name === '\x7f';
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
 	const typedChar = (event: {name: string; shift?: boolean}): string => {
 		const char = event.name;
@@ -457,7 +465,7 @@ export function InputBox(props: {
 		forceCursorVisible();
 		// Reset the fast-erase hold counter whenever a non-backspace key
 		// arrives (a fresh keypress means a fresh, deliberate press).
-		if (!isDeleteKey(event.name)) backspaceHold = 0;
+		if (!isDeleteKey(event)) backspaceHold = 0;
 		const pendingText = prompt();
 		if (pendingText) {
 			// The wizard prompt owns the key; claim it so the history
@@ -475,7 +483,7 @@ export function InputBox(props: {
 				pendingText.resolve(value);
 				setInputAt('');
 				setPendingPrompt(null);
-			} else if (isDeleteKey(event.name)) {
+			} else if (isDeleteKey(event)) {
 				// Backspace deletes a WHOLE `[Image #N]`/`[Text #N]` token
 				// instead of nibbling inside it (atomic blocks).
 				const value = input();
@@ -793,7 +801,7 @@ export function InputBox(props: {
 			submitExpanded(value);
 			return;
 		}
-		if (isDeleteKey(event.name)) {
+		if (isDeleteKey(event)) {
 			event.preventDefault();
 			// Del on a selected queued item removes it.
 			const queuedIndex = selectedQueued();
