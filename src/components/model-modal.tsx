@@ -822,7 +822,10 @@ export function ModelModal(props: {
 									<box flexDirection="row" height={1}>
 										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
-											{line.provider?.name ?? line.provider?.id}
+											(
+											{line.provider?.name ??
+												line.provider?.id}
+											)
 											{line.isCurrent ? ' (current)' : ''}
 										</text>
 									</box>
@@ -844,26 +847,10 @@ export function ModelModal(props: {
 												active && cell.shownEffort
 													? `[${cell.shownEffort}]`
 													: '';
-											// Provider in parentheses after
-											// the model name (secondary, dim):
-											// the same model can exist under
-											// several providers (DeepSeek
-											// catalogs routed through OpenCode
-											// Go). The model name budget shrinks
-											// by the parens' width so the cell
-											// never overflows.
-											const providerLabel =
-												cell.provider?.name ??
-												cell.provider?.id ??
-												'';
-											const providerParens = providerLabel
-												? `(${providerLabel})`
-												: '';
 											const nameWidth = Math.max(
 												6,
 												cellWidth() -
 													4 -
-													providerParens.length -
 													(size ? size.length + 1 : 0) -
 													(effortBadge
 														? effortBadge.length
@@ -898,18 +885,6 @@ export function ModelModal(props: {
 															nameWidth,
 														)}
 													</text>
-													{providerParens ? (
-														<text
-															fg={
-																colors().secondary
-															}
-															attributes={dim()}
-														>
-															{providerParens}
-														</text>
-													) : (
-														<></>
-													)}
 													<Show
 														when={active && cell.shownEffort}
 													>
