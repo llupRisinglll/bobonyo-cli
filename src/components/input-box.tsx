@@ -1227,16 +1227,19 @@ export function InputBox(props: {
 										const char = line[idx];
 										if (char !== undefined) return char;
 										// Synthetic caret cell at end-of-line:
-										// keeps the block cursor visible and the
-										// row width stable. EXCEPTION: an EMPTY
-										// CONTINUATION line (right after
-										// Shift+Enter) must not paint that
-										// phantom cell — it reads as a third
-										// indent column. Empty line 0 keeps it
-										// so the cursor shows after `❯ `.
-										return line === '' && index() > 0
-											? ''
-											: ' ';
+										// the VISIBLE phase is the blinking
+										// block cursor (so the caret never
+										// disappears after Shift+Enter). The
+										// HIDDEN phase keeps a plain space only
+										// on lines with content; an EMPTY
+										// continuation line renders just its
+										// 2-space indent (no phantom third
+										// column that read as over-indent).
+										return cursorVisible()
+											? ' '
+											: line.length > 0
+												? ' '
+												: '';
 									})()}
 								</text>
 								<For
