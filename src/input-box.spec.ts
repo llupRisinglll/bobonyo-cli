@@ -101,6 +101,14 @@ describe('completionMessageRows (resume notice height)', () => {
 });
 
 describe('tokenizeInputLine', () => {
+	test('empty input yields NO parts (no phantom caret cell)', () => {
+		// OpenTUI renders an empty <text> as one real cell, so an empty part
+		// paints a phantom space before the caret and shifts the block cursor
+		// one column forward on empty lines (Shift+Enter continuation
+		// regression). The caret line must render ZERO cells before the caret.
+		expect(tokenizeInputLine('')).toEqual([]);
+	});
+
 	test('colors a KNOWN /command as primary at the start', () => {
 		expect(tokenizeInputLine('/clear')).toEqual([
 			{text: '/clear', token: true},

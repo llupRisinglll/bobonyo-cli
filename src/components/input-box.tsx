@@ -1351,6 +1351,11 @@ export function tokenizeInputLine(
 	line: string,
 	known?: Set<string>,
 ): Array<{text: string; token: boolean}> {
+	// An empty line has no parts: OpenTUI renders an EMPTY `<text>` as one
+	// real cell, so a `[{text:''}]` part paints a phantom space before the
+	// caret and pushes the block cursor one column forward on empty lines
+	// (the Shift+Enter continuation line regression).
+	if (line.length === 0) return [];
 	const parts: Array<{text: string; token: boolean}> = [];
 	// The component passes a frame-cached set; tests omit it (built on call).
 	const knownSet =
