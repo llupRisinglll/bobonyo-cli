@@ -316,10 +316,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// and silently falls back to the mock provider (`mock-model-1`).
 		const app = read('./app.tsx');
 		expect(app).toMatch(/action === 'delete'/);
-		expect(app).toMatch(
+		// The config/prefs mutation is a PURE helper in config.ts; the app
+		// must route its deletes through it.
+		expect(app).toMatch(/applyProviderDeletion\(/);
+		const config = read('./config.ts');
+		expect(config).toMatch(
 			/lastProvider\.toLowerCase\(\) === id\.toLowerCase\(\)/,
 		);
-		expect(app).toMatch(
+		expect(config).toMatch(
 			/lastProvider: undefined,\s*lastModel: undefined/,
 		);
 	});
@@ -966,6 +970,23 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(read('./components/input-box.tsx')).toMatch(
 			/anyModalOpen\(\)/,
 		);
+	});
+
+	test('every modal with an input handles paste (never leaks to the chat box)', () => {
+		// While a modal is open the chat box ignores paste (anyModalOpen
+		// gate); each modal field must register its own usePaste or the
+		// paste would be swallowed entirely.
+		for (const file of [
+			'./components/connect-provider-modal.tsx',
+			'./components/model-modal.tsx',
+			'./components/settings-list-modal.tsx',
+			'./components/commands-modal.tsx',
+			'./components/resume-modal.tsx',
+			'./components/agents-modal.tsx',
+			'./components/settings-panel.tsx',
+		]) {
+			expect(read(file)).toMatch(/usePaste/);
+		}
 	});
 
 	test('ANY provider with a discovery URL fetches its models', () => {

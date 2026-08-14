@@ -89,4 +89,19 @@ describe('modal search input Backspace (herdr kitty encodings)', () => {
 			setup.renderer.destroy();
 		}
 	});
+
+	test('bracketed paste lands in the modal search, never the chat box behind it', async () => {
+		let closed = 0;
+		const setup = await mountModal(() => {
+			closed += 1;
+		});
+		try {
+			await setup.mockInput.pasteBracketedText('alpha');
+			await setup.flush();
+			expect(searchText(setup.captureSpans())).toBe('⌕ alpha');
+			expect(closed).toBe(0);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 });

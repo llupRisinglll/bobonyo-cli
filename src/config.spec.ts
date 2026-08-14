@@ -3,6 +3,7 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
+	applyProviderDeletion,
 	codexClientVersion,
 	discoverCodexAccountModels,
 	discoverModels,
@@ -11,6 +12,7 @@ import {
 	modelCatalogCachePath,
 	modelsDevContextWindow,
 	normalizeModels,
+	type AppConfig,
 	type ModelsDevCatalog,
 } from './config';
 import {bobonyoConfigDir, bobonyoDataDir} from './bobonyo-paths';
@@ -48,6 +50,54 @@ describe('normalizeModels', () => {
 	test('empty catalog falls back to the mock model', () => {
 		const {names} = normalizeModels([]);
 		expect(names).toEqual(['mock-model-1']);
+	});
+});
+
+describe('applyProviderDeletion (manage-step / /provider delete)', () => {
+	const config = (): AppConfig => ({
+		providers: [
+			{id: 'codex', name: 'codex', baseUrl: 'https://api.openai.com/v1'},
+			{id: 'DeepSeek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com'},
+			{id: 'xiaomi', name: 'Xiaomi', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+		],
+	});
+
+	test('removes the provider case-insensitively and keeps the rest', () => {
+		const {config: next} = applyProviderDeletion(config(), {}, 'deepseek');
+		expect(next.providers.map(provider => provider.id)).toEqual([
+			'codex',
+			'xiaomi',
+		]);
+	});
+
+	test('clears the saved last-provider preference when it points at the deleted id', () => {
+		const {config: next, prefs} = applyProviderDeletion(
+			config(),
+			{lastProvider: 'DEEPSEEK', lastModel: 'deepseek-v4-flash'},
+			'deepseek',
+		);
+		expect(next.providers.map(provider => provider.id)).not.toContain(
+			'DeepSeek',
+		);
+		expect(prefs.lastProvider).toBeUndefined();
+		expect(prefs.lastModel).toBeUndefined();
+	});
+
+	test('leaves the preference untouched when a different provider is deleted', () => {
+		const {prefs} = applyProviderDeletion(
+			config(),
+			{lastProvider: 'codex', lastModel: 'gpt-5.4-mini'},
+			'xiaomi',
+		);
+		expect(prefs).toEqual({
+			lastProvider: 'codex',
+			lastModel: 'gpt-5.4-mini',
+		});
+	});
+
+	test('an unknown id is a no-op on the config', () => {
+		const {config: next} = applyProviderDeletion(config(), {}, 'missing');
+		expect(next.providers).toHaveLength(3);
 	});
 });
 

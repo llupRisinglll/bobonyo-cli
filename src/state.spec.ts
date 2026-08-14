@@ -1,5 +1,60 @@
 import {describe, expect, test} from 'bun:test';
-import {glyphBlinkOn, loadingDots} from './state';
+import {
+	anyModalOpen,
+	glyphBlinkOn,
+	loadingDots,
+	setAgentsOpen,
+	setCommandsOpen,
+	setConnectOpen,
+	setDetailsOpen,
+	setEffortOpen,
+	setModelOpen,
+	setPendingTrust,
+	setResumeOpen,
+	setSettingsOpen,
+	setStatusOpen,
+} from './state';
+
+function closeEveryModal(): void {
+	setSettingsOpen(false);
+	setCommandsOpen(false);
+	setStatusOpen(false);
+	setModelOpen(false);
+	setAgentsOpen(false);
+	setDetailsOpen(false);
+	setResumeOpen(false);
+	setConnectOpen(null);
+	setEffortOpen(false);
+	setPendingTrust(null);
+}
+
+describe('anyModalOpen (modal isolation gate)', () => {
+	test('false when every modal is closed', () => {
+		closeEveryModal();
+		expect(anyModalOpen()).toBe(false);
+	});
+
+	test('true when ANY modal surface is open', () => {
+		const opens: Array<() => void> = [
+			() => setSettingsOpen(true),
+			() => setCommandsOpen(true),
+			() => setStatusOpen(true),
+			() => setModelOpen(true),
+			() => setAgentsOpen(true),
+			() => setDetailsOpen(true),
+			() => setResumeOpen(true),
+			() => setConnectOpen({}),
+			() => setEffortOpen(true),
+			() => setPendingTrust({directory: '/x', resolve: () => {}}),
+		];
+		for (const open of opens) {
+			closeEveryModal();
+			open();
+			expect(anyModalOpen()).toBe(true);
+		}
+		closeEveryModal();
+	});
+});
 
 describe('glyphBlinkOn', () => {
 	test('blinks on a 500ms cadence (4 frames per 100ms tick)', () => {

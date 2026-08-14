@@ -23,6 +23,7 @@ import {
 	type SystemPromptStyle,
 } from './system-prompt';
 import {
+	applyProviderDeletion,
 	discoverModels,
 	configDir,
 	listProviders,
@@ -1630,26 +1631,17 @@ export function App() {
 	 * endpoint away so the next turn never dials a deleted endpoint.
 	 */
 	const deleteProvider = (id: string) => {
-		const config = loadConfig();
-		config.providers = config.providers.filter(
-			provider => provider.id.toLowerCase() !== id.toLowerCase(),
-		);
-		saveConfig(config);
 		// Deleting the provider that the saved preference points at must
 		// clear the preference — otherwise the next start resolves a
 		// provider that no longer exists and falls back to the mock
 		// provider (`mock-model-1`).
-		const prefs = loadPreferences();
-		if (
-			prefs.lastProvider &&
-			prefs.lastProvider.toLowerCase() === id.toLowerCase()
-		) {
-			savePreferences({
-				...prefs,
-				lastProvider: undefined,
-				lastModel: undefined,
-			});
-		}
+		const {config, prefs} = applyProviderDeletion(
+			loadConfig(),
+			loadPreferences(),
+			id,
+		);
+		saveConfig(config);
+		savePreferences(prefs);
 		if (activeEndpoint().id.toLowerCase() === id.toLowerCase()) {
 			const next = listProviders()[0];
 			if (next) {

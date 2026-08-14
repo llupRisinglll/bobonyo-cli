@@ -450,6 +450,32 @@ export function savePreferences(prefs: Preferences): void {
 	);
 }
 
+/**
+ * Pure deletion of a provider: remove it from the config (case-insensitive)
+ * and clear the saved last-provider preference when it pointed at the
+ * deleted provider (otherwise the next start resolves a provider that no
+ * longer exists and falls back to the mock). Shared by `/provider delete`
+ * and the connect modal's manage-step delete. Pure, unit-tested.
+ */
+export function applyProviderDeletion(
+	config: AppConfig,
+	prefs: Preferences,
+	id: string,
+): {config: AppConfig; prefs: Preferences} {
+	const nextConfig = {
+		...config,
+		providers: config.providers.filter(
+			provider => provider.id.toLowerCase() !== id.toLowerCase(),
+		),
+	};
+	const nextPrefs =
+		prefs.lastProvider &&
+		prefs.lastProvider.toLowerCase() === id.toLowerCase()
+			? {...prefs, lastProvider: undefined, lastModel: undefined}
+			: prefs;
+	return {config: nextConfig, prefs: nextPrefs};
+}
+
 export function resolveApiKey(value: string | undefined): string {
 	if (!value) return '';
 	const envRef = /^env:([A-Z0-9_]+)$/.exec(value);
