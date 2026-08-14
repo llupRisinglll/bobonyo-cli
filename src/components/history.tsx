@@ -32,12 +32,6 @@ import {
 	streaming,
 	thinkingElapsed,
 	turnElapsed,
-	settingsOpen,
-	commandsOpen,
-	statusOpen,
-	modelOpen,
-	agentsOpen,
-	resumeOpen,
 	titleShape,
 	workingDots,
 	formatElapsed,
@@ -47,7 +41,7 @@ import {
 	setDetailsOpen,
 	setDetailsTitle,
 	setDetailsContent,
-	detailsOpen,
+	anyModalOpen,
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
@@ -63,7 +57,10 @@ import {
 	stableSettledBlocks,
 	type SettledBlock,
 } from '../settled-block-cache';
-import {resolveScrollAcceleration} from '../scroll-acceleration';
+import {
+	disabledScroll,
+	resolveScrollAcceleration,
+} from '../scroll-acceleration';
 import {formatCount, formatDuration} from '../format';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
@@ -431,15 +428,7 @@ export function History(props: {
 	// next content append. While a modal (settings) is open the modal owns
 	// the keys, scrolling the history behind it would be a leak.
 	useKeyboard(event => {
-		if (
-			settingsOpen() ||
-			commandsOpen() ||
-			statusOpen() ||
-			modelOpen() ||
-			agentsOpen() ||
-			detailsOpen() ||
-			resumeOpen()
-		) {
+		if (anyModalOpen()) {
 			// FOOLPROOF MODAL ISOLATION: global key listeners run BEFORE the
 			// renderable handlers (the history scrollbox's native arrow-key
 			// scrolling). preventDefault stops the key from reaching the
@@ -972,16 +961,7 @@ export function History(props: {
 	};
 
 	const handleMouseDown = (event: MouseEvent) => {
-		if (
-			settingsOpen() ||
-			commandsOpen() ||
-			statusOpen() ||
-			modelOpen() ||
-			agentsOpen() ||
-			detailsOpen() ||
-			resumeOpen()
-		)
-			return;
+		if (anyModalOpen()) return;
 		const row = rowForEvent(event);
 		if (row < 0) return;
 		// A click anywhere inside a tool/thought CONTAINER toggles it (the
@@ -1053,14 +1033,7 @@ export function History(props: {
 		) {
 			cancelPendingClick();
 		}
-		if (
-			settingsOpen() ||
-			statusOpen() ||
-			modelOpen() ||
-			agentsOpen() ||
-			resumeOpen()
-		)
-			return;
+		if (anyModalOpen()) return;
 		const row = rowForEvent(event);
 		if (row < 0) return;
 		if (row !== hoverRow()) setHoverRow(row);
@@ -1155,7 +1128,13 @@ export function History(props: {
 			// Mouse-wheel speed parity with opencode: 3× by default
 			// (settings → scrollSpeed), so wheel scrolling feels as fast and
 			// smooth as the reference CLI instead of the linear 1× default.
-			scrollAcceleration={resolveScrollAcceleration()}
+			// A MODAL freezes the wheel entirely (zero multiplier) so the
+			// history never scrolls behind it.
+			scrollAcceleration={
+				anyModalOpen()
+					? disabledScroll
+					: resolveScrollAcceleration()
+			}
 			{...({
 				onMouseDown: handleMouseDown,
 				onMouseUp: handleMouseUp,

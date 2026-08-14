@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js';
+import {createMemo, createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
 import type {Mode, ResumeCwdMode, ToolProfile} from './settings';
 
@@ -359,6 +359,27 @@ export const [connectOpen, setConnectOpen] = createSignal<{
  * tier for the ACTIVE model — never the chat input row.
  */
 export const [effortOpen, setEffortOpen] = createSignal(false);
+
+/**
+ * TRUE when ANY modal surface is open (settings, commands, status, model,
+ * agents, details, resume, connect, effort, trust). Everything BEHIND the
+ * modal must be inert: the chat input box must not receive keys or paste,
+ * and the history must not scroll or hover. Pure read of the signals.
+ */
+export const anyModalOpen = createMemo(
+	() =>
+		settingsOpen() ||
+		commandsOpen() ||
+		statusOpen() ||
+		modelOpen() ||
+		agentsOpen() ||
+		detailsOpen() ||
+		resumeOpen() ||
+		Boolean(connectOpen()) ||
+		effortOpen() ||
+		Boolean(pendingTrust()),
+);
+
 /** Estimated context usage % (E7): tokens / provider context window. */
 export const [contextPercent, setContextPercent] = createSignal(0);
 /** Non-zero while the provider call is retrying (429/stall backoff). */

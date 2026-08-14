@@ -211,7 +211,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/<EffortModal/);
 		expect(app).toMatch(/onSelect=\{level => \{\n\s*applyEffort\(level\)/);
 		expect(read('./components/input-box.tsx')).toMatch(
-			/connectOpen\(\) \|\|\n\s*effortOpen\(\)/,
+			/anyModalOpen\(\)/,
 		);
 		// Effort picker owns every key while open.
 		expect(app).toMatch(/connectOpen\(\) \|\|\n\s*effortOpen\(\)/);
@@ -325,9 +325,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/activeRow\(\)\.bg/);
 		// The caret sits at the START of an empty field (rendered BEFORE the
 		// placeholder), at the END once the user types.
-		expect(modal).toMatch(/when=\{!filled\}/);
-		expect(modal).toMatch(/const caretChar = filled/);
-		expect(modal).toMatch(/shown\[shown\.length - 1\]!/);
+		expect(modal).toMatch(/when=\{!filled\(\)\}/);
+		expect(modal).toMatch(/const caretChar = createMemo/);
+		expect(modal).toMatch(/shown\(\)\[shown\(\)\.length - 1\]!/);
 		// The hint lives INSIDE the field, never below the input.
 		expect(modal).not.toMatch(/props\.description/);
 	});
@@ -880,7 +880,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// instead of OpenTUI's linear 1×. Bobonyo mirrors that via the
 		// `scrollSpeed` setting; a future change must keep the wiring.
 		const history = read('./components/history.tsx');
-		expect(history).toMatch(/scrollAcceleration=\{resolveScrollAcceleration\(\)\}/);
+		expect(history).toMatch(
+			/anyModalOpen\(\)\s*\?\s*disabledScroll\s*:\s*resolveScrollAcceleration\(\)/,
+		);
 		const accel = read('./scroll-acceleration.ts');
 		expect(accel).toMatch(/class CustomSpeedScroll/);
 		expect(accel).toMatch(/return this\.speed/);
@@ -957,7 +959,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// class).
 		expect(read('./app.tsx')).toMatch(/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/);
 		expect(read('./components/input-box.tsx')).toMatch(
-			/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/,
+			/anyModalOpen\(\)/,
 		);
 	});
 

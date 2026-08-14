@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import {createEffect, createSignal, For, on, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -217,6 +221,11 @@ export function ModelModal(props: {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [query, setQuery] = createSignal('');
+	// Paste lands in the search (the chat box is gated while this modal is
+	// open — a paste must never leak into the input behind it).
+	usePaste((event: {bytes: Uint8Array}) => {
+		setQuery(prev => prev + new TextDecoder().decode(event.bytes));
+	});
 	// Search vs list focus: single-letter shortcuts (C) are list-only so
 	// typing a query can never trip them (parity: the settings modal's Tab
 	// search/list toggle).

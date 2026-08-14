@@ -231,3 +231,54 @@ describe('connect-provider manage list navigation', () => {
 		}
 	});
 });
+
+describe('connect-provider paste handling', () => {
+	test('paste lands in the modal field (API key), never the chat box behind it', async () => {
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({
+			providers: [PROVIDER],
+		});
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					onConnect={() => {}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			// Pick the connected preset, select the existing connection, and
+			// land on the API key step (known preset → base step skipped).
+			await mockInput.typeText('deepseek');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'API key')).toBe(true);
+
+			// Typing into the wizard field is VISIBLE (PromptField reads the
+			// input accessor reactively — a plain value prop froze the
+			// display: typed keys stored but never painted).
+			await mockInput.typeText('ab');
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), '•')).toBe(true);
+			expect(frameHas(setup.captureSpans(), 'leave blank to keep')).toBe(
+				false,
+			);
+
+			// Bracketed paste inserts into the SECRET field (masked bullets),
+			// and the raw pasted key must never appear in the frame.
+			await mockInput.pasteBracketedText('sk-pasted123456');
+			await setup.flush();
+			const frame = setup.captureSpans();
+			expect(frameHas(frame, '•'.repeat(10))).toBe(true);
+			expect(frameHas(frame, 'sk-pasted123456')).toBe(false);
+			expect(frameHas(frame, 'leave blank to keep')).toBe(false);
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+});

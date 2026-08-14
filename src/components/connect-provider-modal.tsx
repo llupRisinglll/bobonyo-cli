@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -668,6 +672,14 @@ export function ConnectProviderModal(props: {
 
 	const [query, setQuery] = createSignal('');
 	const [index, setIndex] = createSignal(0);
+	// Paste lands in the CURRENT step's field: the picker search while
+	// choosing a provider, the wizard input otherwise (API keys, base URLs,
+	// model lists, names). The chat box is gated while this modal is open.
+	usePaste((event: {bytes: Uint8Array}) => {
+		const text = new TextDecoder().decode(event.bytes);
+		if (view().kind === 'pick') setQuery(prev => prev + text);
+		else setInput(prev => prev + text);
+	});
 	const [methodIndex, setMethodIndex] = createSignal(0);
 	const [input, setInput] = createSignal('');
 	const [error, setError] = createSignal('');
@@ -1324,8 +1336,8 @@ export function ConnectProviderModal(props: {
 							}
 							fallback={
 								<PromptField
-									value={input()}
-									error={error()}
+									value={input}
+									error={error}
 									secret={view().kind === 'apikey' || view().kind === 'custom-key'}
 									placeholder={promptDescription()}
 								/>
@@ -1490,8 +1502,8 @@ export function ConnectProviderModal(props: {
 }
 
 function PromptField(props: {
-	value: string;
-	error?: string;
+	value: () => string;
+	error?: () => string | undefined;
 	secret?: boolean;
 	placeholder?: string;
 }) {
@@ -1503,18 +1515,28 @@ function PromptField(props: {
 	// char, or a space on an empty/placeholder line) so the line width never
 	// shifts when it blinks.
 	const cursorVisible = () => (spinnerFrame() >> 2) % 2 === 0;
-	const shown = props.secret && props.value.length > 0
-		? '•'.repeat(Math.min(24, props.value.length))
-		: props.value;
-	const filled = shown.length > 0;
+	// REACTIVE reads: the parent passes the input SIGNAL accessor, never a
+	// plain value — the field sits inside a nested <Show fallback> that only
+	// rebuilds on view changes, so a plain `value={input()}` prop would
+	// freeze the display (typing worked but stayed invisible). Memos track
+	// the accessor and repaint every keystroke/backspace.
+	const shown = createMemo(() => {
+		const value = props.value();
+		return props.secret && value.length > 0
+			? '•'.repeat(Math.min(24, value.length))
+			: value;
+	});
+	const filled = createMemo(() => shown().length > 0);
 	// Input-box caret parity: an EMPTY field shows the blinking box at the
 	// START (before the dimmed placeholder); typing puts the caret at the
 	// END over the last char. The caret cell is always rendered so the line
 	// width never shifts while it blinks.
-	const caretChar = filled
-		? shown[shown.length - 1]!
-		: ' ';
-	const valueText = filled ? shown.slice(0, -1) : '';
+	const caretChar = createMemo(() =>
+		filled() ? shown()[shown().length - 1]! : ' ',
+	);
+	const valueText = createMemo(() =>
+		filled() ? shown().slice(0, -1) : '',
+	);
 	return (
 		<box flexDirection="column">
 			<box
@@ -1530,7 +1552,7 @@ function PromptField(props: {
 				<box flexDirection="row">
 					{/* Caret FIRST when empty (the box sits before the
 					    placeholder, like an empty chat input). */}
-					<Show when={!filled}>
+					<Show when={!filled()}>
 						<text
 							bg={cursorVisible() ? activeRow().bg : undefined}
 							fg={
@@ -1540,17 +1562,17 @@ function PromptField(props: {
 							}
 							attributes={dim()}
 						>
-							{caretChar}
+							{caretChar()}
 						</text>
 					</Show>
 					<text
-						fg={filled ? colors().text : colors().secondary}
-						attributes={filled ? undefined : dim()}
+						fg={filled() ? colors().text : colors().secondary}
+						attributes={filled() ? undefined : dim()}
 					>
-						{valueText}
-						{!filled ? (props.placeholder ?? '') : ''}
+						{valueText()}
+						{!filled() ? (props.placeholder ?? '') : ''}
 					</text>
-					<Show when={filled}>
+					<Show when={filled()}>
 						<text
 							bg={cursorVisible() ? activeRow().bg : undefined}
 							fg={
@@ -1559,15 +1581,15 @@ function PromptField(props: {
 									: colors().text
 							}
 						>
-							{caretChar}
+							{caretChar()}
 						</text>
 					</Show>
 				</box>
 			</box>
-			<Show when={props.error}>
+			<Show when={props.error?.()}>
 				<box height={1} />
 				<text fg={colors().warning} attributes={bold()}>
-					{props.error}
+					{props.error?.()}
 				</text>
 			</Show>
 			<box flexGrow={1} />

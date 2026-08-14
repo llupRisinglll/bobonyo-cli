@@ -17,6 +17,21 @@ export class CustomSpeedScroll implements ScrollAcceleration {
 }
 
 /**
+ * Zero-multiplier wheel scroll: while a MODAL is open the history behind it
+ * must not scroll on wheel (the scrollbox multiplies its delta by
+ * `tick()`, so 0 = no movement). Shared instance, stateless.
+ */
+export class DisabledScroll implements ScrollAcceleration {
+	tick(_now?: number): number {
+		return 0;
+	}
+
+	reset(): void {}
+}
+
+export const disabledScroll = new DisabledScroll();
+
+/**
  * Resolve the transcript scroll acceleration from the saved settings
  * (`scrollSpeed`, default 3 — opencode's default). Pure, unit-tested.
  */

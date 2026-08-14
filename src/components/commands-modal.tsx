@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -35,6 +39,9 @@ export function CommandsModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const activeRow = () => activeRowPalette(colors());
 	const [query, setQuery] = createSignal('');
+	usePaste((event: {bytes: Uint8Array}) => {
+		setQuery(prev => prev + new TextDecoder().decode(event.bytes));
+	});
 	// AUTO-CLOSE GUARD: modals opened by a row click receive the SAME
 	// click's mouse-UP on the backdrop, which would close them instantly.
 	// Only that opening release is ignored — a time window, NOT a one-shot

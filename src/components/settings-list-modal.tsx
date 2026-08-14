@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -83,6 +87,9 @@ export function SettingsListModal(props: {
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
 	const [query, setQuery] = createSignal('');
+	usePaste((event: {bytes: Uint8Array}) => {
+		setQuery(prev => prev + new TextDecoder().decode(event.bytes));
+	});
 	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
 	// RESPONSIVE: use as much vertical space as the terminal gives us
 	// (header 1 + search 1 + gaps 2 + footer 1 + padding 2 ≈ 7 rows of

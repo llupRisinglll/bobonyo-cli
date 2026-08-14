@@ -4,7 +4,7 @@ import {testRender} from '@opentui/solid';
 import {RGBA, type CapturedFrame, type CapturedLine} from '@opentui/core';
 import type {TestRendererSetup} from '@opentui/core/testing';
 import {InputBox} from './components/input-box';
-import {input, setInput, setSpinnerFrame} from './state';
+import {input, setInput, setModelOpen, setSpinnerFrame} from './state';
 import {colors} from './theme';
 import {activeRowPalette} from './row-highlight';
 
@@ -251,6 +251,25 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			expect(hits[0]).toMatchObject({line: 1, col: 4, width: 1});
 			expect(columnOfText(frame.lines[1]!, '/ commands')).toBe(5);
 		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test('paste is ignored while a modal is open (chat box is inert)', async () => {
+		setInput('');
+		setModelOpen(true);
+		const setup = await testRender(
+			() => <InputBox onSubmit={() => {}} />,
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			await setup.flush();
+			// Bracketed paste must NOT reach the chat input behind the modal.
+			await setup.mockInput.pasteBracketedText('sk-pasted123');
+			await setup.flush();
+			expect(input()).toBe('');
+		} finally {
+			setModelOpen(false);
 			setup.renderer.destroy();
 		}
 	});

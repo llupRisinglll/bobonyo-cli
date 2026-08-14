@@ -1,7 +1,12 @@
 import {describe, expect, test} from 'bun:test';
 import {mkdirSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {CustomSpeedScroll, resolveScrollAcceleration} from './scroll-acceleration';
+import {
+	CustomSpeedScroll,
+	DisabledScroll,
+	disabledScroll,
+	resolveScrollAcceleration,
+} from './scroll-acceleration';
 
 describe('CustomSpeedScroll (opencode scroll-speed parity)', () => {
 	test('tick returns the configured multiplier', () => {
@@ -14,6 +19,18 @@ describe('CustomSpeedScroll (opencode scroll-speed parity)', () => {
 		const scroll = new CustomSpeedScroll(3);
 		expect(() => scroll.reset()).not.toThrow();
 		expect(scroll.tick()).toBe(3);
+	});
+});
+
+describe('DisabledScroll (modal-open wheel freeze)', () => {
+	test('tick returns 0 so the scrollbox multiplies its delta away', () => {
+		expect(new DisabledScroll().tick()).toBe(0);
+		expect(disabledScroll.tick(Date.now())).toBe(0);
+	});
+
+	test('reset is a no-op', () => {
+		expect(() => disabledScroll.reset()).not.toThrow();
+		expect(disabledScroll.tick()).toBe(0);
 	});
 });
 

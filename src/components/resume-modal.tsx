@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -126,6 +130,9 @@ export function ResumeModal(props: {
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
 	const [query, setQuery] = createSignal('');
+	usePaste((event: {bytes: Uint8Array}) => {
+		setQuery(prev => prev + new TextDecoder().decode(event.bytes));
+	});
 	// Ctrl+A toggles between the CURRENT FOLDER's conversations (default)
 	// and ALL saved conversations.
 	const [showAll, setShowAll] = createSignal(false);

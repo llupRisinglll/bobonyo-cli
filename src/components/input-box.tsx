@@ -15,6 +15,7 @@ import {estimateTokens} from '../tokenize';
 import {wrapText, wrapTextDetailed} from '../text-wrap';
 import {
 	activeEndpoint,
+	anyModalOpen,
 	busy,
 	cancelling,
 	completionMessage,
@@ -35,15 +36,6 @@ import {
 	setWorkingTipVisible,
 	setPendingQueue,
 	setExitConfirm,
-	settingsOpen,
-	commandsOpen,
-	statusOpen,
-	modelOpen,
-	agentsOpen,
-	detailsOpen,
-	resumeOpen,
-	connectOpen,
-	effortOpen,
 	sessionId,
 	spinnerFrame,
 	SPINNER_FRAMES,
@@ -209,6 +201,9 @@ export function InputBox(props: {
 	// Terminal paste: image paths → `[Image #N]`, long text → `[Text #N]`
 	// (parity: nanocoder attachments; the tokens keep the input compact).
 	usePaste((event: {bytes: Uint8Array}) => {
+		// A modal owns the screen while open — paste must land in the
+		// modal's field, never leak into the chat box behind it.
+		if (anyModalOpen()) return;
 		const text = new TextDecoder().decode(event.bytes);
 		const {text: compact, attachments} = processPaste(
 			text,
@@ -495,20 +490,10 @@ export function InputBox(props: {
 			}
 			return;
 		}
-		// GAP-19: the settings/status MODALS own the keys while open (but a
-		// value editor wizard opened FROM the panel must still receive
-		// keystrokes, so prompts/approvals are handled above this gate).
-		if (
-			settingsOpen() ||
-			commandsOpen() ||
-			statusOpen() ||
-			modelOpen() ||
-			agentsOpen() ||
-			detailsOpen() ||
-			resumeOpen() ||
-			connectOpen() ||
-			effortOpen()
-		) {
+		// GAP-19: the MODALS own the keys while open (but a value editor
+		// wizard opened FROM the panel must still receive keystrokes, so
+		// prompts/approvals are handled above this gate).
+		if (anyModalOpen()) {
 			event.preventDefault();
 			return;
 		}
