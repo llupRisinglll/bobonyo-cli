@@ -184,7 +184,7 @@ export function formatMonthlyUsage(
  * until the provider reports cache fields.
  */
 export function formatCacheRate(
-	usage: MonthlyUsage | undefined,
+	usage: {cacheHitTokens?: number; cacheMissTokens?: number} | undefined,
 ): string | undefined {
 	if (!usage) return undefined;
 	const hit = usage.cacheHitTokens ?? 0;
@@ -193,6 +193,31 @@ export function formatCacheRate(
 	if (total <= 0) return undefined;
 	const missPct = Math.round((miss / total) * 100);
 	return `${formatTokens(hit)}/${formatTokens(total)} (${missPct}% miss)`;
+}
+
+/**
+ * Cumulative cache stats across a SESSION's usage snapshots (`usageHistory`).
+ *
+ * The status line's `cache` segment is session-scoped on purpose: `/clear`
+ * empties the history, so a fresh conversation starts WITHOUT the previous
+ * conversation's cache numbers (the MONTHLY ledger keeps accumulating for
+ * `/usage` and cost tracking, but it must not masquerade as the current
+ * conversation's rate). Pure, unit-tested.
+ */
+export function sessionCacheUsage(
+	history: Array<{
+		promptCacheHitTokens?: number;
+		promptCacheMissTokens?: number;
+	}>,
+): {cacheHitTokens: number; cacheMissTokens: number} | undefined {
+	let hit = 0;
+	let miss = 0;
+	for (const snapshot of history) {
+		hit += snapshot.promptCacheHitTokens ?? 0;
+		miss += snapshot.promptCacheMissTokens ?? 0;
+	}
+	if (hit + miss <= 0) return undefined;
+	return {cacheHitTokens: hit, cacheMissTokens: miss};
 }
 
 function toFinite(value: unknown): number | undefined {

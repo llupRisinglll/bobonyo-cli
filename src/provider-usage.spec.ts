@@ -11,6 +11,7 @@ import {
 	loadProviderUsage,
 	monthKey,
 	recordProviderUsage,
+	sessionCacheUsage,
 } from './provider-usage';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
@@ -184,6 +185,33 @@ describe('formatCacheRate (DeepSeek status-line cost driver)', () => {
 		expect(formatCacheRate(usage())).toBeUndefined();
 		expect(
 			formatCacheRate(usage({cacheHitTokens: 0, cacheMissTokens: 0})),
+		).toBeUndefined();
+	});
+});
+
+describe('sessionCacheUsage (status-line cache resets with /clear)', () => {
+	test('sums the session snapshots into a formatCacheRate-compatible shape', () => {
+		const stats = sessionCacheUsage([
+			{promptCacheHitTokens: 700, promptCacheMissTokens: 300},
+			{promptCacheHitTokens: 650_000, promptCacheMissTokens: 150_000},
+		]);
+		expect(stats).toEqual({
+			cacheHitTokens: 650_700,
+			cacheMissTokens: 150_300,
+		});
+		expect(formatCacheRate(stats)).toBe('650.7K/801K (19% miss)');
+	});
+
+	test('an empty session (after /clear) shows nothing', () => {
+		expect(sessionCacheUsage([])).toBeUndefined();
+	});
+
+	test('snapshots without cache fields contribute nothing', () => {
+		expect(
+			sessionCacheUsage([
+				{},
+				{promptCacheHitTokens: 0, promptCacheMissTokens: 0},
+			]),
 		).toBeUndefined();
 	});
 });

@@ -8,13 +8,19 @@ import {
 	mode,
 	providerUsage,
 	toolProfile,
+	usageHistory,
 } from '../state';
 import {bgTasks} from '../bash';
 import {createTextAttributes} from '@opentui/core';
 import {resolveProfile} from '../tools';
 import {colors} from '../theme';
 import {statusPathLabel} from '../status-path';
-import {formatCacheRate, formatMonthlyUsage, formatTokens} from '../provider-usage';
+import {
+	formatCacheRate,
+	formatMonthlyUsage,
+	formatTokens,
+	sessionCacheUsage,
+} from '../provider-usage';
 import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
 
 /**
@@ -58,13 +64,14 @@ export function Status() {
 	};
 	// `· cache 100K/1.5M (10% miss)` for ANY provider that reports cache
 	// fields (DeepSeek's explicit hit/miss split, OpenAI-style
-	// `cached_tokens`, Anthropic's `cache_read_input_tokens`). The balance
-	// only refreshes every 5 minutes, but the per-turn usage block always
-	// updates — the monthly ledger accumulates it so the status line shows
-	// the REAL cost driver live, regardless of provider. Two-tone like
+	// `cached_tokens`, Anthropic's `cache_read_input_tokens`). The value is
+	// SESSION-scoped (usageHistory): `/clear` empties it, so a fresh
+	// conversation never shows the previous conversation's cache numbers —
+	// the monthly ledger stays for `/usage` cost tracking. Two-tone like
 	// `Cred:`.
+	const sessionCacheStats = () => sessionCacheUsage(usageHistory());
 	const cacheRateSegment = () => {
-		const label = formatCacheRate(providerUsage());
+		const label = formatCacheRate(sessionCacheStats());
 		return label ? ` · cache ${label}` : '';
 	};
 	// `used N.NM` (Xiaomi MiMo token plan): the quota endpoint is browser-
@@ -118,11 +125,11 @@ export function Status() {
 					{deepSeekBalance()!.total.toFixed(2)}
 				</text>
 			</Show>
-			<Show when={formatCacheRate(providerUsage())}>
+			<Show when={formatCacheRate(sessionCacheStats())}>
 				<text fg={colors().secondary}> · cache</text>
 				<text fg={colors().primary}>
 					{' '}
-					{formatCacheRate(providerUsage())}
+					{formatCacheRate(sessionCacheStats())}
 				</text>
 			</Show>
 			<Show when={isXiaomiMiMo(activeEndpoint()) && formatMonthlyUsage(providerUsage())}>

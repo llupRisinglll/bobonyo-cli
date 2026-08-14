@@ -402,15 +402,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('the DeepSeek status line surfaces the live cache rate, not just balance', () => {
 		// The balance refreshes every 5 minutes, so a long task looks free
 		// until it is not. The per-turn usage block reports cache hit/miss
-		// tokens; the ledger must accumulate them and the status line must
-		// render the cumulative rate (`100K/1.5M (10% miss)`) every turn.
+		// tokens; the status line must render the cumulative rate
+		// (`100K/1.5M (10% miss)`) every turn. The aggregate is
+		// SESSION-scoped (usageHistory): `/clear` empties it, so a fresh
+		// conversation never shows the previous conversation's cache numbers
+		// — the monthly ledger stays for `/usage` cost tracking.
 		const usage = read('./provider-usage.ts');
 		expect(usage).toMatch(/export function formatCacheRate/);
 		expect(usage).toMatch(/export function extractCacheTokens/);
+		expect(usage).toMatch(/export function sessionCacheUsage/);
 		expect(usage).toMatch(/cacheHitTokens:/);
 		expect(usage).toMatch(/cacheMissTokens:/);
 		const status = read('./components/status.tsx');
-		expect(status).toMatch(/formatCacheRate\(providerUsage\(\)\)/);
+		expect(status).toMatch(/formatCacheRate\(sessionCacheStats\(\)\)/);
+		expect(status).toMatch(/sessionCacheUsage\(usageHistory\(\)\)/);
 		expect(status).toMatch(/· cache/);
 		// Provider-agnostic: the cache rate must render for ANY provider that
 		// reports cache fields, never gated on DeepSeek.
