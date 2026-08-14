@@ -8,10 +8,12 @@ import {
 	deepseekProvider,
 	editPlaceholder,
 	filterConnectPicker,
+	knownPresetFor,
 	maskSecret,
 	openAICompatibleProvider,
 	presetConnectionCount,
 	presetConnections,
+	providerFetchesModels,
 	providerColumns,
 	PROVIDER_PRESETS,
 	xiaomiProvider,
@@ -310,6 +312,69 @@ describe('editPlaceholder (blank = keep old value, edit flow)', () => {
 	test('no provider means no edit hint (fresh custom connect)', () => {
 		expect(editPlaceholder('custom-name', undefined)).toBeUndefined();
 		expect(editPlaceholder('custom-key', undefined)).toBeUndefined();
+	});
+});
+
+describe('knownPresetFor (skip the base-URL step in the edit flow)', () => {
+	test('matches by the preset id, including (n) suffixes', () => {
+		expect(knownPresetFor({id: 'deepseek', baseUrl: 'x'})?.id).toBe(
+			'deepseek',
+		);
+		expect(knownPresetFor({id: 'opencode-go (2)', baseUrl: 'x'})?.id).toBe(
+			'opencode-go',
+		);
+	});
+
+	test('matches by the normalized endpoint (opencode-go /v1 variants)', () => {
+		const go = knownPresetFor({
+			id: 'my-deepseek-alias',
+			baseUrl: 'https://opencode.ai/zen/go/v1',
+		});
+		expect(go?.id).toBe('opencode-go');
+		expect(
+			knownPresetFor({id: 'x', baseUrl: 'https://api.deepseek.com/'})
+				?.id,
+		).toBe('deepseek');
+	});
+
+	test('custom / unmatched endpoints are NOT known presets', () => {
+		expect(
+			knownPresetFor({
+				id: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+			}),
+		).toBeUndefined();
+		expect(
+			knownPresetFor({
+				id: 'custom (2)',
+				baseUrl: 'https://my-gateway.example/v1',
+			}),
+		).toBeUndefined();
+	});
+});
+
+describe('providerFetchesModels (skip the models step in the edit flow)', () => {
+	test('explicit modelDiscoveryUrl means the catalog is fetched', () => {
+		expect(
+			providerFetchesModels({
+				baseUrl: 'https://api.deepseek.com',
+				modelDiscoveryUrl: 'https://api.deepseek.com/models',
+			}),
+		).toBe(true);
+	});
+
+	test('Xiaomi token-plan hosts auto-discover (config normalize adds it)', () => {
+		expect(
+			providerFetchesModels({
+				baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+			}),
+		).toBe(true);
+	});
+
+	test('no discovery URL means the models step is asked', () => {
+		expect(
+			providerFetchesModels({baseUrl: 'https://my-gateway.example/v1'}),
+		).toBe(false);
 	});
 });
 

@@ -570,6 +570,45 @@ export function editPlaceholder(
 	}
 }
 
+/**
+ * The known preset an existing provider is an instance of — matched by the
+ * default id (+ its `(n)` suffixes) or by the normalized endpoint (same
+ * rules as presetConnections). A known preset's endpoint is ALREADY known,
+ * so the edit flow never asks for the base URL again; only providers with
+ * their own endpoint (Custom / a modified base) go through the base step.
+ * Pure, unit-tested.
+ */
+export function knownPresetFor(provider: {
+	id: string;
+	baseUrl: string;
+}): ProviderPreset | undefined {
+	const normalize = (url: string): string =>
+		url.replace(/\/+$/, '').replace(/\/v1$/, '');
+	const id = provider.id.toLowerCase();
+	const base = normalize(provider.baseUrl);
+	return PROVIDER_PRESETS.find(preset => {
+		if (preset.id === 'custom') return false;
+		if (id === preset.id || id.startsWith(`${preset.id} (`)) return true;
+		return normalize(preset.baseUrl) === base;
+	});
+}
+
+/**
+ * Whether a provider's model catalog is auto-fetched: an explicit
+ * `modelDiscoveryUrl`, or a Xiaomi token-plan host (config normalize
+ * auto-adds `/models` discovery for those). Fetch-capable providers skip
+ * the models step in the edit flow — the catalog refreshes itself, asking
+ * for a static list would be pointless. Pure, unit-tested.
+ */
+export function providerFetchesModels(provider: {
+	baseUrl: string;
+	modelDiscoveryUrl?: string;
+}): boolean {
+	if (provider.modelDiscoveryUrl) return true;
+	const base = provider.baseUrl.toLowerCase();
+	return base.includes('xiaomimimo.com') && base.includes('token-plan');
+}
+
 export function ConnectProviderModal(props: {
 	provider?: string;
 	editId?: string;
@@ -588,10 +627,31 @@ export function ConnectProviderModal(props: {
 
 	const initialView = (): View[] => {
 		if (props.provider && props.provider !== 'custom') {
-			return [{kind: 'apikey'}, {kind: 'pick'}];
+			// Stack = [pick (back target), current]: the /codex and /custom
+			// commands open DIRECTLY at their step; Esc goes back to the
+			// picker. The old order [current, pick] opened at the picker and
+			// hid the form behind Esc.
+			return [{kind: 'pick'}, {kind: 'apikey'}];
 		}
 		if (props.provider === 'custom' || props.editId) {
-			return [{kind: 'custom-base'}, {kind: 'pick'}];
+			const edit = props.editId
+				? listProviders().find(
+						provider =>
+							provider.id.toLowerCase() ===
+							props.editId!.toLowerCase(),
+					)
+				: undefined;
+			// A known preset endpoint is NOT re-asked in the edit flow
+			// (custom providers still go through the base step).
+			return [
+				{kind: 'pick'},
+				{
+					kind:
+						edit && knownPresetFor(edit)
+							? 'custom-key'
+							: 'custom-base',
+				},
+			];
 		}
 		return [{kind: 'pick'}];
 	};
@@ -782,9 +842,17 @@ export function ConnectProviderModal(props: {
 			startNewConnection();
 			return;
 		}
-		// Edit the existing connection through the prefilled custom flow.
+		// Edit the existing connection through the custom flow, skipping the
+		// base-URL step when the endpoint is a KNOWN preset (only Custom /
+		// modified endpoints are asked again).
 		setEditTargetId(selected.id);
-		push({kind: 'custom-base'});
+		const provider = editProvider();
+		push({
+			kind:
+				provider && knownPresetFor(provider)
+					? 'custom-key'
+					: 'custom-base',
+		});
 	};
 
 	const submitApiKey = (): void => {
@@ -837,7 +905,15 @@ export function ConnectProviderModal(props: {
 			}
 			case 'custom-key': {
 				setCustomKey(input().trim());
-				push({kind: 'custom-models'});
+				const edit = editProvider();
+				// Fetch-capable providers skip the models step — discovery
+				// refreshes the catalog, a static list is pointless.
+				push({
+					kind:
+						edit && providerFetchesModels(edit)
+							? 'custom-name'
+							: 'custom-models',
+				});
 				return;
 			}
 			case 'custom-models': {
@@ -855,7 +931,9 @@ export function ConnectProviderModal(props: {
 					(editProvider()?.id || defaultProviderName('custom'));
 				const provider = customProvider({
 					id,
-					baseUrl: customBase(),
+					// A skipped base step (known preset) keeps the existing
+					// endpoint instead of failing on the empty staged value.
+					baseUrl: customBase() || editProvider()?.baseUrl || '',
 					apiKey:
 						customKey() ||
 						(editProvider()?.apiKeyResolved

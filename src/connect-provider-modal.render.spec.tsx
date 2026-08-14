@@ -21,6 +21,8 @@ const PROVIDER = {
 	baseUrl: 'https://api.deepseek.com',
 	apiKey: 'sk-abc123456789wxyz',
 	models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+	// Known presets carry discovery: the edit flow must NOT ask for models.
+	modelDiscoveryUrl: 'https://api.deepseek.com/models',
 };
 
 function frameHas(frame: CapturedFrame, needle: string): boolean {
@@ -32,8 +34,8 @@ function frameHas(frame: CapturedFrame, needle: string): boolean {
 	return false;
 }
 
-describe('connect-provider edit flow (blank = keep, placeholder shows old value)', () => {
-	test('selecting an existing connection shows leave-blank-to-keep placeholders and a masked key, then submits the unchanged values', async () => {
+describe('connect-provider edit flow (blank = keep, adaptive steps)', () => {
+	test('a KNOWN preset with discovery skips BOTH the base-URL and models steps', async () => {
 		process.env.BOBONYO_PROVIDERS = JSON.stringify({
 			providers: [PROVIDER],
 		});
@@ -62,41 +64,30 @@ describe('connect-provider edit flow (blank = keep, placeholder shows old value)
 			await setup.flush();
 			expect(frameHas(setup.captureSpans(), 'connections')).toBe(true);
 
-			// Select the existing connection → the edit form starts.
+			// Select the existing connection → the edit form starts at the
+			// API KEY step (the endpoint is a known preset, so the base-URL
+			// step is skipped entirely).
 			mockInput.pressEnter();
 			await setup.flush();
-
-			// custom-base: input BLANK, placeholder carries the old value.
 			let frame = setup.captureSpans();
-			expect(
-				frameHas(frame, 'leave blank to keep https://api.deepseek.com'),
-			).toBe(true);
-
-			// custom-key: blank input, MASKED key placeholder, raw key
-			// must never appear anywhere in the frame.
-			mockInput.pressEnter();
-			await setup.flush();
-			frame = setup.captureSpans();
+			expect(frameHas(frame, 'Base URL')).toBe(false);
+			// custom-key: blank input, MASKED key placeholder, raw key must
+			// never appear anywhere in the frame.
 			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(
 				true,
 			);
 			expect(frameHas(frame, PROVIDER.apiKey)).toBe(false);
 
-			// custom-models: blank input, old models as the placeholder.
+			// Discovery fetches the catalog, so the models step is skipped:
+			// Enter goes STRAIGHT to the provider name.
 			mockInput.pressEnter();
 			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'Models (comma-separated, optional)')).toBe(
+				false,
+			);
 			expect(
-				frameHas(
-					setup.captureSpans(),
-					'leave blank to keep deepseek-v4-flash, deepseek-v4-pro',
-				),
-			).toBe(true);
-
-			// custom-name: blank input, old name as the placeholder.
-			mockInput.pressEnter();
-			await setup.flush();
-			expect(
-				frameHas(setup.captureSpans(), 'leave blank to keep deepseek'),
+				frameHas(frame, 'leave blank to keep deepseek'),
 			).toBe(true);
 
 			// Submit with every field still blank: the connection is saved
@@ -108,6 +99,71 @@ describe('connect-provider edit flow (blank = keep, placeholder shows old value)
 				models: PROVIDER.models,
 			});
 			expect(closed).toBe(0);
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+
+	test('a CUSTOM provider still goes through base-URL → key → models → name', async () => {
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({
+			providers: [
+				{
+					...PROVIDER,
+					id: 'my-gateway',
+					name: 'my-gateway',
+					baseUrl: 'https://my-gateway.example/v1',
+					modelDiscoveryUrl: undefined,
+				},
+			],
+		});
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					editId="my-gateway"
+					onConnect={() => {}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await setup.flush();
+
+			// Unmatched endpoint → the base-URL step is asked first.
+			let frame = setup.captureSpans();
+			expect(
+				frameHas(
+					frame,
+					'leave blank to keep https://my-gateway.example',
+				),
+			).toBe(true);
+
+			mockInput.pressEnter();
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(
+				true,
+			);
+
+			// No discovery → the models step IS asked.
+			mockInput.pressEnter();
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(
+				frameHas(
+					frame,
+					'leave blank to keep deepseek-v4-flash, deepseek-v4-pro',
+				),
+			).toBe(true);
+
+			mockInput.pressEnter();
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'leave blank to keep my-gateway')).toBe(
+				true,
+			);
 		} finally {
 			delete process.env.BOBONYO_PROVIDERS;
 			setup.renderer.destroy();
