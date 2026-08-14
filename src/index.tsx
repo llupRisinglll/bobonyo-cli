@@ -106,19 +106,15 @@ const renderer = await createCliRenderer({
 	targetFps: 60,
 	exitOnCtrlC: false,
 	useMouse: true,
-	// Kitty keyboard with ONLY the DISAMBIGUATE flag: the terminal then
-	// encodes MODIFIED keys (Shift+Enter → `ESC[13;2u`) distinctly, so
-	// multiline input works on the PHYSICAL keyboard in herdr, while
-	// unmodified keys (Backspace stays DEL 0x7f) are untouched. The FULL
-	// kitty protocol (alternateKeys, the old default) is what broke the
-	// physical Backspace key inside herdr — that flag stays off.
-	useKittyKeyboard: {
-		disambiguate: true,
-		alternateKeys: false,
-		events: false,
-		allKeysAsEscapes: false,
-		reportText: false,
-	} as never,
+	// herdr conflict: the kitty keyboard protocol breaks the PHYSICAL
+	// Backspace key inside herdr (openopcode/this rewrite both hit it; the
+	// Ink-based nanocoder doesn't enable kitty). Legacy key parsing forwards
+	// backspace as DEL (0x7f), which herdr delivers correctly. Shift+Enter
+	// is handled by the input box (isMultilineInsert), which accepts the
+	// shifted-linefeed encoding herdr sends — no kitty protocol needed.
+	// NOTE: must be `false`, not `null`, OpenTUI resolves
+	// `options.useKittyKeyboard ?? true`, so null still enables kitty mode.
+	useKittyKeyboard: false as unknown as null,
 	...(process.env.NANOCODER_KEYLOG
 		? {
 				// Log the RAW bytes BEFORE OpenTUI parses them, this shows
