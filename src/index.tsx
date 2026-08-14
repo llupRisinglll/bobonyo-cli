@@ -129,6 +129,14 @@ const renderer = await createCliRenderer({
 		: {}),
 });
 
+// modifyOtherKeys LEVEL 1 (DECSET 27): the terminal encodes ONLY modified
+// keys distinctly — physical Shift+Enter arrives as `ESC[27;2;13~` instead
+// of a plain CR, so multiline input works in herdr. Unmodified keys (Enter,
+// Backspace, Ctrl+C) stay raw bytes, so NOTHING else changes. This is the
+// safe alternative to the kitty keyboard protocol, which broke the physical
+// Backspace key inside herdr.
+process.stdout.write('\x1b[?27h');
+
 // Preview mode: spawn the keyword mock provider and clean it up on exit.
 if (PREVIEW_TUI) {
 	const {spawn} = await import('node:child_process');
@@ -164,7 +172,7 @@ renderer.once('destroy', () => {
 	// after exit (parity: nanocoder restores the terminal on quit).
 	try {
 		process.stdout.write(
-			'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
+			'\x1b[?27l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
 		);
 	} catch {
 		// stdout may already be gone
