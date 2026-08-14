@@ -1269,7 +1269,7 @@ export function ConnectProviderModal(props: {
 									>
 										<MethodList
 											methods={selectedPreset().authMethods ?? []}
-											index={methodIndex()}
+											index={methodIndex}
 											onMove={setMethodIndex}
 											onSelect={chosen => {
 												if (chosen === 0) push({kind: 'chatgpt'});
@@ -1285,7 +1285,7 @@ export function ConnectProviderModal(props: {
 								<ManageList
 									presetTitle={managePreset().title}
 									rows={manageRows()}
-									index={manageIndex()}
+									index={manageIndex}
 									onMove={setManageIndex}
 									onSelect={activateManage}
 								/>
@@ -1502,7 +1502,7 @@ function PromptField(props: {
 
 function MethodList(props: {
 	methods: Array<{id: 'account' | 'api'; label: string; detail: string}>;
-	index: number;
+	index: () => number;
 	onMove: (next: number) => void;
 	onSelect: (index: number) => void;
 }) {
@@ -1512,32 +1512,35 @@ function MethodList(props: {
 	return (
 		<box flexDirection="column">
 			<For each={props.methods}>
-				{(method, i) => {
-					const active = i() === props.index;
-					return (
-						<box
-							flexDirection="row"
-							height={1}
-							backgroundColor={active ? activeRow().bg : undefined}
-							{...({
-								onMouseMove: () => props.onMove(i()),
-								onMouseUp: () => props.onSelect(i()),
-							} as any)}
+				{(method, i) => (
+					<box
+						flexDirection="row"
+						height={1}
+						backgroundColor={
+							i() === props.index() ? activeRow().bg : undefined
+						}
+						{...({
+							onMouseMove: () => props.onMove(i()),
+							onMouseUp: () => props.onSelect(i()),
+						} as any)}
+					>
+						<text
+							fg={
+								i() === props.index()
+									? activeRow().fg
+									: colors().text
+							}
+							attributes={bold()}
 						>
-							<text
-								fg={active ? activeRow().fg : colors().text}
-								attributes={bold()}
-							>
-								{active ? '❯ ' : '  '}
-								{method.label}
-							</text>
-							<box flexGrow={1} />
-							<text fg={colors().secondary} attributes={dim()}>
-								{method.detail}
-							</text>
-						</box>
-					);
-				}}
+							{i() === props.index() ? '❯ ' : '  '}
+							{method.label}
+						</text>
+						<box flexGrow={1} />
+						<text fg={colors().secondary} attributes={dim()}>
+							{method.detail}
+						</text>
+					</box>
+				)}
 			</For>
 			<box flexGrow={1} />
 			<text fg={colors().secondary} attributes={dim()}>
@@ -1550,7 +1553,7 @@ function MethodList(props: {
 function ManageList(props: {
 	presetTitle: string;
 	rows: Array<{id: string; baseUrl: string} | null>;
-	index: number;
+	index: () => number;
 	onMove: (next: number) => void;
 	onSelect: (index: number) => void;
 }) {
@@ -1560,34 +1563,37 @@ function ManageList(props: {
 	return (
 		<box flexDirection="column">
 			<For each={props.rows}>
-				{(row, i) => {
-					const active = i() === props.index;
-					return (
-						<box
-							flexDirection="row"
-							height={1}
-							backgroundColor={active ? activeRow().bg : undefined}
-							{...({
-								onMouseMove: () => props.onMove(i()),
-								onMouseUp: () => props.onSelect(i()),
-							} as any)}
+				{(row, i) => (
+					<box
+						flexDirection="row"
+						height={1}
+						backgroundColor={
+							i() === props.index() ? activeRow().bg : undefined
+						}
+						{...({
+							onMouseMove: () => props.onMove(i()),
+							onMouseUp: () => props.onSelect(i()),
+						} as any)}
+					>
+						<text
+							fg={
+								i() === props.index()
+									? activeRow().fg
+									: colors().text
+							}
+							attributes={bold()}
 						>
-							<text
-								fg={active ? activeRow().fg : colors().text}
-								attributes={bold()}
-							>
-								{active ? '❯ ' : '  '}
-								{row
-									? row.id
-									: `Connect a new ${props.presetTitle}`}
-							</text>
-							<box flexGrow={1} />
-							<text fg={colors().secondary} attributes={dim()}>
-								{row ? `${row.baseUrl} · edit` : ''}
-							</text>
-						</box>
-					);
-				}}
+							{i() === props.index() ? '❯ ' : '  '}
+							{row
+								? row.id
+								: `Connect a new ${props.presetTitle}`}
+						</text>
+						<box flexGrow={1} />
+						<text fg={colors().secondary} attributes={dim()}>
+							{row ? `${row.baseUrl} · edit` : ''}
+						</text>
+					</box>
+				)}
 			</For>
 			<box flexGrow={1} />
 			<text fg={colors().secondary} attributes={dim()}>

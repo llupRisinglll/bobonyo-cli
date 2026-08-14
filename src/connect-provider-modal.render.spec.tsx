@@ -114,3 +114,64 @@ describe('connect-provider edit flow (blank = keep, placeholder shows old value)
 		}
 	});
 });
+
+describe('connect-provider manage list navigation', () => {
+	test('arrow keys move the selection to "Connect a new" and Enter starts the NEW-connection flow', async () => {
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({
+			providers: [PROVIDER],
+		});
+		let closed = 0;
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					onConnect={() => {}}
+					onClose={() => {
+						closed += 1;
+					}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await mockInput.typeText('deepseek');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+
+			// Initially the existing connection is selected.
+			let frame = setup.captureSpans();
+			expect(frameHas(frame, '❯ deepseek')).toBe(true);
+			expect(frameHas(frame, '❯ Connect a new DeepSeek')).toBe(false);
+
+			// Down moves onto "Connect a new DeepSeek" (this froze before:
+			// the active-row check was a non-reactive value captured at
+			// render, so arrow keys never moved the list).
+			mockInput.pressArrow('down');
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, '❯ Connect a new DeepSeek')).toBe(true);
+			expect(frameHas(frame, '❯ deepseek')).toBe(false);
+
+			// Up moves back to the existing connection.
+			mockInput.pressArrow('up');
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, '❯ deepseek')).toBe(true);
+
+			// Down again and Enter = a NEW connection: the preset API-key
+			// step shows the fresh hint (NOT the edit placeholder).
+			mockInput.pressArrow('down');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'sk-... or env:VAR')).toBe(true);
+			expect(frameHas(frame, 'leave blank to keep')).toBe(false);
+			expect(closed).toBe(0);
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+});
