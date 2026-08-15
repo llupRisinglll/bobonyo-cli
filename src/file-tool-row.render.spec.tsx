@@ -131,10 +131,12 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(remove).not.toMatch(/-b\b/);
 	});
 
-	test("ADDED lines keep the code's own indentation (tabs), never flush", async () => {
-		// The reported bug: editing tab-indented code, the ADD rows lost
-		// their leading tabs (the sigil regex swallowed them), so they
-		// rendered flush at the gutter while context rows kept theirs.
+	test("ADDED lines keep the code's indentation (tabs expanded, never flush)", async () => {
+		// Two bugs: (1) the sigil regex swallowed leading indentation →
+		// flush adds; (2) literal `\t` chunks break the NATIVE layout (a
+		// blank row after every tab-indented diff line, seen in herdr but
+		// invisible to the test renderer). Tabs must expand to spaces so
+		// the indentation is preserved AND no raw tab reaches the paint.
 		const oldStr = [
 			"\t\tconst display = read('./tool-display.ts');",
 			'\t\texpect(display).toMatch(/replacementBaseLine\\(tool\\.output\\)/);',
@@ -152,10 +154,13 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		// anchor lines are stripped).
 		const add1 = textOf(frame, 3);
 		const add2 = textOf(frame, 4);
-		// Both added lines render with the SAME leading indentation (the
-		// test renderer expands tabs, so compare COLUMNS) — past the gutter.
+		// Both added lines render with the SAME leading indentation —
+		// past the gutter, never flush.
 		expect(colOf(add1, '// INDENTATION')).toBeGreaterThan(9);
 		expect(colOf(add2, 'expect(display)')).toBe(colOf(add1, '// INDENTATION'));
+		// No raw tab may reach the painted row (native layout breaks on it).
+		expect(add1).not.toContain('\t');
+		expect(add2).not.toContain('\t');
 	});
 
 	test('a blank line added mid-edit renders ONE row, never a phantom extra', async () => {

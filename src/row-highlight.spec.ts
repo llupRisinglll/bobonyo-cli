@@ -280,12 +280,15 @@ describe('tokenizeFileDiff', () => {
 		).toBeGreaterThanOrEqual(0.35);
 	});
 
-	test("ADD rows keep the code's own leading tabs (never swallowed by the sigil)", () => {
-		// The reported bug: editing tab-indented code, the ADD rows lost
-		// their leading tabs (the greedy `[-+]\s+` ate them), so they
-		// rendered flush at the gutter while context rows kept theirs. The
-		// sigil must take EXACTLY one separator space and `text` must keep
-		// the code's indentation intact through the chunk stream.
+	test("ADD rows keep the code's indentation (tabs EXPANDED to spaces)", () => {
+		// Two reported bugs here. (1) The greedy `[-+]\s+` sigil regex
+		// swallowed the code's leading indentation → added lines rendered
+		// flush at the gutter; the sigil takes EXACTLY one separator. (2)
+		// Literal `\t` chunks break the NATIVE OpenTUI layout — every
+		// tab-indented diff line renders a blank row after it in a real
+		// terminal (herdr), invisible to the test renderer. Tabs must be
+		// EXPANDED to spaces (2 per tab) so the indentation is preserved
+		// and the rows stay contiguous.
 		const tabDiff = [
 			'✦ Edit src/foo.ts',
 			' ⎿ 3 lines → 5 lines',
@@ -296,16 +299,19 @@ describe('tokenizeFileDiff', () => {
 		].join('\n');
 		const chunks = tokenizeFileDiff(tabDiff, 'src/foo.ts', 'done', THEME, 80);
 		const lines = perLine(chunks);
-		// The ADD rows' code text starts with the SAME `\t\t` as the context
-		// row — `+ \t\t//`, never `+ //`.
+		// The ADD rows' code text starts with the SAME indentation as the
+		// context row — `+     //`, never `+ //` (flush) and never a raw
+		// `\t` (which would break the native layout).
 		const add1 = lines[3] ?? [];
-		expect(join(add1)).toMatch(/^ {5}3 \+ \t\t\/\/ INDENTATION/);
+		expect(join(add1)).toMatch(/^ {5}3 \+ {5}\/\/ INDENTATION/);
 		const add2 = lines[4] ?? [];
-		expect(join(add2)).toMatch(/^ {5}4 \+ \t\texpect\(display\)/);
-		// The tabs survive as whitespace chunks (the syntax highlighter
-		// splits leading whitespace from the code) — never dropped.
-		expect(add1.some(c => c.text.includes('\t'))).toBe(true);
-		expect(add2.some(c => c.text.includes('\t'))).toBe(true);
+		expect(join(add2)).toMatch(/^ {5}4 \+ {5}expect\(display\)/);
+		// No literal tab survives in ANY chunk of the diff.
+		expect(add1.some(c => c.text.includes('\t'))).toBe(false);
+		expect(add2.some(c => c.text.includes('\t'))).toBe(false);
+		// And no chunk anywhere in the tokenized diff carries a tab.
+		const allText = chunks.map(c => c.text).join('');
+		expect(allText).not.toContain('\t');
 	});
 });
 

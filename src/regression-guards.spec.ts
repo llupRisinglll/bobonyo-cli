@@ -935,9 +935,25 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const highlight = read('./row-highlight.ts');
 		expect(highlight).toMatch(/\$\{row\.sigil \?\? ''\} `/);
 		// The change-row parse regex takes EXACTLY ONE space after the sigil
-		// (`([-+]) (.*)`), so the code's leading tabs survive into `text` —
-		// a greedy `\s+` would swallow them and render added lines flush.
+		// (`([-+]) (.*)`), so the code's leading indentation survives into
+		// `text` — a greedy `\s+` would swallow it and render adds flush.
 		expect(highlight).toMatch(/\(\[\-\+\]\) \(\.\*\)/);
+		// TABS MUST BE EXPANDED (never rendered literally): a `\t` chunk
+		// breaks the NATIVE OpenTUI layout — every tab-indented diff line
+		// paints a blank row after it in a real terminal (herdr), invisible
+		// to the test renderer. tokenizeFileDiff AND tokenizeFileRow must
+		// replace tabs with spaces before parsing.
+		expect(highlight).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
+		const diffFn = highlight.slice(
+			highlight.indexOf('export function tokenizeFileDiff'),
+			highlight.indexOf('export function tokenizeFileDiff') + 2000,
+		);
+		expect(diffFn).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
+		const rowFn = highlight.slice(
+			highlight.indexOf('export function tokenizeFileRow'),
+			highlight.indexOf('export function tokenizeFileRow') + 1500,
+		);
+		expect(rowFn).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
 		// LINE-COUNT CONSISTENCY: the summary must count blank lines exactly
 		// like the diff renderer does — filtering empties made the summary
 		// say N while the diff rendered N+1 rows (the phantom "extra line"

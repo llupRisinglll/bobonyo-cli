@@ -315,7 +315,13 @@ export function tokenizeFileRow(
 	const language = languageForPath(path);
 	// The fenced token text carries a leading blank line after the opener,
 	// strip it so the header is line 0 and the body cursor stays aligned.
-	const lines = text.replace(/^\n+/, '').replace(/\n+$/, '').split('\n');
+	// Tabs break the native layout (a blank row after every tab-indented
+	// preview line) — expand to spaces, indentation preserved.
+	const lines = text
+		.replace(/^\n+/, '')
+		.replace(/\n+$/, '')
+		.replace(/\t/g, '  ')
+		.split('\n');
 	return emitLines(
 		lines,
 		(line, index, isHeader) => {
@@ -429,7 +435,16 @@ export function tokenizeFileDiff(
 	// The fenced token text carries a leading blank line after the opener,
 	// strip it so the header is line 0 and the body cursor stays aligned
 	// (the parse loop indexes body rows from the same `lines` array).
-	const lines = text.replace(/^\n+/, '').replace(/\n+$/, '').split('\n');
+	// TABS BREAK THE NATIVE LAYOUT: a `\t` in a text chunk makes OpenTUI
+	// render a BLANK ROW after every tab-indented diff line (seen only in a
+	// real terminal, not the test renderer). Expand tabs to spaces first —
+	// the code's indentation is preserved (never flush) and the rows stay
+	// contiguous.
+	const lines = text
+		.replace(/^\n+/, '')
+		.replace(/\n+$/, '')
+		.replace(/\t/g, '  ')
+		.split('\n');
 	// Parse the diff BODY (everything after the `✦ Edit`/`⎿` header rows)
 	// into structured rows so remove/add runs can be paired 1:1 like the
 	// original DiffView, never diff a line against an arbitrary neighbor.
