@@ -1,4 +1,5 @@
 import type {StatusRow} from './components/status-modal';
+import {knownPresetFor} from './components/connect-provider-modal';
 
 /** All runtime state the `/status` modal surfaces (pure, unit-tested). */
 export interface StatusData {
@@ -23,6 +24,21 @@ export interface StatusData {
 	watchdogLabel: string;
 	streamGuardLabel: string;
 	version: string;
+}
+
+/**
+ * Status-modal provider label: the user-given connection name with the REAL
+ * provider name beside it (`opencode-go (OpenCode Go)`), only when they
+ * differ. Pure, unit-tested.
+ */
+export function providerStatusLabel(
+	id: string,
+	name: string,
+	baseUrl: string,
+): string {
+	const given = name || id;
+	const real = knownPresetFor({id, baseUrl})?.title;
+	return real && real !== given ? `${given} (${real})` : given;
 }
 
 /** Build the `/status` modal rows from live app state. */

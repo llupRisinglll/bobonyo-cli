@@ -126,7 +126,7 @@ import {EffortModal} from './components/effort-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
-import {buildStatusRows} from './status-rows';
+import {buildStatusRows, providerStatusLabel} from './status-rows';
 import {fetchCodexLimits} from './codex-limits';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
@@ -3161,7 +3161,11 @@ export function App() {
 		// bg, cwd) or the input corner (model[effort], ctx ~N%).
 		const baseStatusData = {
 			sessionLabel: `${sessionName()} (${sessionId()})`,
-			provider: endpoint.id,
+			provider: providerStatusLabel(
+				endpoint.id,
+				endpoint.name,
+				endpoint.baseUrl,
+			),
 			messagesLabel: `${messages().length} transcript · ${context().length} provider`,
 			providerUsageLabel: isXiaomiMiMo(endpoint)
 				? (() => {

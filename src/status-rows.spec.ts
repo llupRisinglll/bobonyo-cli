@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test';
-import {buildStatusRows, type StatusData} from './status-rows';
+import {
+	buildStatusRows,
+	providerStatusLabel,
+	type StatusData,
+} from './status-rows';
 
 const BASE: StatusData = {
 	sessionLabel: 'sess (id)',
@@ -114,5 +118,36 @@ describe('buildStatusRows', () => {
 			labels.indexOf('Monthly limit'),
 		);
 		expect(labels[labels.length - 1]).toBe('Credits');
+	});
+});
+
+describe('providerStatusLabel (user name + real provider name)', () => {
+	test('shows the REAL provider name beside the user-given name', () => {
+		expect(
+			providerStatusLabel(
+				'opencode-go',
+				'opencode-go',
+				'https://opencode.ai/zen/go/v1',
+			),
+		).toBe('opencode-go (OpenCode Go)');
+		expect(
+			providerStatusLabel('deepseek', 'deepseek', 'https://api.deepseek.com'),
+		).toBe('deepseek (DeepSeek)');
+	});
+
+	test('matches by endpoint even when the connection was renamed', () => {
+		expect(
+			providerStatusLabel('my-ds', 'Brian', 'https://api.deepseek.com'),
+		).toBe('Brian (DeepSeek)');
+	});
+
+	test('custom / unknown providers keep only the user-given name', () => {
+		expect(
+			providerStatusLabel(
+				'my-gateway',
+				'my-gateway',
+				'https://my-gateway.example/v1',
+			),
+		).toBe('my-gateway');
 	});
 });
