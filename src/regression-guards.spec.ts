@@ -1167,7 +1167,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(index).toMatch(/MODIFY_OTHER_KEYS_ENABLE/);
 		expect(index).toMatch(/prependInputHandler/);
 		expect(index).toMatch(/kittyToXterm\(raw\)/);
+		// Converted keys must route through the SAME internal handler normal
+		// keys use (processParsedKey wraps a KeyEvent) — a custom emit would
+		// bypass preventDefault ordering and break global key handlers.
+		expect(index).toMatch(/_internalKeyInput\.processParsedKey/);
+		// Both protocols must be disabled on exit (kitty + modifyOtherKeys).
 		expect(index).toMatch(/KITTY_KEYBOARD_DISABLE/);
+		expect(index).toMatch(/MODIFY_OTHER_KEYS_DISABLE/);
 		const keys = read('./kitty-keys.ts');
 		expect(keys).toMatch(/export function kittyToXterm/);
 		expect(keys).toMatch(/export function supportsExtendedKeys/);
