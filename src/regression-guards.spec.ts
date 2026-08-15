@@ -1061,7 +1061,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const input = read('./components/input-box.tsx');
 		// The ticker row is ALWAYS present when thinkingMode is 'line'
 		// (reserves 1 row to prevent input/statusline jump).
-		expect(input).toMatch(/when=\{thinkingMode\(\) === 'line'\}/);
+		expect(input).toMatch(/when=\{thinkingMode\(\) === 'line' && busy\(\) && reasoning\(\)\}/);
 		// The ticker shows the one-line reasoning via liveThoughtOneLine.
 		expect(input).toMatch(/liveThoughtOneLine/);
 		// The ticker only shows text while busy and reasoning is non-empty.

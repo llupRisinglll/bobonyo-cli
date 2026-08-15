@@ -831,20 +831,17 @@ export function InputBox(props: {
 					</text>
 				</box>
 			</Show>
-			{/* Line-mode thinking ticker: always reserves 1 row so the input
-			    does not jump when thinking starts/stops. Shows the scrolling
-			    reasoning line while thinking, blank otherwise. */}
-			<Show when={thinkingMode() === 'line'}>
+			{/* Line-mode thinking ticker: shows ONLY while thinking, hidden
+			    immediately when thinking stops. */}
+			<Show when={thinkingMode() === 'line' && busy() && reasoning()}>
 				<box height={1}>
-					<Show when={busy() && reasoning()}>
-						<text fg={colors().secondary} attributes={dim()}>
-							{'  └ '}
-							{liveThoughtOneLine(
-								reasoning(),
-								historyFillWidth(terminalDimensions().width ?? 80),
-							)}
-						</text>
-					</Show>
+					<text fg={colors().secondary} attributes={dim()}>
+						{'  └ '}
+						{liveThoughtOneLine(
+							reasoning(),
+							historyFillWidth(terminalDimensions().width ?? 80),
+						)}
+					</text>
 				</box>
 			</Show>
 			{/* Post-open lazy-load indicator: ONE ROW PER service, each with
