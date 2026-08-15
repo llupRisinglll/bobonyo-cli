@@ -177,7 +177,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/shownEffort: effectiveEffort/);
 		// The query re-snap must track ONLY the query: an unfenced effect
 		// re-runs on every E press and snaps the cursor back to current.
-		expect(modal).toMatch(/createEffect\(on\(query,/);
+		expect(modal).toMatch(/createEffect\(\s*on\(query,/);
 		// Query changes re-snap through the same helper.
 		expect(modal).toMatch(/createEffect/);
 	});

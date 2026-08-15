@@ -1,10 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -541,7 +537,9 @@ export function maskSecret(secret: string): string {
 	const value = secret.trim();
 	if (!value) return '';
 	if (value.length <= 8) {
-		return value.length <= 4 ? '•'.repeat(value.length) : `${value.slice(0, 2)}…${value.slice(-2)}`;
+		return value.length <= 4
+			? '•'.repeat(value.length)
+			: `${value.slice(0, 2)}…${value.slice(-2)}`;
 	}
 	return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
@@ -643,8 +641,7 @@ export function ConnectProviderModal(props: {
 			const edit = props.editId
 				? listProviders().find(
 						provider =>
-							provider.id.toLowerCase() ===
-							props.editId!.toLowerCase(),
+							provider.id.toLowerCase() === props.editId!.toLowerCase(),
 					)
 				: undefined;
 			// A known preset endpoint is NOT re-asked in the edit flow
@@ -652,10 +649,7 @@ export function ConnectProviderModal(props: {
 			return [
 				{kind: 'pick'},
 				{
-					kind:
-						edit && knownPresetFor(edit)
-							? 'custom-key'
-							: 'custom-base',
+					kind: edit && knownPresetFor(edit) ? 'custom-key' : 'custom-base',
 				},
 			];
 		}
@@ -725,8 +719,7 @@ export function ConnectProviderModal(props: {
 		editTargetId()
 			? listProviders().find(
 					provider =>
-						provider.id.toLowerCase() ===
-						editTargetId()!.toLowerCase(),
+						provider.id.toLowerCase() === editTargetId()!.toLowerCase(),
 				)
 			: undefined,
 	);
@@ -777,7 +770,8 @@ export function ConnectProviderModal(props: {
 				lastCategory = preset.category;
 			}
 			rows.push({
-				kind: preset.id === 'custom' ? ('custom' as const) : ('provider' as const),
+				kind:
+					preset.id === 'custom' ? ('custom' as const) : ('provider' as const),
 				preset,
 				count: presetConnectionCount(preset, configured),
 			});
@@ -866,10 +860,7 @@ export function ConnectProviderModal(props: {
 		setEditTargetId(selected.id);
 		const provider = editProvider();
 		push({
-			kind:
-				provider && knownPresetFor(provider)
-					? 'custom-key'
-					: 'custom-base',
+			kind: provider && knownPresetFor(provider) ? 'custom-key' : 'custom-base',
 		});
 	};
 
@@ -945,8 +936,7 @@ export function ConnectProviderModal(props: {
 					.map(model => model.trim())
 					.filter(Boolean);
 				const id =
-					input().trim() ||
-					(editProvider()?.id || defaultProviderName('custom'));
+					input().trim() || editProvider()?.id || defaultProviderName('custom');
 				const provider = customProvider({
 					id,
 					// A skipped base step (known preset) keeps the existing
@@ -957,10 +947,7 @@ export function ConnectProviderModal(props: {
 						(editProvider()?.apiKeyResolved
 							? editProvider()!.apiKey
 							: undefined),
-					models:
-						models.length > 0
-							? models
-							: (editProvider()?.models ?? []),
+					models: models.length > 0 ? models : (editProvider()?.models ?? []),
 				});
 				if (!provider) return;
 				// Editing an existing connection keeps its wire fields
@@ -975,40 +962,32 @@ export function ConnectProviderModal(props: {
 									: {}),
 								...(editProvider()!.codexAccount
 									? {
-											codexAccount:
-												editProvider()!.codexAccount,
+											codexAccount: editProvider()!.codexAccount,
 										}
 									: {}),
 								...(editProvider()!.modelDiscoveryUrl
 									? {
-											modelDiscoveryUrl:
-												editProvider()!
-													.modelDiscoveryUrl,
+											modelDiscoveryUrl: editProvider()!.modelDiscoveryUrl,
 										}
 									: {}),
 								...(editProvider()!.contextWindow
 									? {
-											contextWindow:
-												editProvider()!.contextWindow,
+											contextWindow: editProvider()!.contextWindow,
 										}
 									: {}),
 								...(editProvider()!.providerOptions
 									? {
-											providerOptions:
-												editProvider()!
-													.providerOptions,
+											providerOptions: editProvider()!.providerOptions,
 										}
 									: {}),
 								...(editProvider()!.promptCacheKey
 									? {
-											promptCacheKey:
-												editProvider()!.promptCacheKey,
+											promptCacheKey: editProvider()!.promptCacheKey,
 										}
 									: {}),
 								...(editProvider()!.alwaysAllow?.length
 									? {
-											alwaysAllow:
-												editProvider()!.alwaysAllow,
+											alwaysAllow: editProvider()!.alwaysAllow,
 										}
 									: {}),
 							}
@@ -1204,7 +1183,8 @@ export function ConnectProviderModal(props: {
 			dims().height - 2,
 			Math.max(10, viewContentLines() + 7 + footerLines()),
 		);
-	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+	const cardY = () =>
+		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -1214,10 +1194,7 @@ export function ConnectProviderModal(props: {
 	const pickerSelection = (row: PickerRow): boolean => {
 		// Row OBJECTS are rebuilt per render, but the preset refs are stable
 		// (from PROVIDER_PRESETS) — compare by preset, not object identity.
-		return (
-			Boolean(row.preset) &&
-			row.preset === gridItems()[index()]?.preset
-		);
+		return Boolean(row.preset) && row.preset === gridItems()[index()]?.preset;
 	};
 	// Grid scroll window: 2-line cells, the selected row stays in view.
 	const visibleGridRows = (): Array<{
@@ -1234,10 +1211,7 @@ export function ConnectProviderModal(props: {
 			1,
 			Math.floor((cardHeight() - 7 - footerLines()) / 2),
 		);
-		const selectedRow = Math.min(
-			Math.floor(index() / cols),
-			totalRows - 1,
-		);
+		const selectedRow = Math.min(Math.floor(index() / cols), totalRows - 1);
 		const startRow = Math.max(
 			0,
 			Math.min(
@@ -1246,7 +1220,11 @@ export function ConnectProviderModal(props: {
 			),
 		);
 		const out: Array<{row: number; cells: Array<PickerRow | null>}> = [];
-		for (let r = startRow; r < Math.min(startRow + visibleRows, totalRows); r++) {
+		for (
+			let r = startRow;
+			r < Math.min(startRow + visibleRows, totalRows);
+			r++
+		) {
 			const cells: Array<PickerRow | null> = [];
 			for (let c = 0; c < cols; c++) {
 				cells.push(items[r * cols + c] ?? null);
@@ -1256,9 +1234,7 @@ export function ConnectProviderModal(props: {
 		return out;
 	};
 	const truncateCell = (text: string, width: number): string =>
-		text.length > width
-			? text.slice(0, Math.max(1, width - 1)) + '…'
-			: text;
+		text.length > width ? text.slice(0, Math.max(1, width - 1)) + '…' : text;
 
 	const title = (): string => {
 		switch (view().kind) {
@@ -1352,9 +1328,7 @@ export function ConnectProviderModal(props: {
 					</text>
 					<box flexGrow={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						{view().kind === 'pick'
-							? 'Esc close'
-							: 'Esc back'}
+						{view().kind === 'pick' ? 'Esc close' : 'Esc back'}
 					</text>
 				</box>
 				<box height={1} />
@@ -1371,7 +1345,9 @@ export function ConnectProviderModal(props: {
 								<PromptField
 									value={input}
 									error={error}
-									secret={view().kind === 'apikey' || view().kind === 'custom-key'}
+									secret={
+										view().kind === 'apikey' || view().kind === 'custom-key'
+									}
 									placeholder={promptDescription()}
 								/>
 							}
@@ -1409,22 +1385,15 @@ export function ConnectProviderModal(props: {
 									when={confirmingDelete() === null}
 									fallback={
 										<box flexDirection="column">
-											<text
-												fg={colors().warning}
-												attributes={bold()}
-											>
+											<text fg={colors().warning} attributes={bold()}>
 												Delete provider
 											</text>
 											<box height={1} />
 											<text fg={colors().text}>
-												Delete "{confirmingDelete()}"?
-												This cannot be undone.
+												Delete "{confirmingDelete()}"? This cannot be undone.
 											</text>
 											<box height={1} />
-											<text
-												fg={colors().secondary}
-												attributes={dim()}
-											>
+											<text fg={colors().secondary} attributes={dim()}>
 												(y) delete · (n) cancel
 											</text>
 										</box>
@@ -1459,29 +1428,21 @@ export function ConnectProviderModal(props: {
 						{/* Responsive provider grid: 1 column on narrow cards,
 						    2 on medium, 3 on wide (providerColumns). */}
 						<For each={visibleGridRows()}>
-							{(entry) => (
+							{entry => (
 								<box flexDirection="row" height={2}>
 									<For each={entry.cells}>
 										{(cell, colIndex) => {
 											if (!cell?.preset) {
-												return (
-													<box
-														width={cellWidth()}
-														height={2}
-													/>
-												);
+												return <box width={cellWidth()} height={2} />;
 											}
 											const active = pickerSelection(cell);
-											const gridPosition =
-												entry.row * columns() + colIndex();
+											const gridPosition = entry.row * columns() + colIndex();
 											return (
 												<box
 													width={cellWidth()}
 													flexDirection="column"
 													height={2}
-													backgroundColor={
-														active ? activeRow().bg : undefined
-													}
+													backgroundColor={active ? activeRow().bg : undefined}
 													{...({
 														onMouseMove: () => setIndex(gridPosition),
 														onMouseUp: () => {
@@ -1502,42 +1463,26 @@ export function ConnectProviderModal(props: {
 												>
 													<box flexDirection="row" height={1}>
 														<text
-															fg={
-																active
-																	? activeRow().fg
-																	: colors().text
-															}
+															fg={active ? activeRow().fg : colors().text}
 															attributes={bold()}
 														>
 															{active ? '❯ ' : '  '}
 															{truncateCell(
 																cell.preset.title,
-																Math.max(
-																	6,
-																	cellWidth() - 14,
-																),
+																Math.max(6, cellWidth() - 14),
 															)}
 														</text>
 														<box flexGrow={1} />
-														<Show
-															when={cell.count && cell.count > 0}
-														>
-															<text
-																fg={colors().success}
-																attributes={dim()}
-															>
+														<Show when={cell.count && cell.count > 0}>
+															<text fg={colors().success} attributes={dim()}>
 																{cell.count} connected
 															</text>
 														</Show>
 													</box>
 													<box height={1} paddingLeft={2}>
-														<text
-															fg={colors().secondary}
-															attributes={dim()}
-														>
+														<text fg={colors().secondary} attributes={dim()}>
 															{truncateCell(
-																cell.preset.description ??
-																	'Custom provider',
+																cell.preset.description ?? 'Custom provider',
 																Math.max(8, cellWidth() - 4),
 															)}
 														</text>
@@ -1593,9 +1538,7 @@ function PromptField(props: {
 	const caretChar = createMemo(() =>
 		filled() ? shown()[shown().length - 1]! : ' ',
 	);
-	const valueText = createMemo(() =>
-		filled() ? shown().slice(0, -1) : '',
-	);
+	const valueText = createMemo(() => (filled() ? shown().slice(0, -1) : ''));
 	return (
 		<box flexDirection="column">
 			<box
@@ -1614,11 +1557,7 @@ function PromptField(props: {
 					<Show when={!filled()}>
 						<text
 							bg={cursorVisible() ? activeRow().bg : undefined}
-							fg={
-								cursorVisible()
-									? activeRow().fg
-									: colors().secondary
-							}
+							fg={cursorVisible() ? activeRow().fg : colors().secondary}
 							attributes={dim()}
 						>
 							{caretChar()}
@@ -1634,11 +1573,7 @@ function PromptField(props: {
 					<Show when={filled()}>
 						<text
 							bg={cursorVisible() ? activeRow().bg : undefined}
-							fg={
-								cursorVisible()
-									? activeRow().fg
-									: colors().text
-							}
+							fg={cursorVisible() ? activeRow().fg : colors().text}
 						>
 							{caretChar()}
 						</text>
@@ -1670,28 +1605,30 @@ function MethodList(props: {
 	const activeRow = () => activeRowPalette(colors());
 	return (
 		<box flexDirection="column">
-			<For each={props.methods}>
-				{(method, i) => (
+			<For
+				each={(() => {
+					const sel = props.index();
+					return props.methods.map((method, idx) => ({
+						method,
+						active: idx === sel,
+					}));
+				})()}
+			>
+				{({method, active}) => (
 					<box
 						flexDirection="row"
 						height={1}
-						backgroundColor={
-							i() === props.index() ? activeRow().bg : undefined
-						}
+						backgroundColor={active ? activeRow().bg : undefined}
 						{...({
-							onMouseMove: () => props.onMove(i()),
-							onMouseUp: () => props.onSelect(i()),
+							onMouseMove: () => props.onMove(props.methods.indexOf(method)),
+							onMouseUp: () => props.onSelect(props.methods.indexOf(method)),
 						} as any)}
 					>
 						<text
-							fg={
-								i() === props.index()
-									? activeRow().fg
-									: colors().text
-							}
+							fg={active ? activeRow().fg : colors().text}
 							attributes={bold()}
 						>
-							{i() === props.index() ? '❯ ' : '  '}
+							{active ? '❯ ' : '  '}
 							{method.label}
 						</text>
 						<box flexGrow={1} />
@@ -1721,31 +1658,31 @@ function ManageList(props: {
 	const activeRow = () => activeRowPalette(colors());
 	return (
 		<box flexDirection="column">
-			<For each={props.rows}>
-				{(row, i) => (
+			<For
+				each={(() => {
+					const sel = props.index();
+					return props.rows.map((row, idx) => ({
+						row,
+						active: idx === sel,
+					}));
+				})()}
+			>
+				{({row, active}) => (
 					<box
 						flexDirection="row"
 						height={1}
-						backgroundColor={
-							i() === props.index() ? activeRow().bg : undefined
-						}
+						backgroundColor={active ? activeRow().bg : undefined}
 						{...({
-							onMouseMove: () => props.onMove(i()),
-							onMouseUp: () => props.onSelect(i()),
+							onMouseMove: () => props.onMove(props.rows.indexOf(row)),
+							onMouseUp: () => props.onSelect(props.rows.indexOf(row)),
 						} as any)}
 					>
 						<text
-							fg={
-								i() === props.index()
-									? activeRow().fg
-									: colors().text
-							}
+							fg={active ? activeRow().fg : colors().text}
 							attributes={bold()}
 						>
-							{i() === props.index() ? '❯ ' : '  '}
-							{row
-								? row.id
-								: `Connect a new ${props.presetTitle}`}
+							{active ? '❯ ' : '  '}
+							{row ? row.id : `Connect a new ${props.presetTitle}`}
 						</text>
 						<box flexGrow={1} />
 						<text fg={colors().secondary} attributes={dim()}>
@@ -1778,9 +1715,8 @@ function ChatgptView(props: {
 				fallback={
 					<box flexDirection="column">
 						<text fg={colors().text}>
-							Run `codex login` in another terminal, then check
-							again. bobonyo uses the credentials it writes to
-							~/.codex/auth.json.
+							Run `codex login` in another terminal, then check again. bobonyo
+							uses the credentials it writes to ~/.codex/auth.json.
 						</text>
 						<box flexGrow={1} />
 						<text fg={colors().secondary} attributes={dim()}>

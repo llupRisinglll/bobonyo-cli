@@ -1,10 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -143,7 +139,16 @@ export function AgentsModal(props: {onClose: () => void}) {
 		y <= cardY() + cardHeight();
 
 	return (
-		<Show when={!detail()} fallback={<DetailsModal title={detail()!.label} content={detail()!.systemPrompt ?? ''} onClose={() => setDetail(null)} />}>
+		<Show
+			when={!detail()}
+			fallback={
+				<DetailsModal
+					title={detail()!.label}
+					content={detail()!.systemPrompt ?? ''}
+					onClose={() => setDetail(null)}
+				/>
+			}
+		>
 			<box
 				position="absolute"
 				left={0}
@@ -183,28 +188,32 @@ export function AgentsModal(props: {onClose: () => void}) {
 						</text>
 					</box>
 					<box height={1} />
-					<For each={entries()}>
-						{(entry, i) => (
+					<For
+						each={(() => {
+							const sel = index();
+							return entries().map((entry, idx) => ({
+								entry,
+								active: idx === sel,
+							}));
+						})()}
+					>
+						{({entry, active}) => (
 							<box
 								flexDirection="row"
 								height={1}
-								backgroundColor={
-									index() === i()
-										? activeRow().bg
-										: undefined
-								}
+								backgroundColor={active ? activeRow().bg : undefined}
 								{...({
-									onMouseMove: () => setIndex(i()),
+									onMouseMove: () => setIndex(entries().indexOf(entry)),
 									onMouseUp: () => {
 										if (entry.systemPrompt) setDetail(entry);
 									},
 								} as any)}
 							>
 								<text
-									fg={index() === i() ? activeRow().fg : colors().text}
+									fg={active ? activeRow().fg : colors().text}
 									attributes={bold()}
 								>
-									{index() === i() ? '❯ ' : '  '}
+									{active ? '❯ ' : '  '}
 									{entry.label}
 								</text>
 								<text fg={colors().secondary}>

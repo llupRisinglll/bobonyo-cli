@@ -1,11 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {createEffect, createSignal, For, on, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -133,7 +129,12 @@ export function sameProviderGroup(
 }
 
 type Row =
-	| {kind: 'provider'; provider: ModelProvider; expanded: boolean; isCurrent: boolean}
+	| {
+			kind: 'provider';
+			provider: ModelProvider;
+			expanded: boolean;
+			isCurrent: boolean;
+	  }
 	| {kind: 'model'; provider: ModelProvider; model: string; isCurrent: boolean}
 	| {kind: 'inherit'}
 	| {kind: 'spacer'}
@@ -203,17 +204,12 @@ export function nextModelCursor(
 	const offset = (group: number): number =>
 		groupSizes.slice(0, group).reduce((sum, size) => sum + size, 0);
 	const hasNextGroup = (): boolean =>
-		groupIndex + 1 < groupSizes.length &&
-		(groupSizes[groupIndex + 1] ?? 0) > 0;
+		groupIndex + 1 < groupSizes.length && (groupSizes[groupIndex + 1] ?? 0) > 0;
 	switch (direction) {
 		case 'left': {
 			if (local > 0) return offset(groupIndex) + local - 1;
 			if (groupIndex > 0) {
-				return (
-					offset(groupIndex - 1) +
-					(groupSizes[groupIndex - 1] ?? 0) -
-					1
-				);
+				return offset(groupIndex - 1) + (groupSizes[groupIndex - 1] ?? 0) - 1;
 			}
 			return current;
 		}
@@ -231,9 +227,7 @@ export function nextModelCursor(
 				if (next === local) {
 					if (groupIndex > 0) {
 						return (
-							offset(groupIndex - 1) +
-							(groupSizes[groupIndex - 1] ?? 0) -
-							1
+							offset(groupIndex - 1) + (groupSizes[groupIndex - 1] ?? 0) - 1
 						);
 					}
 					if (hasInherit) return -1;
@@ -369,9 +363,11 @@ export function ModelModal(props: {
 			Math.max(10, capped + 10 + footerLines()),
 		);
 	};
-	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+	const cardY = () =>
+		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	const modelColumns = () => (cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1);
+	const modelColumns = () =>
+		cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1;
 	const cellWidth = () => Math.floor((cardWidth() - 4) / modelColumns());
 
 	/** Filtered provider groups in display order (current provider first):
@@ -450,22 +446,17 @@ export function ModelModal(props: {
 							connections: group.group.connections,
 							model: group.models[i]!,
 							isCurrent:
-								group.isCurrent &&
-								group.models[i] === props.currentModel,
+								group.isCurrent && group.models[i] === props.currentModel,
 							shownEffort: effectiveEffort(
 								group.group.connections[0]!,
 								group.models[i]!,
 							),
 							contextSize: (() => {
 								const window =
-									group.group.connections[0]!
-										.modelContextWindows?.[
+									group.group.connections[0]!.modelContextWindows?.[
 										group.models[i]!
-									] ??
-									group.group.connections[0]!.contextWindow;
-								return window
-									? formatContextLength(window)
-									: undefined;
+									] ?? group.group.connections[0]!.contextWindow;
+								return window ? formatContextLength(window) : undefined;
 							})(),
 							index: cellIndex,
 						});
@@ -606,19 +597,14 @@ export function ModelModal(props: {
 		const visible = Math.max(1, cardHeight() - 10 - footerLines());
 		const start = Math.max(
 			0,
-			Math.min(
-				activeLine() - visible + 1,
-				Math.max(0, lines.length - visible),
-			),
+			Math.min(activeLine() - visible + 1, Math.max(0, lines.length - visible)),
 		);
 		setScrollStart(start);
 		return lines.slice(start, start + visible);
 	};
 
 	const truncateCell = (text: string, width: number): string =>
-		text.length > width
-			? text.slice(0, Math.max(1, width - 1)) + '…'
-			: text;
+		text.length > width ? text.slice(0, Math.max(1, width - 1)) + '…' : text;
 	/** Provider display label for a bare model name (effort/confirm steps). */
 	const providerForId = (id?: string): ModelProvider | undefined =>
 		props.providers.find(provider => provider.id === id);
@@ -628,11 +614,21 @@ export function ModelModal(props: {
 	// Track ONLY the query: the cell list folds the effort override, and an
 	// unfenced effect would re-run on every `E` press and snap the cursor
 	// back to the current model.
-	createEffect(on(query, () => {
-		const cells = modelCells();
-		const current = cells.findIndex(cell => cell.isCurrent);
-		setCursor(current !== -1 ? current : props.inheritLabel ? -1 : cells.length > 0 ? 0 : -1);
-	}));
+	createEffect(
+		on(query, () => {
+			const cells = modelCells();
+			const current = cells.findIndex(cell => cell.isCurrent);
+			setCursor(
+				current !== -1
+					? current
+					: props.inheritLabel
+						? -1
+						: cells.length > 0
+							? 0
+							: -1,
+			);
+		}),
+	);
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
@@ -681,10 +677,7 @@ export function ModelModal(props: {
 				const target = {
 					providerId: step.providerId,
 					model: step.model,
-					effort:
-						chosen.id === 'default'
-							? undefined
-							: chosen.id,
+					effort: chosen.id === 'default' ? undefined : chosen.id,
 				};
 				setEffortStep(null);
 				// Mid-conversation model switches RESEND the whole history,
@@ -692,8 +685,7 @@ export function ModelModal(props: {
 				// An ACCOUNT swap within the same provider skips it: the
 				// context + cache head are preserved, the next turn just
 				// uses the other subscription.
-				if (props.hasMessages && !step.accountSwitch)
-					setConfirming(target);
+				if (props.hasMessages && !step.accountSwitch) setConfirming(target);
 				else props.onSelect(target.providerId, target.model, target.effort);
 			}
 			return true;
@@ -701,7 +693,8 @@ export function ModelModal(props: {
 		if (confirming()) {
 			if (event.name === 'y' || event.name === 'Y') {
 				const target = confirming();
-				if (target) props.onSelect(target.providerId, target.model, target.effort);
+				if (target)
+					props.onSelect(target.providerId, target.model, target.effort);
 				setConfirming(null);
 			} else if (event.name === 'n' || event.name === 'N') {
 				setConfirming(null);
@@ -726,15 +719,13 @@ export function ModelModal(props: {
 			const cell = currentCell();
 			if (cell) {
 				const representative = cell.connections[0]!;
-				const current =
-					effectiveEffort(representative, cell.model) ?? 'medium';
+				const current = effectiveEffort(representative, cell.model) ?? 'medium';
 				const base = EFFORT_LEVELS.indexOf(
 					current as (typeof EFFORT_LEVELS)[number],
 				);
 				const start = base === -1 ? EFFORT_LEVELS.indexOf('medium') : base;
 				const next =
-					EFFORT_LEVELS[(start + 1) % EFFORT_LEVELS.length] ??
-					'medium';
+					EFFORT_LEVELS[(start + 1) % EFFORT_LEVELS.length] ?? 'medium';
 				setEffortOverrides(prev => ({
 					...prev,
 					[effortKey(representative.id, cell.model)]: next,
@@ -833,10 +824,7 @@ export function ModelModal(props: {
 									when={effortStep() !== null}
 									fallback={
 										<box flexDirection="column">
-											<text
-												fg={colors().primary}
-												attributes={bold()}
-											>
+											<text fg={colors().primary} attributes={bold()}>
 												Switch model
 											</text>
 											<box height={1} />
@@ -844,19 +832,13 @@ export function ModelModal(props: {
 												Switching to "
 												{modelWithProvider(
 													confirming()?.model ?? '',
-													providerForId(
-														confirming()?.providerId,
-													),
+													providerForId(confirming()?.providerId),
 												)}
-												" will RESEND the entire
-												conversation to the new model
+												" will RESEND the entire conversation to the new model
 												and take additional usage.
 											</text>
 											<box height={1} />
-											<text
-												fg={colors().secondary}
-												attributes={dim()}
-											>
+											<text fg={colors().secondary} attributes={dim()}>
 												(y) continue · (n) cancel
 											</text>
 										</box>
@@ -866,96 +848,72 @@ export function ModelModal(props: {
 									    Default or a reasoning tier for THIS
 									    model before switching. */}
 									<box flexDirection="column">
-										<text
-											fg={colors().primary}
-											attributes={bold()}
-										>
+										<text fg={colors().primary} attributes={bold()}>
 											Select effort
 										</text>
 										<box height={1} />
 										<text fg={colors().text}>
 											{modelWithProvider(
 												effortStep()?.model ?? '',
-												providerForId(
-													effortStep()?.providerId,
-												),
+												providerForId(effortStep()?.providerId),
 											)}
 										</text>
 										<box height={1} />
-										<For each={EFFORT_OPTIONS}>
-											{(option, i) => {
-												const active =
-													i() === effortIndex();
-												return (
-													<box
-														flexDirection="row"
-														height={1}
-														backgroundColor={
-															active
-																? activeRow().bg
-																: undefined
-														}
-														{...({
-															onMouseMove: () =>
-																setEffortIndex(i()),
-															onMouseUp: () => {
-																const step =
-																	effortStep();
-																if (!step) return;
-																setEffortStep(null);
-																const target = {
-																	providerId:
-																		step.providerId,
-																	model: step.model,
-																	effort:
-																		option.id ===
-																		'default'
-																			? undefined
-																			: option.id,
-																};
-																if (
-																	props.hasMessages &&
-																	!step.accountSwitch
-																) {
-																	setConfirming(
-																		target,
-																	);
-																} else {
-																	props.onSelect(
-																		target.providerId,
-																		target.model,
-																		target.effort,
-																	);
-																}
-															},
-														} as any)}
+										<For
+											each={(() => {
+												const sel = effortIndex();
+												return EFFORT_OPTIONS.map((option, idx) => ({
+													option,
+													active: idx === sel,
+												}));
+											})()}
+										>
+											{({option, active}) => (
+												<box
+													flexDirection="row"
+													height={1}
+													backgroundColor={active ? activeRow().bg : undefined}
+													{...({
+														onMouseMove: () =>
+															setEffortIndex(EFFORT_OPTIONS.indexOf(option)),
+														onMouseUp: () => {
+															const step = effortStep();
+															if (!step) return;
+															setEffortStep(null);
+															const target = {
+																providerId: step.providerId,
+																model: step.model,
+																effort:
+																	option.id === 'default'
+																		? undefined
+																		: option.id,
+															};
+															if (props.hasMessages && !step.accountSwitch) {
+																setConfirming(target);
+															} else {
+																props.onSelect(
+																	target.providerId,
+																	target.model,
+																	target.effort,
+																);
+															}
+														},
+													} as any)}
+												>
+													<text
+														fg={active ? activeRow().fg : colors().text}
+														attributes={active ? bold() : undefined}
 													>
-														<text
-															fg={
-																active
-																	? activeRow().fg
-																	: colors().text
-															}
-															attributes={
-																active
-																	? bold()
-																	: undefined
-															}
-														>
-															{active ? '❯ ' : '  '}
-															{option.id === 'default'
-																? effortDefaultLabel()
-																: option.label}
-														</text>
-													</box>
-												);
-											}}
+														{active ? '❯ ' : '  '}
+														{option.id === 'default'
+															? effortDefaultLabel()
+															: option.label}
+													</text>
+												</box>
+											)}
 										</For>
 										<box height={1} />
-										<text
-											fg={colors().secondary}
-											attributes={dim()}
-										>
+										<text fg={colors().secondary} attributes={dim()}>
 											↑/↓ select · Enter choose · Esc back
 											{props.hasMessages
 												? ' · will resend the conversation'
@@ -972,76 +930,59 @@ export function ModelModal(props: {
 									Select provider
 								</text>
 								<box height={1} />
-								<text fg={colors().text}>
-									{connectionStep()?.model ?? ''}
-								</text>
+								<text fg={colors().text}>{connectionStep()?.model ?? ''}</text>
 								<box height={1} />
-								<For each={connectionStep()?.connections ?? []}>
-									{(connection, i) => {
-										const active =
-											i() === connectionIndex();
-										return (
-											<box
-												flexDirection="row"
-												height={1}
-												backgroundColor={
-													active ? activeRow().bg : undefined
-												}
-												{...({
-													onMouseMove: () =>
-														setConnectionIndex(i()),
-													onMouseUp: () => {
-														const step =
-															connectionStep();
-														if (!step) return;
-														const chosen =
-															step.connections[
-																i()
-															]!;
-														setConnectionStep(null);
-														const current =
-															providerForId(
-																props.currentProvider,
-															);
-														const sameGroup =
-															sameProviderGroup(
-																chosen,
-																current,
-															);
-														startEffort(
-															chosen,
-															step.model,
-															sameGroup &&
-																current?.id !==
-																	chosen.id,
-														);
-													},
-												} as any)}
+								<For
+									each={(() => {
+										const step = connectionStep();
+										const sel = connectionIndex();
+										return step
+											? step.connections.map((connection, idx) => ({
+													connection,
+													active: idx === sel,
+												}))
+											: [];
+									})()}
+								>
+									{({connection, active}) => (
+										<box
+											flexDirection="row"
+											height={1}
+											backgroundColor={active ? activeRow().bg : undefined}
+											{...({
+												onMouseMove: () =>
+													setConnectionIndex(
+														connectionStep()?.connections.indexOf(connection) ??
+															0,
+													),
+												onMouseUp: () => {
+													const step = connectionStep();
+													if (!step) return;
+													const chosen = connection;
+													setConnectionStep(null);
+													const current = providerForId(props.currentProvider);
+													const sameGroup = sameProviderGroup(chosen, current);
+													startEffort(
+														chosen,
+														step.model,
+														sameGroup && current?.id !== chosen.id,
+													);
+												},
+											} as any)}
+										>
+											<text
+												fg={active ? activeRow().fg : colors().text}
+												attributes={active ? bold() : undefined}
 											>
-												<text
-													fg={
-														active
-															? activeRow().fg
-															: colors().text
-													}
-													attributes={
-														active ? bold() : undefined
-													}
-												>
-													{active ? '❯ ' : '  '}
-													{connection.name ||
-														connection.id}
-												</text>
-												<box flexGrow={1} />
-												<text
-													fg={colors().secondary}
-													attributes={dim()}
-												>
-													{connection.baseUrl ?? ''}
-												</text>
-											</box>
-										);
-									}}
+												{active ? '❯ ' : '  '}
+												{connection.name || connection.id}
+											</text>
+											<box flexGrow={1} />
+											<text fg={colors().secondary} attributes={dim()}>
+												{connection.baseUrl ?? ''}
+											</text>
+										</box>
+									)}
 								</For>
 								<box height={1} />
 								<text fg={colors().secondary} attributes={dim()}>
@@ -1080,7 +1021,7 @@ export function ModelModal(props: {
 					</box>
 					<box height={1} />
 					<For each={visibleLines()}>
-						{(line) => {
+						{line => {
 							if (line.kind === 'empty') {
 								return (
 									<text fg={colors().secondary} attributes={dim()}>
@@ -1097,19 +1038,13 @@ export function ModelModal(props: {
 									<box
 										flexDirection="row"
 										height={1}
-										backgroundColor={
-											active ? activeRow().bg : undefined
-										}
+										backgroundColor={active ? activeRow().bg : undefined}
 										{...({
 											onMouseUp: () => props.onInherit?.(),
 										} as any)}
 									>
 										<text
-											fg={
-												active
-													? activeRow().fg
-													: colors().text
-											}
+											fg={active ? activeRow().fg : colors().text}
 											attributes={active ? bold() : undefined}
 										>
 											{active ? '❯ ' : '  '}
@@ -1120,10 +1055,7 @@ export function ModelModal(props: {
 							}
 							if (line.kind === 'provider') {
 								const names = (line.connections ?? [])
-									.map(
-										connection =>
-											connection.name || connection.id,
-									)
+									.map(connection => connection.name || connection.id)
 									.join(', ');
 								const title = line.provider
 									? providerDisplayName(line.provider)
@@ -1135,10 +1067,7 @@ export function ModelModal(props: {
 											{title}
 										</text>
 										{names ? (
-											<text
-												fg={colors().secondary}
-												attributes={dim()}
-											>
+											<text fg={colors().secondary} attributes={dim()}>
 												{' - '}
 												{names}
 											</text>
@@ -1146,10 +1075,7 @@ export function ModelModal(props: {
 											<></>
 										)}
 										{line.isCurrent ? (
-											<text
-												fg={colors().secondary}
-												attributes={dim()}
-											>
+											<text fg={colors().secondary} attributes={dim()}>
 												{' '}
 												(current)
 											</text>
@@ -1165,9 +1091,7 @@ export function ModelModal(props: {
 									<For each={line.cells}>
 										{(cell, colIndex) => {
 											if (!cell) {
-												return (
-													<box width={cellWidth()} height={1} />
-												);
+												return <box width={cellWidth()} height={1} />;
 											}
 											const active = cursor() === cell.index;
 											const size = cell.contextSize;
@@ -1180,54 +1104,33 @@ export function ModelModal(props: {
 												cellWidth() -
 													4 -
 													(size ? size.length + 1 : 0) -
-													(effortBadge
-														? effortBadge.length
-														: 0),
+													(effortBadge ? effortBadge.length : 0),
 											);
 											return (
 												<box
 													width={cellWidth()}
 													flexDirection="row"
 													height={1}
-													backgroundColor={
-														active ? activeRow().bg : undefined
-													}
+													backgroundColor={active ? activeRow().bg : undefined}
 													{...({
 														onMouseMove: () => setCursor(cell.index),
 														onMouseUp: () => selectCell(cell),
 													} as any)}
 												>
 													<text
-														fg={
-															active
-																? activeRow().fg
-																: colors().text
-														}
-														attributes={
-															active ? bold() : undefined
-														}
+														fg={active ? activeRow().fg : colors().text}
+														attributes={active ? bold() : undefined}
 													>
 														{active ? '❯ ' : '  '}
-														{truncateCell(
-															cell.model,
-															nameWidth,
-														)}
+														{truncateCell(cell.model, nameWidth)}
 													</text>
-													<Show
-														when={active && cell.shownEffort}
-													>
-														<text
-															fg={activeRow().fg}
-															attributes={dim()}
-														>
+													<Show when={active && cell.shownEffort}>
+														<text fg={activeRow().fg} attributes={dim()}>
 															[{cell.shownEffort}]
 														</text>
 													</Show>
 													<Show when={size}>
-														<text
-															fg={colors().secondary}
-															attributes={dim()}
-														>
+														<text fg={colors().secondary} attributes={dim()}>
 															{' '}
 															{size}
 														</text>
@@ -1242,7 +1145,8 @@ export function ModelModal(props: {
 					</For>
 					<box height={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect (list) · Esc close
+						Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect
+						(list) · Esc close
 					</text>
 				</Show>
 			</box>

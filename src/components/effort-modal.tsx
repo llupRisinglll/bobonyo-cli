@@ -118,42 +118,39 @@ export function EffortModal(props: {
 					</text>
 				</box>
 				<box height={1} />
-				<text fg={colors().text}>
-					{props.model}
-				</text>
+				<text fg={colors().text}>{props.model}</text>
 				<text fg={colors().secondary} attributes={dim()}>
 					{props.provider}
 				</text>
 				<box height={1} />
-				<For each={options}>
-					{(option, i) => {
-						const active = i() === index();
-						return (
-							<box
-								flexDirection="row"
-								height={1}
-								backgroundColor={
-									active ? activeRow().bg : undefined
-								}
-								{...({
-									onMouseMove: () => setIndex(i()),
-									onMouseUp: () => props.onSelect(option.id),
-								} as any)}
+				<For
+					each={(() => {
+						const sel = index();
+						return options.map((option, idx) => ({
+							option,
+							active: idx === sel,
+						}));
+					})()}
+				>
+					{({option, active}) => (
+						<box
+							flexDirection="row"
+							height={1}
+							backgroundColor={active ? activeRow().bg : undefined}
+							{...({
+								onMouseMove: () => setIndex(options.indexOf(option)),
+								onMouseUp: () => props.onSelect(option.id),
+							} as any)}
+						>
+							<text
+								fg={active ? activeRow().fg : colors().text}
+								attributes={active ? bold() : undefined}
 							>
-								<text
-									fg={
-										active
-											? activeRow().fg
-											: colors().text
-									}
-									attributes={active ? bold() : undefined}
-								>
-									{active ? '❯ ' : '  '}
-									{option.label}
-								</text>
-							</box>
-						);
-					}}
+								{active ? '❯ ' : '  '}
+								{option.label}
+							</text>
+						</box>
+					)}
 				</For>
 				<box height={1} />
 				<text fg={colors().secondary} attributes={dim()}>
