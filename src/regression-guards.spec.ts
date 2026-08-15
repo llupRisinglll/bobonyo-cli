@@ -902,6 +902,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// marker line number minus 1 is added to every diff row.
 		expect(display).toMatch(/baseLine - 1/);
 		expect(display).toMatch(/lineDiffText\(oldStr, newStr, /);
+		// INDENTATION: the diff rows must NOT render flush at column 0 —
+		// every row carries a fixed container lead (the 2-space `lead`
+		// baked into lineDiffText), so the numbered block nests under the
+		// header like every other tool body.
+		expect(display).toMatch(/const lead = '  ';/);
+		expect(display).toMatch(/`\$\{lead\}\$\{String\(\(line\.newLineNo/);
+		// SIGIL SPACE: the tokenizer consumed the space after +/- into the
+		// parse regex; the renderer must re-emit it or `+const` glues to the
+		// code. The renderChange chunk must carry the trailing space.
+		const highlight = read('./row-highlight.ts');
+		expect(highlight).toMatch(/\$\{row\.sigil \?\? ''\} `/);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {

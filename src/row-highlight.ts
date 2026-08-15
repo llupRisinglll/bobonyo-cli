@@ -25,11 +25,7 @@ export type RowStatus = 'done' | 'running' | 'bg';
 
 export type Palette = ThemePalette;
 
-function chunk(
-	text: string,
-	fg: RGBA | undefined,
-	attributes = 0,
-): TextChunk {
+function chunk(text: string, fg: RGBA | undefined, attributes = 0): TextChunk {
 	return {__isChunk: true, text, ...(fg ? {fg} : {}), attributes};
 }
 
@@ -128,7 +124,12 @@ function groupHeaderChunks(
 	const hintAt = rest.search(/\(ctrl-o|\(ctrl \+ t/);
 	// Keep the space that separated the names from the hint (names.trim()
 	// below would otherwise drop it, gluing `×2(ctrl-o` together).
-	const hintStart = hintAt === -1 ? -1 : hintAt > 0 && rest[hintAt - 1] === ' ' ? hintAt - 1 : hintAt;
+	const hintStart =
+		hintAt === -1
+			? -1
+			: hintAt > 0 && rest[hintAt - 1] === ' '
+				? hintAt - 1
+				: hintAt;
 	const names = hintStart === -1 ? rest : rest.slice(0, hintStart);
 	const hint = hintStart === -1 ? '' : rest.slice(hintStart);
 	for (const token of names.trim().split(/( and |, | ×\d+)/)) {
@@ -193,25 +194,30 @@ export function tokenizeToolRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			if (/^(?:[✦⚙]\s*)?Ran\s+/.test(line)) {
-				return groupHeaderChunks(line, status, palette);
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				if (/^(?:[✦⚙]\s*)?Ran\s+/.test(line)) {
+					return groupHeaderChunks(line, status, palette);
+				}
+				const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
+				if (m) {
+					return [
+						chunk(m[1] ?? '', glyphColor(status, palette)),
+						chunk(m[2] ?? '', palette.fg.primary, bold()),
+						chunk(m[3] ?? '', palette.fg.secondary),
+					];
+				}
+				return headerChunks(line, status, palette, defaultFg);
 			}
-			const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
-			if (m) {
-				return [
-					chunk(m[1] ?? '', glyphColor(status, palette)),
-					chunk(m[2] ?? '', palette.fg.primary, bold()),
-					chunk(m[3] ?? '', palette.fg.secondary),
-				];
-			}
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		if (/^[✦⚙]/.test(line)) return headerChunks(line, status, palette, defaultFg);
-		// Output / footer rows are secondary (container semantics).
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+			if (/^[✦⚙]/.test(line))
+				return headerChunks(line, status, palette, defaultFg);
+			// Output / footer rows are secondary (container semantics).
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 /**
@@ -228,28 +234,28 @@ export function tokenizeCommandRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, _index, isHeader) => {
-		if (isHeader) {
-			const m = line.match(
-				/^([✦⚙]\s*)?(.*?\s)(Command|Skill)(\s*\(.*)$/,
-			);
-			if (m) {
-				return [
-					...(m[1]
-						? [chunk(m[1], glyphColor(status, palette))]
-						: []),
-					// `Triggered a ` and `(name)` are WHITE (default text),
-					// only the word Command/Skill is primary (parity: the
-					// tool-name convention where Ran/details stay white).
-					chunk(m[2] ?? '', defaultFg),
-					chunk(m[3] ?? '', palette.fg.primary, bold()),
-					chunk(m[4] ?? '', defaultFg),
-				];
+	return emitLines(
+		lines,
+		(line, _index, isHeader) => {
+			if (isHeader) {
+				const m = line.match(/^([✦⚙]\s*)?(.*?\s)(Command|Skill)(\s*\(.*)$/);
+				if (m) {
+					return [
+						...(m[1] ? [chunk(m[1], glyphColor(status, palette))] : []),
+						// `Triggered a ` and `(name)` are WHITE (default text),
+						// only the word Command/Skill is primary (parity: the
+						// tool-name convention where Ran/details stay white).
+						chunk(m[2] ?? '', defaultFg),
+						chunk(m[3] ?? '', palette.fg.primary, bold()),
+						chunk(m[4] ?? '', defaultFg),
+					];
+				}
+				return headerChunks(line, status, palette, defaultFg);
 			}
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 /** Bash row: header with a bash-highlighted command, secondary output. */
@@ -261,36 +267,38 @@ export function tokenizeBashRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			// First content line is the COMMAND: `$ cmd` — the `$` prompt is
-			// secondary, the command keeps its bash syntax highlighting.
-			const cmd = line.match(/^\$\s?(.*)$/);
-			if (cmd) {
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				// First content line is the COMMAND: `$ cmd` — the `$` prompt is
+				// secondary, the command keeps its bash syntax highlighting.
+				const cmd = line.match(/^\$\s?(.*)$/);
+				if (cmd) {
+					return [
+						chunk('$ ', palette.fg.secondary),
+						...tokenizeBash(cmd[1] ?? '', palette, defaultFg),
+					];
+				}
+				return [chunk(line, palette.fg.secondary, dim())];
+			}
+			// Command continuation: `  cmd` (2-space indent, bash-highlighted).
+			const continuation = line.match(/^\s{2}(.*)$/);
+			if (continuation) {
 				return [
-					chunk('$ ', palette.fg.secondary),
-					...tokenizeBash(cmd[1] ?? '', palette, defaultFg),
+					chunk('  ', palette.fg.secondary),
+					...tokenizeBash(continuation[1] ?? '', palette, defaultFg),
 				];
 			}
+			// `… +N more lines` footer inside the box: secondary dim.
+			if (line.startsWith('…')) {
+				return [chunk(line, palette.fg.secondary, dim())];
+			}
+			// Output lines: secondary dim.
 			return [chunk(line, palette.fg.secondary, dim())];
-		}
-		// Command continuation: `  cmd` (2-space indent, bash-highlighted).
-		const continuation = line.match(/^\s{2}(.*)$/);
-		if (continuation) {
-			return [
-				chunk('  ', palette.fg.secondary),
-				...tokenizeBash(continuation[1] ?? '', palette, defaultFg),
-			];
-		}
-		// `… +N more lines` footer inside the box: secondary dim.
-		if (line.startsWith('…')) {
-			return [
-				chunk(line, palette.fg.secondary, dim()),
-			];
-		}
-		// Output lines: secondary dim.
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+		},
+		defaultFg,
+	);
 }
 
 /** File preview: numbered content lines with per-language highlighting. */
@@ -308,32 +316,36 @@ export function tokenizeFileRow(
 	// The fenced token text carries a leading blank line after the opener,
 	// strip it so the header is line 0 and the body cursor stays aligned.
 	const lines = text.replace(/^\n+/, '').replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			// `✦ Write <path>`, glyph by status, `Write` primary bold,
-			// `<path>` secondary.
-			const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
-			if (m) {
-				return [
-					chunk(m[1] ?? '', glyphColor(status, palette)),
-					chunk(m[2] ?? '', palette.fg.primary, bold()),
-					chunk(m[3] ?? '', palette.fg.secondary),
-				];
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				// `✦ Write <path>`, glyph by status, `Write` primary bold,
+				// `<path>` secondary.
+				const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
+				if (m) {
+					return [
+						chunk(m[1] ?? '', glyphColor(status, palette)),
+						chunk(m[2] ?? '', palette.fg.primary, bold()),
+						chunk(m[3] ?? '', palette.fg.secondary),
+					];
+				}
+				return headerChunks(line, status, palette, defaultFg);
 			}
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) {
+			if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) {
+				return [chunk(line, palette.fg.secondary, dim())];
+			}
+			const numbered = line.match(/^(\s*\d+\s+)(.*)$/);
+			if (numbered) {
+				const code = language
+					? tokenizeCode(numbered[2] ?? '', language, palette, defaultFg)
+					: [chunk(numbered[2] ?? '', defaultFg)];
+				return [chunk(numbered[1] ?? '', palette.fg.secondary), ...code];
+			}
 			return [chunk(line, palette.fg.secondary, dim())];
-		}
-		const numbered = line.match(/^(\s*\d+\s+)(.*)$/);
-		if (numbered) {
-			const code = language
-				? tokenizeCode(numbered[2] ?? '', language, palette, defaultFg)
-				: [chunk(numbered[2] ?? '', defaultFg)];
-			return [chunk(numbered[1] ?? '', palette.fg.secondary), ...code];
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+		},
+		defaultFg,
+	);
 }
 
 export interface DiffLine {
@@ -345,10 +357,8 @@ export interface DiffLine {
 
 /** LCS-based line diff with old/new line numbers (parity: DiffView). */
 export function lineDiff(oldStr: string, newStr: string): DiffLine[] {
-	const oldLines =
-		oldStr === '' ? [] : oldStr.replace(/\n+$/, '').split('\n');
-	const newLines =
-		newStr === '' ? [] : newStr.replace(/\n+$/, '').split('\n');
+	const oldLines = oldStr === '' ? [] : oldStr.replace(/\n+$/, '').split('\n');
+	const newLines = newStr === '' ? [] : newStr.replace(/\n+$/, '').split('\n');
 	const n = oldLines.length;
 	const m = newLines.length;
 	const dp: number[][] = Array.from({length: n + 1}, () =>
@@ -369,11 +379,20 @@ export function lineDiff(oldStr: string, newStr: string): DiffLine[] {
 	let newNo = 1;
 	while (i < n && j < m) {
 		if (oldLines[i] === newLines[j]) {
-			result.push({kind: 'context', oldLineNo: oldNo++, newLineNo: newNo++, text: oldLines[i] ?? ''});
+			result.push({
+				kind: 'context',
+				oldLineNo: oldNo++,
+				newLineNo: newNo++,
+				text: oldLines[i] ?? '',
+			});
 			i++;
 			j++;
 		} else if ((dp[i + 1]![j] ?? 0) >= (dp[i]![j + 1] ?? 0)) {
-			result.push({kind: 'remove', oldLineNo: oldNo++, text: oldLines[i] ?? ''});
+			result.push({
+				kind: 'remove',
+				oldLineNo: oldNo++,
+				text: oldLines[i] ?? '',
+			});
 			i++;
 		} else {
 			result.push({kind: 'add', newLineNo: newNo++, text: newLines[j] ?? ''});
@@ -504,7 +523,9 @@ export function tokenizeFileDiff(
 	const renderChange = (row: DiffBodyRow): TextChunk[] => {
 		const kind = row.kind;
 		const fg = kind === 'add' ? palette.fg.success : palette.fg.error;
-		const rowBg = RGBA.fromHex(kind === 'add' ? colors.diffAdded : colors.diffRemoved);
+		const rowBg = RGBA.fromHex(
+			kind === 'add' ? colors.diffAdded : colors.diffRemoved,
+		);
 		const wordBg = RGBA.fromHex(
 			kind === 'add' ? colors.diffAddedWord : colors.diffRemovedWord,
 		);
@@ -539,13 +560,32 @@ export function tokenizeFileDiff(
 		const used =
 			row.indent.length +
 			(row.sigil ?? '').length +
+			// The sigil emits WITH its trailing space (the parse regex
+			// consumed it into `\s+`); without it `+const` glues to the code.
+			1 +
 			(row.number ?? '').length +
 			text.length;
 		return fill(
 			[
-				{...chunk(row.indent, readableDiffFg(rowBg, defaultFg, colors)), bg: rowBg},
-				{...chunk(row.number ?? '', readableDiffFg(rowBg, palette.fg.secondary, colors)), bg: rowBg},
-				{...chunk(row.sigil ?? '', readableDiffFg(rowBg, fg, colors), bold()), bg: rowBg},
+				{
+					...chunk(row.indent, readableDiffFg(rowBg, defaultFg, colors)),
+					bg: rowBg,
+				},
+				{
+					...chunk(
+						row.number ?? '',
+						readableDiffFg(rowBg, palette.fg.secondary, colors),
+					),
+					bg: rowBg,
+				},
+				{
+					...chunk(
+						`${row.sigil ?? ''} `,
+						readableDiffFg(rowBg, fg, colors),
+						bold(),
+					),
+					bg: rowBg,
+				},
 				...code,
 			],
 			used,
@@ -556,59 +596,66 @@ export function tokenizeFileDiff(
 		if (width <= 0) return chunks;
 		const padding = Math.max(0, width - used);
 		return padding > 0
-			? [...chunks, {...chunk(' '.repeat(padding), defaultFg), bg: chunks[0]?.bg}]
+			? [
+					...chunks,
+					{...chunk(' '.repeat(padding), defaultFg), bg: chunks[0]?.bg},
+				]
 			: chunks;
 	};
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			// `✦ Edit <path>`, ONLY the action name (Edit) is primary bold;
-			// the glyph is status-colored and the path stays secondary.
-			const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
-			if (m) {
-				return [
-					chunk(m[1] ?? '', glyphColor(status, palette)),
-					chunk(m[2] ?? '', palette.fg.primary, bold()),
-					chunk(m[3] ?? '', palette.fg.secondary),
-				];
-			}
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) {
-			return [chunk(line, palette.fg.secondary, dim())];
-		}
-		// Diff body rows: consume from the parsed list in order. Header and
-		// summary rows do not consume a body entry (bodyCursor tracks only
-		// rows that were parsed above).
-		const row = body[bodyCursor];
-		if (row && row.raw === line) {
-			bodyCursor++;
-			if (row.kind === 'context') {
-				if (row.number !== undefined && row.text) {
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				// `✦ Edit <path>`, ONLY the action name (Edit) is primary bold;
+				// the glyph is status-colored and the path stays secondary.
+				const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
+				if (m) {
 					return [
-						chunk(row.indent, defaultFg),
-						chunk(row.number, palette.fg.secondary),
-						...(language
-							? tokenizeCode(row.text, language, palette, defaultFg)
-							: [chunk(row.text, defaultFg)]),
+						chunk(m[1] ?? '', glyphColor(status, palette)),
+						chunk(m[2] ?? '', palette.fg.primary, bold()),
+						chunk(m[3] ?? '', palette.fg.secondary),
 					];
 				}
-				// Summary / opaque row.
+				return headerChunks(line, status, palette, defaultFg);
+			}
+			if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) {
 				return [chunk(line, palette.fg.secondary, dim())];
 			}
-			return renderChange(row);
-		}
-		const context = line.match(/^(\s*)(\d+\s+)(.*)$/);
-		if (context) {
-			return [
-				chunk(context[1] ?? '', defaultFg),
-				chunk(context[2] ?? '', palette.fg.secondary),
-				...(language
-					? tokenizeCode(context[3] ?? '', language, palette, defaultFg)
-					: [chunk(context[3] ?? '', defaultFg)]),
-			];
-		}
-		return fill([chunk(line, palette.fg.secondary, dim())], line.length);
-	}, defaultFg);
+			// Diff body rows: consume from the parsed list in order. Header and
+			// summary rows do not consume a body entry (bodyCursor tracks only
+			// rows that were parsed above).
+			const row = body[bodyCursor];
+			if (row && row.raw === line) {
+				bodyCursor++;
+				if (row.kind === 'context') {
+					if (row.number !== undefined && row.text) {
+						return [
+							chunk(row.indent, defaultFg),
+							chunk(row.number, palette.fg.secondary),
+							...(language
+								? tokenizeCode(row.text, language, palette, defaultFg)
+								: [chunk(row.text, defaultFg)]),
+						];
+					}
+					// Summary / opaque row.
+					return [chunk(line, palette.fg.secondary, dim())];
+				}
+				return renderChange(row);
+			}
+			const context = line.match(/^(\s*)(\d+\s+)(.*)$/);
+			if (context) {
+				return [
+					chunk(context[1] ?? '', defaultFg),
+					chunk(context[2] ?? '', palette.fg.secondary),
+					...(language
+						? tokenizeCode(context[3] ?? '', language, palette, defaultFg)
+						: [chunk(context[3] ?? '', defaultFg)]),
+				];
+			}
+			return fill([chunk(line, palette.fg.secondary, dim())], line.length);
+		},
+		defaultFg,
+	);
 }
 
 /** Agent row: `✦ Ran agent:name(task) status` + secondary preview. */
@@ -620,36 +667,42 @@ export function tokenizeAgentRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			// `✦ Ran agent:explore(<task>) <status>`, ONLY `agent:explore` is
-			// primary; `Ran `, `(<task>)` and the status stay secondary.
-			const m = line.match(/^([✦⚙]\s*)?(.*)$/);
-			if (m) {
-				const rest = m[2] ?? '';
-				const agentMatch = rest.match(/^(Ran\s+)(agent:[^()\s]+)((?:\([^)]*\))?)(.*)$/);
-				if (agentMatch) {
-					const agentChunks: TextChunk[] = [];
-					if (m[1]) {
-						agentChunks.push(chunk(m[1], glyphColor(status, palette)));
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				// `✦ Ran agent:explore(<task>) <status>`, ONLY `agent:explore` is
+				// primary; `Ran `, `(<task>)` and the status stay secondary.
+				const m = line.match(/^([✦⚙]\s*)?(.*)$/);
+				if (m) {
+					const rest = m[2] ?? '';
+					const agentMatch = rest.match(
+						/^(Ran\s+)(agent:[^()\s]+)((?:\([^)]*\))?)(.*)$/,
+					);
+					if (agentMatch) {
+						const agentChunks: TextChunk[] = [];
+						if (m[1]) {
+							agentChunks.push(chunk(m[1], glyphColor(status, palette)));
+						}
+						return [
+							...agentChunks,
+							chunk(agentMatch[1] ?? '', palette.fg.secondary),
+							chunk(agentMatch[2] ?? '', palette.fg.primary, bold()),
+							chunk(agentMatch[3] ?? '', palette.fg.secondary),
+							chunk(agentMatch[4] ?? '', palette.fg.secondary),
+						];
 					}
-					return [
-						...agentChunks,
-						chunk(agentMatch[1] ?? '', palette.fg.secondary),
-						chunk(agentMatch[2] ?? '', palette.fg.primary, bold()),
-						chunk(agentMatch[3] ?? '', palette.fg.secondary),
-						chunk(agentMatch[4] ?? '', palette.fg.secondary),
-					];
+					const fallback: TextChunk[] = [];
+					if (m[1]) fallback.push(chunk(m[1], glyphColor(status, palette)));
+					fallback.push(chunk(rest, palette.fg.primary, bold()));
+					return fallback;
 				}
-				const fallback: TextChunk[] = [];
-				if (m[1]) fallback.push(chunk(m[1], glyphColor(status, palette)));
-				fallback.push(chunk(rest, palette.fg.primary, bold()));
-				return fallback;
+				return headerChunks(line, status, palette, defaultFg);
 			}
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 /**
@@ -666,19 +719,23 @@ export function tokenizeThought(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, index, isHeader) => {
-		if (isHeader) {
-			const m = line.match(/^([✦⚙]\s*)(.*)$/);
-			if (m) {
-				return [
-					chunk(m[1] ?? '', palette.fg.secondary, dim()),
-					chunk(m[2] ?? '', palette.fg.secondary, dim()),
-				];
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (isHeader) {
+				const m = line.match(/^([✦⚙]\s*)(.*)$/);
+				if (m) {
+					return [
+						chunk(m[1] ?? '', palette.fg.secondary, dim()),
+						chunk(m[2] ?? '', palette.fg.secondary, dim()),
+					];
+				}
+				return [chunk(line, palette.fg.secondary, dim())];
 			}
 			return [chunk(line, palette.fg.secondary, dim())];
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+		},
+		defaultFg,
+	);
 }
 
 /**
@@ -709,7 +766,9 @@ export function tokenizeUserMessage(
 	const contentChunks = (content: string): TextChunk[] => {
 		const parts: Array<{text: string; token: boolean}> = [];
 		let cursor = 0;
-		for (const match of content.matchAll(/\[(?:Image|Text) #(\d+)\]|\/[^\s]*/g)) {
+		for (const match of content.matchAll(
+			/\[(?:Image|Text) #(\d+)\]|\/[^\s]*/g,
+		)) {
 			const at = match.index ?? 0;
 			if (at > cursor) {
 				parts.push({text: content.slice(cursor, at), token: false});
@@ -717,8 +776,7 @@ export function tokenizeUserMessage(
 			const token = match[0];
 			const isRealAttachment =
 				token.startsWith('[') && real.has(match[1] ?? '');
-			const isCommand =
-				token.startsWith('/') && known.has(token.slice(1));
+			const isCommand = token.startsWith('/') && known.has(token.slice(1));
 			parts.push({text: token, token: isRealAttachment || isCommand});
 			cursor = at + token.length;
 		}
@@ -727,10 +785,7 @@ export function tokenizeUserMessage(
 		}
 		if (parts.length === 0) parts.push({text: content, token: false});
 		return parts.map(part =>
-			chunk(
-				part.text,
-				part.token ? palette.fg.primary : palette.fg.text,
-			),
+			chunk(part.text, part.token ? palette.fg.primary : palette.fg.text),
 		);
 	};
 	// The fenced token text carries a leading blank line after the opener,
@@ -748,40 +803,38 @@ export function tokenizeUserMessage(
 			? [...chunks, {...chunk(' '.repeat(padding), palette.fg.text), bg}]
 			: chunks;
 	};
-	return emitLines(lines, (line, index, isHeader) => {
-		if (!line.trim()) {
-			// The leading blank separator (index 0) stays bg-free; interior
-			// paragraph breaklines get the same full-row surface.
-			if (index === 0) return [chunk(line, palette.fg.text)];
-			return fill(
-				[{...chunk(line, palette.fg.text), bg}],
-				line.length,
-			);
-		}
-		// The `+N more lines` footer (user messages capped for display)
-		// renders secondary-dim INSIDE the surface, consistent with tool
-		// footers.
-		if (/^\s*… \+(\d+) more lines/.test(line) && !isHeader) {
-			return fill(
-				[{...chunk(line, palette.fg.secondary, dim()), bg}],
-				line.length,
-			);
-		}
-		const m = line.match(/^(❯\s*)(.*)$/);
-		if (m && isHeader) {
-			return fill(
-				[
-					chunk(m[1] ?? '', palette.fg.primary, bold()),
-					...contentChunks(m[2] ?? ''),
-				].map(c => ({...c, bg})),
-				line.length,
-			);
-		}
-		return fill(
-			[{...chunk(line, palette.fg.text), bg}],
-			line.length,
-		);
-	}, palette.fg.text);
+	return emitLines(
+		lines,
+		(line, index, isHeader) => {
+			if (!line.trim()) {
+				// The leading blank separator (index 0) stays bg-free; interior
+				// paragraph breaklines get the same full-row surface.
+				if (index === 0) return [chunk(line, palette.fg.text)];
+				return fill([{...chunk(line, palette.fg.text), bg}], line.length);
+			}
+			// The `+N more lines` footer (user messages capped for display)
+			// renders secondary-dim INSIDE the surface, consistent with tool
+			// footers.
+			if (/^\s*… \+(\d+) more lines/.test(line) && !isHeader) {
+				return fill(
+					[{...chunk(line, palette.fg.secondary, dim()), bg}],
+					line.length,
+				);
+			}
+			const m = line.match(/^(❯\s*)(.*)$/);
+			if (m && isHeader) {
+				return fill(
+					[
+						chunk(m[1] ?? '', palette.fg.primary, bold()),
+						...contentChunks(m[2] ?? ''),
+					].map(c => ({...c, bg})),
+					line.length,
+				);
+			}
+			return fill([{...chunk(line, palette.fg.text), bg}], line.length);
+		},
+		palette.fg.text,
+	);
 }
 
 /**
@@ -796,25 +849,29 @@ export function tokenizeTaskRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, _index, isHeader) => {
-		if (isHeader) return headerChunks(line, status, palette, defaultFg);
-		const icon = line.match(/^(\s*)([◐✓○])(\s+)(.*)$/);
-		if (icon) {
-			const fg =
-				icon[2] === '✓'
-					? palette.fg.success
-					: icon[2] === '◐'
-						? palette.fg.warning
-						: palette.fg.secondary;
-			return [
-				chunk(icon[1] ?? '', defaultFg),
-				chunk(icon[2] ?? '', fg, bold()),
-				chunk(icon[3] ?? '', defaultFg),
-				chunk(icon[4] ?? '', defaultFg),
-			];
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+	return emitLines(
+		lines,
+		(line, _index, isHeader) => {
+			if (isHeader) return headerChunks(line, status, palette, defaultFg);
+			const icon = line.match(/^(\s*)([◐✓○])(\s+)(.*)$/);
+			if (icon) {
+				const fg =
+					icon[2] === '✓'
+						? palette.fg.success
+						: icon[2] === '◐'
+							? palette.fg.warning
+							: palette.fg.secondary;
+				return [
+					chunk(icon[1] ?? '', defaultFg),
+					chunk(icon[2] ?? '', fg, bold()),
+					chunk(icon[3] ?? '', defaultFg),
+					chunk(icon[4] ?? '', defaultFg),
+				];
+			}
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 /**
@@ -826,56 +883,62 @@ export function tokenizeStatusRow(text: string, colors: Colors): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, line => {
-		const label = line.match(/^(\S+:\s*)(.*)$/);
-		if (label) {
-			return [
-				chunk(label[1] ?? '', palette.fg.secondary),
-				chunk(label[2] ?? '', defaultFg),
-			];
-		}
-		return [chunk(line, defaultFg)];
-	}, defaultFg);
+	return emitLines(
+		lines,
+		line => {
+			const label = line.match(/^(\S+:\s*)(.*)$/);
+			if (label) {
+				return [
+					chunk(label[1] ?? '', palette.fg.secondary),
+					chunk(label[2] ?? '', defaultFg),
+				];
+			}
+			return [chunk(line, defaultFg)];
+		},
+		defaultFg,
+	);
 }
 
 /** Error row: `⚠ message` in the error color (light red). */
-export function tokenizeErrorRow(
-	text: string,
-	colors: Colors,
-): TextChunk[] {
+export function tokenizeErrorRow(text: string, colors: Colors): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, line => {
-		const m = line.match(/^(⚠\s*)(.*)$/);
-		if (m) {
-			return [
-				chunk(m[1] ?? '', palette.fg.error, bold()),
-				chunk(m[2] ?? '', palette.fg.error),
-			];
-		}
-		return [chunk(line, palette.fg.error)];
-	}, defaultFg);
+	return emitLines(
+		lines,
+		line => {
+			const m = line.match(/^(⚠\s*)(.*)$/);
+			if (m) {
+				return [
+					chunk(m[1] ?? '', palette.fg.error, bold()),
+					chunk(m[2] ?? '', palette.fg.error),
+				];
+			}
+			return [chunk(line, palette.fg.error)];
+		},
+		defaultFg,
+	);
 }
 
 /** Warning rows (e.g. the vision-fallback indicator) in the WARNING color. */
-export function tokenizeWarningRow(
-	text: string,
-	colors: Colors,
-): TextChunk[] {
+export function tokenizeWarningRow(text: string, colors: Colors): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, line => {
-		const m = line.match(/^([✦]\s*)(.*)$/);
-		if (m) {
-			return [
-				chunk(m[1] ?? '', palette.fg.warning),
-				chunk(m[2] ?? '', palette.fg.warning),
-			];
-		}
-		return [chunk(line, palette.fg.warning)];
-	}, defaultFg);
+	return emitLines(
+		lines,
+		line => {
+			const m = line.match(/^([✦]\s*)(.*)$/);
+			if (m) {
+				return [
+					chunk(m[1] ?? '', palette.fg.warning),
+					chunk(m[2] ?? '', palette.fg.warning),
+				];
+			}
+			return [chunk(line, palette.fg.warning)];
+		},
+		defaultFg,
+	);
 }
 
 /**
@@ -883,50 +946,57 @@ export function tokenizeWarningRow(
  * purpose, `model:` info with a text value + secondary hint, `directory:`
  * secondary, `permissions:` warning with the mode in error/warning.
  */
-export function tokenizeBanner(
-	text: string,
-	colors: Colors,
-): TextChunk[] {
+export function tokenizeBanner(text: string, colors: Colors): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line) => {
-		if (/^[╭╰][─]+[╮╯]$/.test(line)) {
-			return [chunk(line, palette.fg.primary, bold())];
-		}
-		if (/^[│].*[│]$/.test(line)) {
-			const chunks: TextChunk[] = [];
-			let rest = line;
-			// Leading/trailing border.
-			if (rest.startsWith('│')) {
-				chunks.push(chunk('│', palette.fg.primary));
-				rest = rest.slice(1);
+	return emitLines(
+		lines,
+		line => {
+			if (/^[╭╰][─]+[╮╯]$/.test(line)) {
+				return [chunk(line, palette.fg.primary, bold())];
 			}
-			const close = rest.lastIndexOf('│');
-			if (close !== -1) {
-				// Mascot (★ / ╭◕‿◕╮ / ╰───╯) and title in primary.
-				const body = rest.slice(0, close);
-				const tail = rest.slice(close);
-				// Match against `body` (NOT `rest`): rest still contains the
-				// closing `│`, and the greedy `(.*)$` would swallow it, the
-				// border would render twice (`││`).
-				const mascot = body.match(/^(\s*)(★\s*|╭◕‿◕╮|╰───╯)(.*)$/);
-				if (mascot) {
-					chunks.push(chunk(mascot[1] ?? '', defaultFg));
-					chunks.push(chunk(mascot[2] ?? '', palette.fg.primary, bold()));
-					chunks.push(...bannerBody(body.slice((mascot[1] ?? '').length + (mascot[2] ?? '').length), palette, defaultFg));
-				} else {
-					chunks.push(...bannerBody(body, palette, defaultFg));
+			if (/^[│].*[│]$/.test(line)) {
+				const chunks: TextChunk[] = [];
+				let rest = line;
+				// Leading/trailing border.
+				if (rest.startsWith('│')) {
+					chunks.push(chunk('│', palette.fg.primary));
+					rest = rest.slice(1);
 				}
-				chunks.push(chunk(tail, palette.fg.primary));
-			} else {
-				chunks.push(...bannerBody(rest, palette, defaultFg));
+				const close = rest.lastIndexOf('│');
+				if (close !== -1) {
+					// Mascot (★ / ╭◕‿◕╮ / ╰───╯) and title in primary.
+					const body = rest.slice(0, close);
+					const tail = rest.slice(close);
+					// Match against `body` (NOT `rest`): rest still contains the
+					// closing `│`, and the greedy `(.*)$` would swallow it, the
+					// border would render twice (`││`).
+					const mascot = body.match(/^(\s*)(★\s*|╭◕‿◕╮|╰───╯)(.*)$/);
+					if (mascot) {
+						chunks.push(chunk(mascot[1] ?? '', defaultFg));
+						chunks.push(chunk(mascot[2] ?? '', palette.fg.primary, bold()));
+						chunks.push(
+							...bannerBody(
+								body.slice((mascot[1] ?? '').length + (mascot[2] ?? '').length),
+								palette,
+								defaultFg,
+							),
+						);
+					} else {
+						chunks.push(...bannerBody(body, palette, defaultFg));
+					}
+					chunks.push(chunk(tail, palette.fg.primary));
+				} else {
+					chunks.push(...bannerBody(rest, palette, defaultFg));
+				}
+				return chunks;
 			}
-			return chunks;
-		}
-		// Tip line.
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+			// Tip line.
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 function bannerBody(
@@ -994,22 +1064,30 @@ export function tokenizeDiffRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
-	return emitLines(lines, (line, _index, isHeader) => {
-		if (isHeader || /^[✦⚙]/.test(line)) {
-			return headerChunks(line, status, palette, defaultFg);
-		}
-		const trimmed = line.trimStart();
-		if (trimmed.startsWith('+++') || trimmed.startsWith('---') || trimmed.startsWith('@@')) {
-			return [chunk(line, palette.fg.info, bold())];
-		}
-		if (trimmed.startsWith('+')) {
-			return [chunk(line, palette.fg.success)];
-		}
-		if (trimmed.startsWith('-')) {
-			return [chunk(line, palette.fg.error)];
-		}
-		return [chunk(line, palette.fg.secondary, dim())];
-	}, defaultFg);
+	return emitLines(
+		lines,
+		(line, _index, isHeader) => {
+			if (isHeader || /^[✦⚙]/.test(line)) {
+				return headerChunks(line, status, palette, defaultFg);
+			}
+			const trimmed = line.trimStart();
+			if (
+				trimmed.startsWith('+++') ||
+				trimmed.startsWith('---') ||
+				trimmed.startsWith('@@')
+			) {
+				return [chunk(line, palette.fg.info, bold())];
+			}
+			if (trimmed.startsWith('+')) {
+				return [chunk(line, palette.fg.success)];
+			}
+			if (trimmed.startsWith('-')) {
+				return [chunk(line, palette.fg.error)];
+			}
+			return [chunk(line, palette.fg.secondary, dim())];
+		},
+		defaultFg,
+	);
 }
 
 /** Relative luminance of an RGBA color (0..1, Rec. 709 weights). */

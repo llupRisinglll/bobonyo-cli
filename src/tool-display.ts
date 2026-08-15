@@ -329,18 +329,23 @@ function lineDiffText(oldStr: string, newStr: string, baseLine = 1): string {
 	// occurrence sat). Context rows carry the old line number, which equals
 	// the new line number for unchanged lines.
 	const offset = Math.max(0, baseLine - 1);
+	// INDENT: every diff row carries a fixed 2-space container lead, so the
+	// numbered block nests under the `✦ Edit` header instead of rendering
+	// flush at column 0 (parity: tool/thought bodies sit inside their
+	// container). The number field is right-aligned in a 4-wide gutter.
+	const lead = '  ';
 	return diff
 		.map(line => {
 			const text = line.text;
 			if (line.kind === 'add') {
-				return `${String((line.newLineNo ?? 1) + offset).padStart(4, ' ')} + ${text}`;
+				return `${lead}${String((line.newLineNo ?? 1) + offset).padStart(4, ' ')} + ${text}`;
 			}
 			if (line.kind === 'remove') {
-				return `${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')} - ${text}`;
+				return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')} - ${text}`;
 			}
 			// Context rows carry a SPACE in the sigil column so the numbers
 			// align with the +/- rows (`   3   text`).
-			return `${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
+			return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
 		})
 		.join('\n');
 }

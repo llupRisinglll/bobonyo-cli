@@ -315,28 +315,46 @@ describe('liveRowSegments', () => {
 			);
 			// Context row: unchanged `const a` sits at file line 42; the
 			// added line lands at 43 — NEVER the snippet-relative 1 / 2.
-			expect(raw).toContain('  42   const a = 1;');
-			expect(raw).toContain('  43 + const b = 2;');
+			// Every row also carries the fixed 2-space container lead (the
+			// diff block must not render flush at column 0) and the sigil
+			// keeps its trailing space (`+ const`, never `+const`).
+			expect(raw).toContain('    42   const a = 1;');
+			expect(raw).toContain('    43 + const b = 2;');
 			expect(raw).not.toMatch(/\n\s*1\s/);
-			expect(raw).not.toContain('   1   const a = 1;');
+			expect(raw).not.toContain('     1   const a = 1;');
+			expect(raw).not.toContain('+const');
+			expect(raw).not.toContain('-const');
 		});
-
 		test('an edit at the TOP of the file stays line 1 (no bogus offset)', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts (at line 1)\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain('   1   const a = 1;');
-			expect(raw).toContain('   2 + const b = 2;');
+			expect(raw).toContain('     1   const a = 1;');
+			expect(raw).toContain('     2 + const b = 2;');
 		});
-
 		test('legacy results without the marker keep snippet-relative numbers', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain('   1   const a = 1;');
-			expect(raw).toContain('   2 + const b = 2;');
+			expect(raw).toContain('     1   const a = 1;');
+			expect(raw).toContain('     2 + const b = 2;');
 		});
-
+		test('the diff body is INDENTED (2-space container lead on every row)', () => {
+			// Every diff row starts with the same fixed lead so the block
+			// nests under the `✦ Edit` header — a regression to the old
+			// flush-left number field (1/2/3-digit numbers at shifting
+			// columns) fails this.
+			const raw = tool(
+				'Replaced 1 occurrence in src/foo.ts (at line 1)\nconst a = 1;\nconst b = 2;',
+			);
+			const rows = raw.split('\n').filter(line => /^\s*\d+\s+[-+ ]/.test(line));
+			expect(rows.length).toBeGreaterThan(0);
+			for (const row of rows) {
+				// Fixed 2-space lead before the number gutter.
+				expect(row.slice(0, 2)).toBe('  ');
+				expect(row).toMatch(/^  \s{2,3}\d+\s/);
+			}
+		});
 		test('replacementBaseLine parses the marker and falls back to 1', () => {
 			expect(
 				replacementBaseLine(
