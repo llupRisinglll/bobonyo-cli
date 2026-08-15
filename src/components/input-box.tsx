@@ -24,6 +24,7 @@ import {
 	contextPercent,
 	exitConfirm,
 	gearGlyph,
+	reasoning,
 	thinkingMode,
 	historyIndex,
 	input,
