@@ -98,6 +98,18 @@ describe('supportsExtendedKeys (allowlist gate)', () => {
 		}
 		restore();
 	});
+	test('herdr panes are enabled via HERDR_ENV=1 (no TERM_PROGRAM set)', () => {
+		// herdr sets ONLY TERM=xterm-256color + HERDR_ENV=1; without the
+		// marker the pane looks like plain xterm and extended keys stay off
+		// (the "new line is not working here" bug).
+		delete process.env.TERM_PROGRAM;
+		process.env.TERM = 'xterm-256color';
+		process.env.HERDR_ENV = '1';
+		expect(supportsExtendedKeys()).toBe(true);
+		delete process.env.HERDR_ENV;
+		expect(supportsExtendedKeys()).toBe(false);
+		restore();
+	});
 	test('herdr via TERM (no TERM_PROGRAM) is enabled too', () => {
 		delete process.env.TERM_PROGRAM;
 		process.env.TERM = 'xterm-herdr';

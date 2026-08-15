@@ -1174,6 +1174,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// Allowlist safety: unknown terminals default OFF.
 		expect(keys).toMatch(/EXTENDED_KEYS_TERMINALS/);
 		expect(keys).toMatch(/return false;/);
+		// herdr panes are marked by HERDR_ENV=1 (TERM_PROGRAM is unset) —
+		// without this the protocol never enables inside herdr.
+		expect(keys).toMatch(/HERDR_ENV === '1'/);
 		// Shift+Enter: kitty stored mod 2 = shift → xterm mod 2.
 		expect(keys).toMatch(/Math\.max\(0, stored - 1\)/);
 		expect(keys).toMatch(/mask & 1 \? 1 : 0/);

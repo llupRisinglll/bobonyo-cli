@@ -55,6 +55,11 @@ const EXTENDED_KEYS_TERMINALS = [
 export function supportsExtendedKeys(): boolean {
 	// Explicit opt-out wins (troubleshooting / SSH / xterm.js hosts).
 	if (process.env.BOBONYO_DISABLE_EXTENDED_KEYS === '1') return false;
+	// herdr multiplexer: marks every pane with HERDR_ENV=1 (TERM_PROGRAM is
+	// NOT set, only TERM=xterm-256color, so the marker is the only signal).
+	// herdr implements both >1u and >4;2m (verified: kitty backspace and
+	// Shift+Enter work), so panes inside herdr always get extended keys.
+	if (process.env.HERDR_ENV === '1') return true;
 	const term = process.env.TERM_PROGRAM?.toLowerCase() ?? '';
 	if (EXTENDED_KEYS_TERMINALS.includes(term)) return true;
 	// herdr also surfaces as TERM=herdr-direct / TERM=xterm-herdr.
