@@ -5,6 +5,7 @@ import {
 	modelWithProvider,
 	nextModelCursor,
 	providerDisplayName,
+	providerHeaderParts,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
@@ -94,6 +95,32 @@ describe('providerDisplayName (actual provider name, not the raw id)', () => {
 				modelEfforts: {},
 			}),
 		).toBe('legacy');
+	});
+});
+
+describe('providerHeaderParts (user name first, real name secondary)', () => {
+	test('carries BOTH names when they differ', () => {
+		expect(
+			providerHeaderParts({
+				id: 'deepseek',
+				name: 'deepseek',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toEqual({user: 'deepseek', real: 'DeepSeek'});
+	});
+
+	test('omits the real name when it matches the user name (no duplication)', () => {
+		expect(
+			providerHeaderParts({
+				id: 'my-gateway',
+				name: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toEqual({user: 'my-gateway', real: undefined});
 	});
 });
 

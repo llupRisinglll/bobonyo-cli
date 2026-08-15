@@ -60,6 +60,20 @@ export function providerDisplayName(provider: ModelProvider): string {
 	return preset?.title ?? (provider.name || provider.id);
 }
 
+/**
+ * Header label parts for a provider group: the USER-GIVEN connection name
+ * first, plus the REAL provider name when it differs (rendered secondary —
+ * `(deepseek · DeepSeek)`). Pure, unit-tested.
+ */
+export function providerHeaderParts(provider: ModelProvider): {
+	user: string;
+	real?: string;
+} {
+	const user = provider.name || provider.id;
+	const real = providerDisplayName(provider);
+	return {user, real: real && real !== user ? real : undefined};
+}
+
 type Row =
 	| {kind: 'provider'; provider: ModelProvider; expanded: boolean; isCurrent: boolean}
 	| {kind: 'model'; provider: ModelProvider; model: string; isCurrent: boolean}
@@ -844,16 +858,29 @@ export function ModelModal(props: {
 								);
 							}
 							if (line.kind === 'provider') {
+								const parts = line.provider
+									? providerHeaderParts(line.provider)
+									: null;
 								return (
 									<box flexDirection="row" height={1}>
 										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
 											(
-											{line.provider
-												? providerDisplayName(
-														line.provider,
-													)
-												: ''}
+											{parts?.user ?? ''}
+											{parts?.real ? (
+												<span
+													style={{
+														fg: colors()
+															.secondary as never,
+														attributes: dim(),
+													}}
+												>
+													{' · '}
+													{parts.real}
+												</span>
+											) : (
+												<></>
+											)}
 											)
 											{line.isCurrent ? ' (current)' : ''}
 										</text>
