@@ -61,10 +61,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// reply must too, or the streaming text glues to the user message and
 		// visibly shifts down by one row when it settles.
 		const start = history.indexOf('<Show when={liveReplyText()}>');
-		const section = history.slice(
-			start,
-			history.indexOf('</Show>', start),
-		);
+		const section = history.slice(start, history.indexOf('</Show>', start));
 		expect(section).toMatch(/<box height=\{1\} \/>/);
 		expect(section.indexOf('<box height={1} />')).toBeLessThan(
 			section.indexOf('<box flexDirection="row">'),
@@ -201,7 +198,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const app = read('./app.tsx');
 		expect(app).toMatch(/const switchEffort = \(args: string\) =>/);
 		expect(app).toMatch(/EFFORT_LEVELS\.includes/);
-		expect(read('./config.ts')).toMatch(/modelEfforts\?: Record<string, string>/);
+		expect(read('./config.ts')).toMatch(
+			/modelEfforts\?: Record<string, string>/,
+		);
 	});
 
 	test('bare /effort opens the effort picker modal (never the input row)', () => {
@@ -210,9 +209,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/if \(!level\) \{\n\s*setEffortOpen\(true\)/);
 		expect(app).toMatch(/<EffortModal/);
 		expect(app).toMatch(/onSelect=\{level => \{\n\s*applyEffort\(level\)/);
-		expect(read('./components/input-box.tsx')).toMatch(
-			/anyModalOpen\(\)/,
-		);
+		expect(read('./components/input-box.tsx')).toMatch(/anyModalOpen\(\)/);
 		// Effort picker owns every key while open.
 		expect(app).toMatch(/connectOpen\(\) \|\|\n\s*effortOpen\(\)/);
 	});
@@ -235,9 +232,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(config).toMatch(/const stale = disk\.entries\[discoveryUrl\]/);
 		// DeepSeek/MiMo fetchers fall back to the stale DISK catalog too.
 		const deepseek = read('./deepseek.ts');
-		expect(deepseek).toMatch(
-			/staleCachedModels\(loadDeepSeekCache\(\), key\)/,
-		);
+		expect(deepseek).toMatch(/staleCachedModels\(loadDeepSeekCache\(\), key\)/);
 	});
 
 	test('project .nanocoder folders auto-migrate to .bobonyo', () => {
@@ -248,8 +243,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The migration runs wherever project dirs resolve (config/custom/
 		// subagents), so Hilinga-style project agents/commands/skills move.
 		expect(read('./config.ts')).toMatch(/migrateProjectDir\(/);
-		expect(read('./custom.ts')).toMatch(/migrateProjectDir\(process\.cwd\(\)\)/);
-		expect(read('./subagents.ts')).toMatch(/migrateProjectDir\(process\.cwd\(\)\)/);
+		expect(read('./custom.ts')).toMatch(
+			/migrateProjectDir\(process\.cwd\(\)\)/,
+		);
+		expect(read('./subagents.ts')).toMatch(
+			/migrateProjectDir\(process\.cwd\(\)\)/,
+		);
 	});
 
 	test('the DeepSeek preset seeds the CURRENT v4 catalog', () => {
@@ -284,7 +283,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('the provider modal auto-widens and tiles on big screens', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
-		expect(modal).toMatch(/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/);
+		expect(modal).toMatch(
+			/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/,
+		);
 		expect(modal).toMatch(/providerColumns\(cardWidth\(\)\)/);
 		expect(modal).toMatch(/visibleGridRows\(\)/);
 		// Height autofits EVERY step (fit-content): each view computes its own
@@ -323,9 +324,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(config).toMatch(
 			/lastProvider\.toLowerCase\(\) === id\.toLowerCase\(\)/,
 		);
-		expect(config).toMatch(
-			/lastProvider: undefined,\s*lastModel: undefined/,
-		);
+		expect(config).toMatch(/lastProvider: undefined,\s*lastModel: undefined/);
 	});
 
 	test('modal input placeholders use the blinking caret (input-box parity)', () => {
@@ -439,7 +438,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(status).toMatch(/· cache/);
 		// Provider-agnostic: the cache rate must render for ANY provider that
 		// reports cache fields, never gated on DeepSeek.
-		expect(status).not.toMatch(/isDeepSeek\(activeEndpoint\(\)\) && formatCacheRate/);
+		expect(status).not.toMatch(
+			/isDeepSeek\(activeEndpoint\(\)\) && formatCacheRate/,
+		);
 	});
 
 	test('long conversations COMPACT before the message cap trims the head', () => {
@@ -452,7 +453,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// summary instead of a per-turn miss.
 		const app = read('./app.tsx');
 		expect(app).toMatch(/shouldAutoCompact/);
-		expect(app).toMatch(/context\(\)\.length >= maxMessages\(\) - AUTO_COMPACT_MESSAGE_MARGIN/);
+		expect(app).toMatch(
+			/context\(\)\.length >= maxMessages\(\) - AUTO_COMPACT_MESSAGE_MARGIN/,
+		);
 		expect(app).toMatch(/if \(shouldAutoCompact\(\)\) triggerAutoCompact\(\)/);
 		const settings = read('./settings.ts');
 		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 75\}/);
@@ -495,7 +498,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The LIVE thinking header must ANIMATE: gear + dots BEFORE the
 		// timer. A regression to the old static `⚙ Thinking · (Ns)...` (dots
 		// AFTER the timer, static gear) fails this.
-		expect(history).toMatch(/liveThinkingHeader\(spinnerFrame\(\), thinkingElapsed\(\)\)/);
+		expect(history).toMatch(
+			/liveThinkingHeader\(spinnerFrame\(\), thinkingElapsed\(\)\)/,
+		);
 		expect(history).not.toMatch(/Thinking · \(\$\{formatElapsed/);
 	});
 
@@ -527,7 +532,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The statusline Cred segment is provider-scoped like the MiMo used
 		// segment (a stale balance must not linger on other providers).
 		const status = read('./components/status.tsx');
-		expect(status).toMatch(/isDeepSeek\(activeEndpoint\(\)\) && deepSeekBalance\(\)/);
+		expect(status).toMatch(
+			/isDeepSeek\(activeEndpoint\(\)\) && deepSeekBalance\(\)/,
+		);
 	});
 
 	test('input sits below the banner and slides down like a terminal prompt', () => {
@@ -569,7 +576,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// message); the history cap must subtract both or the status line
 		// overlaps the input box while the notice is visible.
 		expect(app).toMatch(
-			/completionMessageRows\(\s*completionMessage\(\),\s*completionTone\(\),\s*\)/,
+			/completionMessageRows\(\s*completionMessage\(\),\s*completionTone\(\)\s*,?\s*\)/,
 		);
 		const input = read('./components/input-box.tsx');
 		expect(input).toMatch(/tone === 'success' \? 2 : 1/);
@@ -703,7 +710,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/renderToolRun\(run, fillWidth\)/);
 		expect(history).toMatch(/singleToolRow\(block\[0\]!, key, width\)/);
 		// The LIVE path passes the same render width.
-		expect(history).toMatch(/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\),/);
+		expect(history).toMatch(
+			/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\),/,
+		);
 	});
 
 	test('bash entries render as ONE native bordered box (component, not text)', () => {
@@ -749,7 +758,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const history = read('./components/history.tsx');
 		expect(history).toMatch(/prevRefsByBlock/);
 		expect(history).toMatch(/prevRefsByBlock\.set\(entry\.block, entry\.ref\)/);
-		expect(history).toMatch(/prevRefsByBlock\.get\(stableBlocks\[groupIndex\]!\) \?\? null/);
+		expect(history).toMatch(
+			/prevRefsByBlock\.get\(stableBlocks\[groupIndex\]!\) \?\? null/,
+		);
 	});
 
 	test('tool loop is uncapped; runaway protection stays guard-based', () => {
@@ -793,12 +804,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			app.indexOf('const assistantToolMsg: ChatMessageLike'),
 		);
 		expect(toolTurn).toMatch(/result\.text\.trim\(\)/);
-		expect(toolTurn).toMatch(/callIndex === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/);
-		expect(toolTurn).toMatch(/index === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/);
-		expect(toolTurn).not.toMatch(/appendAssistantMessage\(scrubberRef\.rehydrate\(result\.text\)\)/);
+		expect(toolTurn).toMatch(
+			/callIndex === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/,
+		);
+		expect(toolTurn).toMatch(
+			/index === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/,
+		);
+		expect(toolTurn).not.toMatch(
+			/appendAssistantMessage\(scrubberRef\.rehydrate\(result\.text\)\)/,
+		);
 		// The row component renders the brief ONCE above the box.
 		const row = read('./components/bash-tool-row.tsx');
-		expect(row).toMatch(/<Show when=\{props\.brief && props\.brief\.trim\(\)\}>/);
+		expect(row).toMatch(
+			/<Show when=\{props\.brief && props\.brief\.trim\(\)\}>/,
+		);
 	});
 
 	test('consecutive tool ROUNDS each keep their own brief once settled', () => {
@@ -813,7 +832,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			history.indexOf('for (const row of renderToolRun(run, fillWidth))'),
 			history.indexOf('for (const row of renderToolRun(run, fillWidth))') + 400,
 		);
-		expect(settled).toMatch(/pushBlock\(row\.text, row\.blockKey, 'md', row\.brief\)/);
+		expect(settled).toMatch(
+			/pushBlock\(row\.text, row\.blockKey, 'md', row\.brief\)/,
+		);
 		expect(history).not.toMatch(/runBrief = run\[0\]\?\.brief/);
 		// renderToolRun threads each block's OWN brief into its row, and a
 		// same-family tally breaks when a NEW narration starts (so compact
@@ -968,10 +989,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// is not in the gate list leaks arrow/typing keys into the chat
 		// input and the history scrollbox behind it (the k-scrolls bug
 		// class).
-		expect(read('./app.tsx')).toMatch(/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/);
-		expect(read('./components/input-box.tsx')).toMatch(
-			/anyModalOpen\(\)/,
+		expect(read('./app.tsx')).toMatch(
+			/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/,
 		);
+		expect(read('./components/input-box.tsx')).toMatch(/anyModalOpen\(\)/);
 	});
 
 	test('every modal with an input handles paste (never leaks to the chat box)', () => {
@@ -1052,9 +1073,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			/!\(thinkingMode\(\) === 'show' && liveThoughtHeader\(\)\)/,
 		);
 		const panel = read('./components/settings-panel.tsx');
-		expect(panel).toMatch(
-			/thinkingMode: \['hidden', 'show', 'line'\]/,
-		);
+		expect(panel).toMatch(/thinkingMode: \['hidden', 'show', 'line'\]/);
 	});
 
 	test('line mode: ticker renders in input-box, not in chat history', () => {
@@ -1062,7 +1081,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The ticker row is gated on the pure helper (line + busy +
 		// ACTIVELY thinking), never on the raw reasoning buffer — a stale
 		// buffer during tool runs must not leave a stuck line.
-		expect(input).toMatch(/lineTickerVisible\(thinkingMode\(\), busy\(\), thinkingActive\(\)\)/);
+		expect(input).toMatch(
+			/lineTickerVisible\(thinkingMode\(\), busy\(\), thinkingActive\(\)\)/,
+		);
 		// The ticker shows the one-line reasoning via liveThoughtOneLine.
 		expect(input).toMatch(/liveThoughtOneLine/);
 		const history = read('./components/history.tsx');

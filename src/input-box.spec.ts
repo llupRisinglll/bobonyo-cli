@@ -15,10 +15,7 @@ import {
 	lineTickerVisible,
 	workingLabel,
 } from './components/input-box';
-import {
-	wrapText,
-	wrapTextDetailed,
-} from './text-wrap';
+import {wrapText, wrapTextDetailed} from './text-wrap';
 
 describe('wrapText', () => {
 	test('wraps long lines at the width preserving words', () => {
@@ -111,7 +108,9 @@ describe('completionMessageRows (resume notice height)', () => {
 	});
 
 	test('normal completion lines occupy one row', () => {
-		expect(completionMessageRows('✦ Worked for a brisk 42s.', 'default')).toBe(1);
+		expect(completionMessageRows('✦ Worked for a brisk 42s.', 'default')).toBe(
+			1,
+		);
 	});
 
 	test('the success resume notice occupies TWO rows (breakline + message)', () => {
@@ -182,12 +181,8 @@ describe('tokenizeInputLine', () => {
 
 describe('atomic token navigation helpers', () => {
 	test('treats attachment blocks as atomic; commands stay ordinary text', () => {
-		expect(atomicTokens('x[Image #1]')).toEqual([
-			{start: 1, end: 11},
-		]);
-		expect(atomicTokens('/mock:md [Text #2]')).toEqual([
-			{start: 9, end: 18},
-		]);
+		expect(atomicTokens('x[Image #1]')).toEqual([{start: 1, end: 11}]);
+		expect(atomicTokens('/mock:md [Text #2]')).toEqual([{start: 9, end: 18}]);
 	});
 
 	test('tokenEndingAt matches a token end exactly', () => {
@@ -253,10 +248,7 @@ describe('word-jump helpers (Ctrl+Left / Ctrl+Right)', () => {
 describe('wrapTextDetailed', () => {
 	test('records raw start offsets for wrapped lines', () => {
 		const lines = wrapTextDetailed('one two three', 8);
-		expect(lines.map(entry => entry.text)).toEqual([
-			'one two ',
-			'three',
-		]);
+		expect(lines.map(entry => entry.text)).toEqual(['one two ', 'three']);
 		expect(lines.map(entry => entry.start)).toEqual([0, 8]);
 	});
 

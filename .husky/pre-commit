@@ -1,0 +1,12 @@
+# Pre-commit: prettier format staged files, then run the test suite.
+# Prettier runs on the files about to be committed only (never the whole
+# repo), so untouched legacy files keep their original formatting.
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|mjs|js|json|md)$' || true)
+if [ -n "$staged" ]; then
+  if ! echo "$staged" | xargs -r npx prettier --write --log-level warn; then
+    echo "prettier failed — fix formatting and re-stage."
+    exit 1
+  fi
+  echo "$staged" | xargs -r git add
+fi
+bun test

@@ -62,11 +62,7 @@ import {
 	toolResultTail,
 } from './tools';
 import {activeBgCount, bgTasks, runBash} from './bash';
-import {
-	COMMAND_DESCRIPTIONS,
-	findCustomCommand,
-	runCommand,
-} from './commands';
+import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
 import {
 	loadSettings,
 	resumeCwdDecision,
@@ -407,19 +403,22 @@ export function App() {
 	// DeepSeek balance/model refresh cadence (5 min, mirroring the balance
 	// TTL). The refresh itself reads the disk cache first, so this interval
 	// and the event-triggered refreshes share one request when fresh.
-	setInterval(() => {
-		const endpoint = activeEndpoint();
-		if (!isDeepSeek(endpoint)) return;
-		void refreshDeepSeekBalance(endpoint).then(balance => {
-			if (balance) {
-				setDeepSeekBalance({
-					currency: balance.currency,
-					total: balance.total,
-					isAvailable: balance.isAvailable,
-				});
-			}
-		});
-	}, 5 * 60 * 1000);
+	setInterval(
+		() => {
+			const endpoint = activeEndpoint();
+			if (!isDeepSeek(endpoint)) return;
+			void refreshDeepSeekBalance(endpoint).then(balance => {
+				if (balance) {
+					setDeepSeekBalance({
+						currency: balance.currency,
+						total: balance.total,
+						isAvailable: balance.isAvailable,
+					});
+				}
+			});
+		},
+		5 * 60 * 1000,
+	);
 
 	// Provider init (E2): resolve the requested/first provider and publish the
 	// active endpoint; the client reads it for every request.
@@ -451,7 +450,7 @@ export function App() {
 				const preferredModel =
 					prefs.lastModel && catalog.includes(prefs.lastModel)
 						? prefs.lastModel
-						: catalog[0] ?? 'mock-model-1';
+						: (catalog[0] ?? 'mock-model-1');
 				setActiveEndpoint({
 					id: provider.id,
 					name: provider.name ?? provider.id,
@@ -570,10 +569,7 @@ export function App() {
 	}
 	// A2: first-run trust gate. Only prompts when using the DEFAULT config dir
 	//, isolated configs (parity runs, tests) are implicitly trusted.
-	if (
-		!process.env.BOBONYO_CONFIG_DIR &&
-		!process.env.NANOCODER_CONFIG_DIR
-	) {
+	if (!process.env.BOBONYO_CONFIG_DIR && !process.env.NANOCODER_CONFIG_DIR) {
 		const cwd = process.cwd();
 		const trusted = (loadSettings().trustedDirs ?? []).includes(cwd);
 		if (!trusted) {
@@ -587,10 +583,7 @@ export function App() {
 					if (trust) {
 						saveSettings({
 							...loadSettings(),
-							trustedDirs: [
-								...(loadSettings().trustedDirs ?? []),
-								cwd,
-							],
+							trustedDirs: [...(loadSettings().trustedDirs ?? []), cwd],
 						});
 					} else {
 						exit();
@@ -618,10 +611,7 @@ export function App() {
 		const finish = (id: string) => {
 			const wait = Math.max(0, MIN_LOAD_MS - (Date.now() - startedAt));
 			setTimeout(
-				() =>
-					setStartupLoading(prev =>
-						prev.filter(item => item.id !== id),
-					),
+				() => setStartupLoading(prev => prev.filter(item => item.id !== id)),
 				wait,
 			);
 		};
@@ -650,9 +640,7 @@ export function App() {
 						});
 					}
 					setMcpServers(prev =>
-						prev.includes(server.id)
-							? prev
-							: [...prev, server.id],
+						prev.includes(server.id) ? prev : [...prev, server.id],
 					);
 					// Do NOT log MCP lifecycle to the chat history (it would
 					// hide the welcome banner on an empty conversation); the
@@ -687,8 +675,7 @@ export function App() {
 		// C12 fixture override lets the parity scenario pin the status-line
 		// LSP count; production returns the real "no issues" default.
 		execute: () =>
-			process.env.NANOCODER_DIAG_FIXTURE ??
-			'Diagnostics: no issues found.',
+			process.env.NANOCODER_DIAG_FIXTURE ?? 'Diagnostics: no issues found.',
 	});
 	setTimeout(() => void startupInit(), 0);
 
@@ -788,11 +775,7 @@ export function App() {
 				// budget, so a healthy capped context is reused byte-for-byte
 				// and the provider's prefix cache survives the resume.
 				setContext(
-					healResumedContext(
-						resumed.context,
-						resumed.messages,
-						maxMessages(),
-					),
+					healResumedContext(resumed.context, resumed.messages, maxMessages()),
 				);
 				// CACHE HEAD PARITY: the system prompt's volatile block
 				// carries the working directory + that dir's AGENTS.md (it
@@ -837,78 +820,78 @@ export function App() {
 						cwdChanged = tryChdir();
 					}
 				}
-			// Arrow-up history parity: rebuild the prompt history from the
-			// resumed conversation so ↑/↓ recall the prompts this session
-			// actually sent (live sessions build the same list per turn,
-			// capped at 100, newest last).
-			setPromptHistory(promptHistoryFromMessages(resumed.messages));
-			setHistoryIndex(-1);
-			setSessionId(resumed.id);
-			setSessionName(resumed.name);
-			setUsageHistory([]);
-			currentSession = {...resumed};
-			// Model parity: the conversation keeps the model it ran on, NOT
-			// the most-recently used one. If the session's provider/model is
-			// no longer configured, fall back to the current model and tell
-			// the user instead of silently switching.
-			const sessionProvider = resumed.provider;
-			const sessionModel = resumed.model;
-			if (sessionProvider && sessionModel) {
-				const provider = listProviders().find(
-					candidate => candidate.id === sessionProvider,
-				);
-				const catalog =
-					provider && (discoveredModels()[provider.id] ?? provider.models);
-				if (provider && catalog?.includes(sessionModel)) {
-					setActiveEndpoint({
-						...activeEndpoint(),
-						id: provider.id,
-						name: provider.name ?? provider.id,
-						baseUrl: provider.baseUrl,
-						apiKey: provider.apiKeyResolved,
-						model: sessionModel,
-						models: discoveredModels()[provider.id] ?? provider.models,
-						modelEfforts: provider.modelEfforts,
-						contextWindow:
-							modelWindows()[provider.id]?.[sessionModel] ??
-							provider.contextWindow ??
-							128_000,
-						sdkProvider: provider.sdkProvider,
-						codexAccount: provider.codexAccount,
-						providerOptions: provider.providerOptions,
-						effort: provider.modelEfforts[sessionModel],
-						promptCacheKey: provider.promptCacheKey,
-						alwaysAllow: provider.alwaysAllow,
-					});
-					savePreferences({
-						lastProvider: provider.id,
-						lastModel: sessionModel,
-					});
-					// Deferred: this resume branch can run during App boot,
-					// BEFORE the later-defined loadProviderFeatures const is
-					// initialized (TDZ). A tick later is fine — the model
-					// restore + toast are already applied synchronously.
-					setTimeout(() => loadProviderFeatures(provider), 0);
-					showToast(`Resumed model: ${sessionModel} · ${provider.id}`);
-				} else {
-					showToast(
-						`Session model ${sessionModel} (${sessionProvider}) is no longer available — continuing with ${activeEndpoint().model}.`,
+				// Arrow-up history parity: rebuild the prompt history from the
+				// resumed conversation so ↑/↓ recall the prompts this session
+				// actually sent (live sessions build the same list per turn,
+				// capped at 100, newest last).
+				setPromptHistory(promptHistoryFromMessages(resumed.messages));
+				setHistoryIndex(-1);
+				setSessionId(resumed.id);
+				setSessionName(resumed.name);
+				setUsageHistory([]);
+				currentSession = {...resumed};
+				// Model parity: the conversation keeps the model it ran on, NOT
+				// the most-recently used one. If the session's provider/model is
+				// no longer configured, fall back to the current model and tell
+				// the user instead of silently switching.
+				const sessionProvider = resumed.provider;
+				const sessionModel = resumed.model;
+				if (sessionProvider && sessionModel) {
+					const provider = listProviders().find(
+						candidate => candidate.id === sessionProvider,
 					);
+					const catalog =
+						provider && (discoveredModels()[provider.id] ?? provider.models);
+					if (provider && catalog?.includes(sessionModel)) {
+						setActiveEndpoint({
+							...activeEndpoint(),
+							id: provider.id,
+							name: provider.name ?? provider.id,
+							baseUrl: provider.baseUrl,
+							apiKey: provider.apiKeyResolved,
+							model: sessionModel,
+							models: discoveredModels()[provider.id] ?? provider.models,
+							modelEfforts: provider.modelEfforts,
+							contextWindow:
+								modelWindows()[provider.id]?.[sessionModel] ??
+								provider.contextWindow ??
+								128_000,
+							sdkProvider: provider.sdkProvider,
+							codexAccount: provider.codexAccount,
+							providerOptions: provider.providerOptions,
+							effort: provider.modelEfforts[sessionModel],
+							promptCacheKey: provider.promptCacheKey,
+							alwaysAllow: provider.alwaysAllow,
+						});
+						savePreferences({
+							lastProvider: provider.id,
+							lastModel: sessionModel,
+						});
+						// Deferred: this resume branch can run during App boot,
+						// BEFORE the later-defined loadProviderFeatures const is
+						// initialized (TDZ). A tick later is fine — the model
+						// restore + toast are already applied synchronously.
+						setTimeout(() => loadProviderFeatures(provider), 0);
+						showToast(`Resumed model: ${sessionModel} · ${provider.id}`);
+					} else {
+						showToast(
+							`Session model ${sessionModel} (${sessionProvider}) is no longer available — continuing with ${activeEndpoint().model}.`,
+						);
+					}
 				}
-			}
-			// Temporary success-green notice above the input (parity: the
-			// completion line) — cleared on the next prompt and after a few
-			// seconds, never a persistent history row.
-			if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
-			setCompletionTone('success');
-			setCompletionMessage(
-				`✔ Resumed session ${resumed.id} (${resumed.name}).` +
-					(cwdChanged ? ` Working in ${process.cwd()}.` : ''),
-			);
-			resumeNoticeTimer = setTimeout(() => {
-				setCompletionMessage('');
-				setCompletionTone('default');
-			}, 6000);
+				// Temporary success-green notice above the input (parity: the
+				// completion line) — cleared on the next prompt and after a few
+				// seconds, never a persistent history row.
+				if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+				setCompletionTone('success');
+				setCompletionMessage(
+					`✔ Resumed session ${resumed.id} (${resumed.name}).` +
+						(cwdChanged ? ` Working in ${process.cwd()}.` : ''),
+				);
+				resumeNoticeTimer = setTimeout(() => {
+					setCompletionMessage('');
+					setCompletionTone('default');
+				}, 6000);
 			})();
 			return;
 		}
@@ -951,10 +934,7 @@ export function App() {
 		}
 		// LIST surfaces: view-only data gets a proper modal list instead of a
 		// "set value" prompt (parity: the original's managed setting panels).
-		const openSettingsList = (
-			title: string,
-			rows: SettingsListRow[],
-		) => {
+		const openSettingsList = (title: string, rows: SettingsListRow[]) => {
 			setSettingsList({title, rows});
 		};
 		switch (row.key) {
@@ -1115,10 +1095,7 @@ export function App() {
 				// The confirmation EXPIRES after a few seconds, a stale
 				// "press again to exit" must never linger.
 				if (exitConfirmTimer) clearTimeout(exitConfirmTimer);
-				exitConfirmTimer = setTimeout(
-					() => setExitConfirm(false),
-					6000,
-				);
+				exitConfirmTimer = setTimeout(() => setExitConfirm(false), 6000);
 			}
 			return;
 		}
@@ -1133,10 +1110,7 @@ export function App() {
 			} else {
 				setExitConfirm(true);
 				if (exitConfirmTimer) clearTimeout(exitConfirmTimer);
-				exitConfirmTimer = setTimeout(
-					() => setExitConfirm(false),
-					6000,
-				);
+				exitConfirmTimer = setTimeout(() => setExitConfirm(false), 6000);
 			}
 			return;
 		}
@@ -1249,7 +1223,10 @@ export function App() {
 		const current = messages();
 		for (let i = current.length - 1; i >= 0; i--) {
 			const message = current[i]!;
-			if (message.kind === 'info' && message.content.startsWith('InnerDaemon')) {
+			if (
+				message.kind === 'info' &&
+				message.content.startsWith('InnerDaemon')
+			) {
 				const match = /^(.*?· noop)( ×\d+)?$/.exec(message.content);
 				if (match && match[1] === row) {
 					const count = Number(match[2]?.slice(2) ?? 1) + 1;
@@ -1288,11 +1265,15 @@ export function App() {
 		const PROFILES: ToolProfile[] = ['full', 'minimal', 'nano', 'auto'];
 		const name = args.trim();
 		if (!name) {
-			appendInfo(`Tool profile: ${toolProfile()}\nAvailable: ${PROFILES.join(', ')}`);
+			appendInfo(
+				`Tool profile: ${toolProfile()}\nAvailable: ${PROFILES.join(', ')}`,
+			);
 			return;
 		}
 		if (!PROFILES.includes(name as ToolProfile)) {
-			appendInfo(`Unknown profile '${name}'. Available: ${PROFILES.join(', ')}`);
+			appendInfo(
+				`Unknown profile '${name}'. Available: ${PROFILES.join(', ')}`,
+			);
 			return;
 		}
 		setToolProfile(name as ToolProfile);
@@ -1319,7 +1300,7 @@ export function App() {
 		const current = TABS.includes((tabArg ?? '').toLowerCase())
 			? (tabArg ?? '').toLowerCase()
 			: 'general';
-		const tabBar = `Settings [${TABS.map(tab => tab === current ? `*${tab}*` : tab).join(' | ')}]`;
+		const tabBar = `Settings [${TABS.map(tab => (tab === current ? `*${tab}*` : tab)).join(' | ')}]`;
 		switch (current) {
 			case 'providers':
 				appendInfo(
@@ -1447,7 +1428,9 @@ export function App() {
 			case 'titleShape': {
 				const next = value.trim().toLowerCase();
 				if (!['powerline-angled', 'tiny', 'none'].includes(next)) {
-					appendInfo(`Invalid title shape '${value}'. Available: powerline-angled, tiny, none`);
+					appendInfo(
+						`Invalid title shape '${value}'. Available: powerline-angled, tiny, none`,
+					);
 					return;
 				}
 				setTitleShape(next);
@@ -1469,9 +1452,7 @@ export function App() {
 			case 'thinkingMode': {
 				const next = value.trim().toLowerCase();
 				if (!['hidden', 'show', 'line'].includes(next)) {
-					appendInfo(
-						`Invalid thinking mode '${value}'. Use hidden/show/line.`,
-					);
+					appendInfo(`Invalid thinking mode '${value}'. Use hidden/show/line.`);
 					return;
 				}
 				setThinkingMode(next as 'hidden' | 'show' | 'line');
@@ -1495,11 +1476,7 @@ export function App() {
 			}
 			case 'systemPrompt': {
 				const next = value.trim().toLowerCase();
-				if (
-					!SYSTEM_PROMPT_STYLES.includes(
-						next as SystemPromptStyle,
-					)
-				) {
+				if (!SYSTEM_PROMPT_STYLES.includes(next as SystemPromptStyle)) {
 					appendInfo(
 						`Invalid system prompt '${value}'. Use ${SYSTEM_PROMPT_STYLES.join(', ')}.`,
 					);
@@ -1598,8 +1575,7 @@ export function App() {
 		const wasEdit =
 			Boolean(connectOpen()?.editId) ||
 			config.providers.some(
-				candidate =>
-					candidate.id.toLowerCase() === provider.id.toLowerCase(),
+				candidate => candidate.id.toLowerCase() === provider.id.toLowerCase(),
 			);
 		config.providers = config.providers.filter(
 			candidate => candidate.id.toLowerCase() !== provider.id.toLowerCase(),
@@ -1725,9 +1701,7 @@ export function App() {
 					// failure so a misconfigured fallback is debuggable.
 					appendInfo(
 						`Vision fallback failed: ${
-							error instanceof Error
-								? error.message
-								: String(error)
+							error instanceof Error ? error.message : String(error)
 						}`,
 					);
 				}
@@ -1830,10 +1804,7 @@ export function App() {
 			return;
 		}
 		if (busy()) {
-			setPendingQueue(prev => [
-				...prev,
-				{value, attachments},
-			]);
+			setPendingQueue(prev => [...prev, {value, attachments}]);
 			// The queued message renders as a persistent block above the
 			// input (parity: nanocoder's queuedBlock), NOT a transcript row
 			// that scrolls away.
@@ -1845,12 +1816,7 @@ export function App() {
 		// command that is the typed `/command args`, NOT the injected body);
 		// the provider sees the prompt with vision-description blocks
 		// substituted for [Image #N].
-		await runTurn(
-			command?.original ?? value,
-			prompt,
-			attachments,
-			command,
-		);
+		await runTurn(command?.original ?? value, prompt, attachments, command);
 		processQueue();
 	};
 
@@ -1878,9 +1844,7 @@ export function App() {
 			prompt: value,
 		});
 		setPromptHistory(prev =>
-			prev[prev.length - 1] === value
-				? prev
-				: [...prev.slice(-99), value],
+			prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
 		);
 		setHistoryIndex(-1);
 
@@ -1917,20 +1881,14 @@ export function App() {
 		setTurnElapsed(0);
 		thinkingStartedAt = 0;
 		setThinkingElapsed(0);
-		const turnTimer = setInterval(
-			() => {
-				setTurnElapsed(prev => prev + 1);
-				setThinkingElapsed(
-					thinkingStartedAt > 0
-						? Math.max(
-								0,
-								Math.floor((Date.now() - thinkingStartedAt) / 1000),
-							)
-						: 0,
-				);
-			},
-			1000,
-		);
+		const turnTimer = setInterval(() => {
+			setTurnElapsed(prev => prev + 1);
+			setThinkingElapsed(
+				thinkingStartedAt > 0
+					? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000))
+					: 0,
+			);
+		}, 1000);
 		const controller = new AbortController();
 		abortRef = controller;
 		const startedAt = Date.now();
@@ -1944,10 +1902,7 @@ export function App() {
 					value.toLowerCase().includes(keyword.toLowerCase()),
 				)
 			) {
-				history = [
-					...history,
-					{role: 'user', content: command.body.trim()},
-				];
+				history = [...history, {role: 'user', content: command.body.trim()}];
 				appendMessage({
 					role: 'user',
 					content: `${value} (auto-triggered /${command.name})`,
@@ -2013,9 +1968,7 @@ export function App() {
 				const facts = {...turnFacts(), intent};
 				if (rule.action === 'block') {
 					appendInfo(formatInnerDaemonRow(rule.id, 'block', facts));
-					appendInfo(
-						rule.message ?? `Blocked by steering rule ${rule.id}.`,
-					);
+					appendInfo(rule.message ?? `Blocked by steering rule ${rule.id}.`);
 					return;
 				}
 				if (rule.action === 'stop') {
@@ -2121,8 +2074,7 @@ export function App() {
 							`Malformed tool call, asking the model to correct itself (${malformedRetryCount}/${MAX_MALFORMED_RETRIES + 1}).`,
 						);
 						appendAssistantMessage(result.text, {
-							reasoning:
-								result.reasoning.trim() || undefined,
+							reasoning: result.reasoning.trim() || undefined,
 							durationSec: thoughtDuration(),
 						});
 						history = [
@@ -2152,9 +2104,9 @@ export function App() {
 						// few seconds like the exit confirmation.
 						setCompletionMessage(
 							`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-							(completionUsage?.total_tokens
-								? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
-								: '') +
+								(completionUsage?.total_tokens
+									? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
+									: '') +
 								(cacheLabel ? ` · ${cacheLabel}` : ''),
 						);
 						capturePRs(result.text);
@@ -2163,10 +2115,7 @@ export function App() {
 						// the single source of truth for the saved session,
 						// so a resumed conversation re-sends the EXACT same
 						// prefix and keeps the provider's prompt cache.
-						history = [
-							...history,
-							{role: 'assistant', content: result.text},
-						];
+						history = [...history, {role: 'assistant', content: result.text}];
 						setContext(history);
 						refreshContextPercent();
 						recordUsage(result.usage);
@@ -2257,17 +2206,13 @@ export function App() {
 					return (
 						availability.available &&
 						isReadOnlyTool(call.name) &&
-						!evaluateToolConstraint(
-							call.name,
-							steeringRef,
-							{
-								intent: classifyIntent(value),
-								model: activeEndpoint().model,
-								budgetTurns: round,
-								totalBudget: TOOL_LOOP_BUDGET,
-								backgroundTasksRunning: activeBgCount() > 0,
-							},
-						)
+						!evaluateToolConstraint(call.name, steeringRef, {
+							intent: classifyIntent(value),
+							model: activeEndpoint().model,
+							budgetTurns: round,
+							totalBudget: TOOL_LOOP_BUDGET,
+							backgroundTasksRunning: activeBgCount() > 0,
+						})
 					);
 				});
 				// B9/C6: pre-append every running row for the read-only
@@ -2277,9 +2222,7 @@ export function App() {
 				// A7/C9: live task progress, first pending task shows running.
 				setTasks(prev =>
 					prev.map((task, index) =>
-						index === 0 && !task.done
-							? {...task, running: true}
-							: task,
+						index === 0 && !task.done ? {...task, running: true} : task,
 					),
 				);
 				if (allReadOnly) {
@@ -2329,11 +2272,7 @@ export function App() {
 							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
 							running: true,
 							toolId: call.id,
-							brief: briefText
-								? index === 0
-									? briefText
-									: ' '
-								: undefined,
+							brief: briefText ? (index === 0 ? briefText : ' ') : undefined,
 							tool: {name: call.name, detail, output: '', args: call.arguments},
 						});
 					}
@@ -2375,17 +2314,13 @@ export function App() {
 							`Blocked by steering rule ${toolConstraint.rule.id}: ` +
 							`${toolConstraint.rule.message ?? 'constraint'}`;
 						appendInfo(
-							formatInnerDaemonRow(
-								toolConstraint.rule.id,
-								'block',
-								{
-									intent: toolConstraint.intent,
-									model: activeEndpoint().model,
-									budgetTurns: round,
-									totalBudget: TOOL_LOOP_BUDGET,
-									backgroundTasksRunning: activeBgCount() > 0,
-								},
-							),
+							formatInnerDaemonRow(toolConstraint.rule.id, 'block', {
+								intent: toolConstraint.intent,
+								model: activeEndpoint().model,
+								budgetTurns: round,
+								totalBudget: TOOL_LOOP_BUDGET,
+								backgroundTasksRunning: activeBgCount() > 0,
+							}),
 						);
 						toolResults.push({tool_call_id: call.id, content: reason});
 						toolMessages.push({
@@ -2472,7 +2407,8 @@ export function App() {
 							continue;
 						}
 					}
-					const toolResult = parallelResults?.[index] ??
+					const toolResult =
+						parallelResults?.[index] ??
 						(await executeTool(call, {
 							onProgress: content =>
 								setLiveOutputs(prev => ({...prev, [call.id]: content})),
@@ -2508,9 +2444,7 @@ export function App() {
 						executedAt,
 					);
 					if (runningRemaining > 0) {
-						await new Promise(resolve =>
-							setTimeout(resolve, runningRemaining),
-						);
+						await new Promise(resolve => setTimeout(resolve, runningRemaining));
 					}
 					setMessages(prev =>
 						prev.map(message =>
@@ -2646,9 +2580,7 @@ export function App() {
 						appendAssistantMessage(partial, {
 							reasoning: partialReasoning.trim() || undefined,
 							durationSec: thinkingSeconds(
-								thinkingStartedAt > 0
-									? thinkingStartedAt
-									: startedAt,
+								thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
 								Date.now(),
 							),
 						});
@@ -2724,18 +2656,13 @@ export function App() {
 	 * trim-from-the-start strategy codex uses on `ContextWindowExceeded`,
 	 * which preserves the cache head AND keeps the recent messages intact.
 	 */
-	const summarizeContext = async (
-		ctx: ChatMessageLike[],
-	): Promise<string> => {
+	const summarizeContext = async (ctx: ChatMessageLike[]): Promise<string> => {
 		let summary = '';
 		let attempt = ctx.filter(message => message.role !== 'system');
 		for (;;) {
 			try {
 				await streamChat(
-					[
-						{role: 'system', content: SUMMARIZATION_PROMPT},
-						...attempt,
-					],
+					[{role: 'system', content: SUMMARIZATION_PROMPT}, ...attempt],
 					{
 						onText: delta => {
 							summary += delta;
@@ -2752,8 +2679,7 @@ export function App() {
 				// Context-window overflow while summarizing: drop the OLDEST
 				// history item and retry (codex trims from the beginning to
 				// preserve the cache head). Anything else fails compaction.
-				const message =
-					error instanceof Error ? error.message : String(error);
+				const message = error instanceof Error ? error.message : String(error);
 				if (!isCompactOverflowError(error) || attempt.length <= 1) {
 					throw error;
 				}
@@ -2971,7 +2897,9 @@ export function App() {
 		setMessages(data.messages);
 		setContext(data.context);
 		persist();
-		appendInfo(`Restored checkpoint "${data.name}" (${data.messages.length} messages).`);
+		appendInfo(
+			`Restored checkpoint "${data.name}" (${data.messages.length} messages).`,
+		);
 	};
 
 	// F2: catalog breadth, display-only info commands.
@@ -3009,11 +2937,7 @@ export function App() {
 				? []
 				: current.map(task => ({
 						label: task.title,
-						value: task.done
-							? 'done'
-							: task.running
-								? 'running'
-								: 'pending',
+						value: task.done ? 'done' : task.running ? 'running' : 'pending',
 					})),
 		);
 	};
@@ -3075,7 +2999,10 @@ export function App() {
 		);
 	const exportSession = () => {
 		const file = join(process.cwd(), `session-export-${sessionId()}.json`);
-		writeFileSync(file, `${JSON.stringify({id: sessionId(), messages: messages()}, null, 2)}\n`);
+		writeFileSync(
+			file,
+			`${JSON.stringify({id: sessionId(), messages: messages()}, null, 2)}\n`,
+		);
 		appendInfo(`Session exported to ${file}`);
 	};
 	const contextMax = () =>
@@ -3193,8 +3120,7 @@ export function App() {
 			// B21: auto-diagnostics refresh after EVERY tool turn, code
 			// changes (write/edit) never leave the LSP stale.
 			lspLabel:
-				(detectLanguageServers().join(', ') ||
-					'no language servers detected') +
+				(detectLanguageServers().join(', ') || 'no language servers detected') +
 				(diagnosticsCount() > 0
 					? ` · ${diagnosticsCount()} issue${
 							diagnosticsCount() === 1 ? '' : 's'
@@ -3395,9 +3321,7 @@ export function App() {
 					webSearchModel: model,
 					webSearchProvider: providerId,
 				});
-				showToast(
-					`Web-search fallback: ${model} · ${providerId}`,
-				);
+				showToast(`Web-search fallback: ${model} · ${providerId}`);
 			} else {
 				savePreferences({
 					...prefs,
@@ -3588,10 +3512,7 @@ export function App() {
 						? 1
 						: 0) -
 					startupLoading().length -
-					completionMessageRows(
-						completionMessage(),
-						completionTone(),
-					) -
+					completionMessageRows(completionMessage(), completionTone()) -
 					(exitConfirm() ? 1 : 0) -
 					(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
 					completionPopupHeight(input(), terminalDimensions().width) -
@@ -3604,7 +3525,13 @@ export function App() {
 		// box adds its own so the border sits at column 2.
 		// Parity: root carries one column of padding; the omnicode text color
 		// (#c0caf5) is the default for the whole transcript.
-		<box flexDirection="column" flexGrow={1} flexShrink={1} height="100%" paddingX={1}>
+		<box
+			flexDirection="column"
+			flexGrow={1}
+			flexShrink={1}
+			height="100%"
+			paddingX={1}
+		>
 			<History
 				height={historyHeight()}
 				onContentHeight={setHistoryContentHeight}
@@ -3615,9 +3542,7 @@ export function App() {
 			{/* The input box and status line stay visible while a modal is
 			    open, the modal only overlays the history region above. */}
 			<InputBox
-				onSubmit={(value, attachments) =>
-					void submit(value, attachments)
-				}
+				onSubmit={(value, attachments) => void submit(value, attachments)}
 			/>
 			{/* Terminal-like layout: this spacer absorbs the empty rows below
 			    the input while the conversation is short, so the status line
@@ -3638,7 +3563,7 @@ export function App() {
 							onClose={() => setSettingsOpen(false)}
 							onEdit={editSettingRow}
 							onApply={applySetting}
-							onModelSelect={(target) => {
+							onModelSelect={target => {
 								setSettingsOpen(false);
 								setFallbackTarget(target === 'main' ? null : target);
 								// "Inherit main agent model" only applies to
@@ -3653,11 +3578,11 @@ export function App() {
 						/>
 					}
 				>
-					{(list) => (
+					{list => (
 						<SettingsListModal
 							title={list().title}
 							rows={list().rows}
-							onEditProvider={(providerId) => {
+							onEditProvider={providerId => {
 								// Open the connect MODAL prefilled with the
 								// provider (opencode-style edit), never the
 								// input-row wizard. CLOSE the settings list
@@ -3668,7 +3593,7 @@ export function App() {
 								setSettingsOpen(false);
 								setConnectOpen({editId: providerId});
 							}}
-							onInsert={(text) => {
+							onInsert={text => {
 								setSettingsList(null);
 								setSettingsOpen(false);
 								setInput(text);
@@ -3681,10 +3606,7 @@ export function App() {
 			{/* `/status` opens as a MODAL over the history (input stays
 			    visible below). */}
 			<Show when={statusOpen()}>
-				<StatusModal
-					rows={statusRows()}
-					onClose={() => setStatusOpen(false)}
-				/>
+				<StatusModal rows={statusRows()} onClose={() => setStatusOpen(false)} />
 			</Show>
 			{/* `/model` opens as a MODAL (parity: nanocoder's model selector). */}
 			<Show when={modelOpen()}>
@@ -3758,7 +3680,7 @@ export function App() {
 			{/* `/commands` / `/help`: grouped 2-column catalog modal. */}
 			<Show when={commandsOpen()}>
 				<CommandsModal
-					onInsert={(text) => {
+					onInsert={text => {
 						setCommandsOpen(false);
 						setInput(text);
 					}}
@@ -3827,9 +3749,7 @@ export function App() {
 						]
 					}
 					defaultEffort={
-						(activeEndpoint().modelEfforts ?? {})[
-							activeEndpoint().model
-						]
+						(activeEndpoint().modelEfforts ?? {})[activeEndpoint().model]
 					}
 					onSelect={level => {
 						applyEffort(level);
@@ -3849,9 +3769,7 @@ export function App() {
 					left={Math.max(
 						1,
 						Math.floor(
-							((terminalDimensions().width ?? 80) -
-								toast().length) /
-								2,
+							((terminalDimensions().width ?? 80) - toast().length) / 2,
 						),
 					)}
 					backgroundColor={colors().base}
@@ -3859,7 +3777,10 @@ export function App() {
 					paddingY={0}
 					zIndex={4000}
 				>
-					<text fg={colors().primary} attributes={createTextAttributes({bold: true})}>
+					<text
+						fg={colors().primary}
+						attributes={createTextAttributes({bold: true})}
+					>
 						{toast()}
 					</text>
 				</box>
@@ -3868,15 +3789,15 @@ export function App() {
 	);
 }
 
-function usageSignal(
-	usage: Record<string, unknown> | undefined,
-): {
-	prompt_tokens?: number;
-	completion_tokens?: number;
-	total_tokens?: number;
-	promptCacheHitTokens?: number;
-	promptCacheMissTokens?: number;
-} | undefined {
+function usageSignal(usage: Record<string, unknown> | undefined):
+	| {
+			prompt_tokens?: number;
+			completion_tokens?: number;
+			total_tokens?: number;
+			promptCacheHitTokens?: number;
+			promptCacheMissTokens?: number;
+	  }
+	| undefined {
 	if (!usage) return undefined;
 	// ANY provider can feed the cache rate: DeepSeek's explicit split, the
 	// OpenAI-style `cached_tokens` (miss derived from prompt_tokens), or
@@ -3895,7 +3816,9 @@ function usageSignal(
 }
 
 function finiteNumber(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+	return typeof value === 'number' && Number.isFinite(value)
+		? value
+		: undefined;
 }
 
 /**
@@ -3948,11 +3871,7 @@ async function refreshModelWindows(
 	const windows: Record<string, number> = {};
 	await Promise.all(
 		models.map(async model => {
-			const window = await resolveContextWindow(
-				model,
-				undefined,
-				provider.id,
-			);
+			const window = await resolveContextWindow(model, undefined, provider.id);
 			if (window && window > 0) windows[model] = window;
 		}),
 	);
@@ -3983,9 +3902,7 @@ export function interruptedContext(
  * wins over the injected body, errors skipped, consecutive duplicates
  * collapsed, newest last, capped at 100 like the live per-turn history.
  */
-export function promptHistoryFromMessages(
-	messages: ChatMessage[],
-): string[] {
+export function promptHistoryFromMessages(messages: ChatMessage[]): string[] {
 	const history: string[] = [];
 	for (const message of messages) {
 		if (message.role !== 'user' || message.error) continue;
@@ -4038,7 +3955,10 @@ export function undoExchange(
 	// healResumedContext keeps the truncation when the user counts align and
 	// rebuilds from the transcript when the context ever lagged (resume-heal
 	// safety) — either way the result is a strict prefix of the old list.
-	const keptContext = healResumedContext(context.slice(0, ctxCut), keptMessages);
+	const keptContext = healResumedContext(
+		context.slice(0, ctxCut),
+		keptMessages,
+	);
 	return {
 		keptMessages,
 		keptContext,
@@ -4120,10 +4040,29 @@ export function isCompactOverflowError(error: unknown): boolean {
 }
 
 const COMPLETION_ADJECTIVES = [
-	'brisk', 'swift', 'breezy', 'thoughtful', 'steady', 'snappy', 'crisp',
-	'diligent', 'nimble', 'spirited', 'keen', 'zippy', 'lively', 'focused',
-	'peppy', 'resolute', 'deft', 'plucky', 'hearty', 'jaunty', 'sprightly',
-	'tenacious', 'chipper',
+	'brisk',
+	'swift',
+	'breezy',
+	'thoughtful',
+	'steady',
+	'snappy',
+	'crisp',
+	'diligent',
+	'nimble',
+	'spirited',
+	'keen',
+	'zippy',
+	'lively',
+	'focused',
+	'peppy',
+	'resolute',
+	'deft',
+	'plucky',
+	'hearty',
+	'jaunty',
+	'sprightly',
+	'tenacious',
+	'chipper',
 ];
 
 function getRandomAdjective(): string {
@@ -4152,7 +4091,9 @@ function quoteAwareSplit(input: string): string[] {
  * become `<REDACTED:n>` placeholders before the request leaves; replies get
  * the originals back so the transcript never shows the placeholders.
  */
-function createScrubber(patterns: Array<{pattern: string; placeholder?: string}>) {
+function createScrubber(
+	patterns: Array<{pattern: string; placeholder?: string}>,
+) {
 	const map = new Map<string, string>();
 	let counter = 0;
 	const scrub = (text: string): string => {
