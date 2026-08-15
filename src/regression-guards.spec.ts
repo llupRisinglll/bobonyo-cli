@@ -875,9 +875,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/const idle =/);
 		expect(history).toMatch(/!liveToolRows\(\)\.length/);
 		expect(history).toMatch(/!liveReplyText\(\)/);
-		// hide-thinking ON means the live thought does NOT render, so the
+		// Hidden thinking mode means the live thought does NOT render, so the
 		// history is idle and the tip may take the stage.
-		expect(history).toMatch(/!\(!hideThinking\(\) && liveThoughtHeader\(\)\)/);
+		expect(history).toMatch(
+			/!\(thinkingMode\(\) !== 'hidden' && liveThoughtHeader\(\)\)/,
+		);
 		// Transient: breakline + centered row, inside the scrollbox.
 		expect(history).toMatch(/<Show when=\{historyTip\(\)\}>/);
 		expect(history).toMatch(/<box height=\{1\} \/>/);
@@ -1035,6 +1037,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const modal = read('./components/model-modal.tsx');
 		expect(modal).toMatch(/Select provider/);
 		expect(modal).toMatch(/accountSwitch/);
+	});
+
+	test('thinking display is a hidden / show / line three-way mode', () => {
+		const settings = read('./settings.ts');
+		expect(settings).toMatch(/ThinkingMode = 'hidden' \| 'show' \| 'line'/);
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/thinkingMode\(\) !== 'hidden'/);
+		expect(history).toMatch(/thinkingMode\(\) === 'line'/);
+		const panel = read('./components/settings-panel.tsx');
+		expect(panel).toMatch(
+			/thinkingMode: \['hidden', 'show', 'line'\]/,
+		);
 	});
 
 	test('ANY provider with a discovery URL fetches its models', () => {

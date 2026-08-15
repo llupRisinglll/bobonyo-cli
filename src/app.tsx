@@ -206,7 +206,7 @@ import {
 	setDiscoveredModels,
 	setModelWindows,
 	setCompletionTone,
-	setHideThinking,
+	setThinkingMode,
 	setCavemanMode,
 	setResumeCwdMode,
 	resumeCwdMode,
@@ -555,7 +555,7 @@ export function App() {
 		}
 		setTitleShape(settings.titleShape ?? 'powerline-angled');
 		setStatusLineEnabled(settings.statusLine !== false);
-		setHideThinking(settings.hideThinking === true);
+		setThinkingMode(settings.thinkingMode ?? 'hidden');
 		setCavemanMode(settings.cavemanMode === true);
 		setResumeCwdMode(settings.resumeCwd ?? 'session');
 		autoCompactRef.enabled = settings.autoCompact.enabled;
@@ -1463,16 +1463,19 @@ export function App() {
 				saveSettings({...settings, statusLine: on});
 				return;
 			}
-			case 'hideThinking': {
+			case 'thinkingMode': {
 				const next = value.trim().toLowerCase();
-				const on = next === 'on' || next === 'true' || next === '1';
-				const off = next === 'off' || next === 'false' || next === '0';
-				if (!on && !off) {
-					appendInfo(`Invalid hide thinking '${value}'. Use on/off.`);
+				if (!['hidden', 'show', 'line'].includes(next)) {
+					appendInfo(
+						`Invalid thinking mode '${value}'. Use hidden/show/line.`,
+					);
 					return;
 				}
-				setHideThinking(on);
-				saveSettings({...settings, hideThinking: on});
+				setThinkingMode(next as 'hidden' | 'show' | 'line');
+				saveSettings({
+					...settings,
+					thinkingMode: next as 'hidden' | 'show' | 'line',
+				});
 				return;
 			}
 			case 'cavemanMode': {
@@ -1524,7 +1527,7 @@ export function App() {
 			}
 			default:
 				appendInfo(
-					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, hideThinking, cavemanMode, resumeCwd`,
+					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, thinkingMode, cavemanMode, resumeCwd`,
 				);
 		}
 	};

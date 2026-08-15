@@ -11,6 +11,15 @@ import {join} from 'node:path';
 import {bobonyoConfigDir} from './bobonyo-paths';
 
 export type Mode = 'yolo' | 'auto-accept' | 'normal' | 'plan';
+/**
+ * How the harness shows the model's thinking:
+ * - `hidden`: no Thought blocks at all; the Working indicator says
+ *   "Thinking…" while the model reasons.
+ * - `show`: the full live thinking block (animated header + wrapped tail)
+ *   and settled Thought blocks.
+ * - `line`: the header plus ONE scrolling one-liner of the reasoning.
+ */
+export type ThinkingMode = 'hidden' | 'show' | 'line';
 export type ToolProfile = 'full' | 'minimal' | 'nano' | 'auto';
 /**
  * Working directory to use when resuming a session (codex `ResumeCwdMode`
@@ -30,10 +39,9 @@ export interface Settings {
 	titleShape?: string;
 	/** Show the status line footer (on/off). */
 	statusLine?: boolean;
-	/**
-	 * Hide live Thinking + settled Thought blocks; the Working indicator
-	 * says "Thinking…" while the model reasons instead.
-	 */
+	/** Thinking display mode (hidden / show / line). */
+	thinkingMode?: ThinkingMode;
+	/** @deprecated legacy on/off flag, migrated to thinkingMode. */
 	hideThinking?: boolean;
 	/**
 	 * Built-in caveman communication mode (bundled skill). ON by default;
@@ -61,7 +69,7 @@ const DEFAULTS: Settings = {
 	mode: 'yolo',
 	toolProfile: 'full',
 	maxMessages: 1000,
-	hideThinking: true,
+	thinkingMode: 'hidden',
 	cavemanMode: true,
 	resumeCwd: 'session',
 	systemPrompt: 'default',
@@ -133,7 +141,15 @@ export function loadSettings(): Settings {
 			? settings.titleShape
 			: undefined;
 	const statusLine = settings.statusLine !== false;
-	const hideThinking = settings.hideThinking !== false;
+	const rawMode = settings.thinkingMode;
+	const thinkingMode: ThinkingMode =
+		rawMode === 'hidden' || rawMode === 'show' || rawMode === 'line'
+			? rawMode
+			: typeof settings.hideThinking === 'boolean'
+				? settings.hideThinking
+					? 'hidden'
+					: 'show'
+				: (DEFAULTS.thinkingMode ?? 'hidden');
 	const cavemanMode = settings.cavemanMode !== false;
 	const resumeCwd = ['session', 'current', 'ask'].includes(
 		settings.resumeCwd ?? '',
@@ -159,7 +175,7 @@ export function loadSettings(): Settings {
 		theme,
 		titleShape,
 		statusLine,
-		hideThinking,
+		thinkingMode,
 		cavemanMode,
 		resumeCwd,
 		systemPrompt,

@@ -37,12 +37,13 @@ describe('wrapText', () => {
 	});
 });
 
-describe('workingLabel (hide-thinking indicator phase)', () => {
-	test('says Thinking only while reasoning AND hide-thinking is on', () => {
-		expect(workingLabel(true, true)).toBe('Thinking');
-		expect(workingLabel(true, false)).toBe('Working');
-		expect(workingLabel(false, true)).toBe('Working');
-		expect(workingLabel(false, false)).toBe('Working');
+describe('workingLabel (thinking-mode indicator phase)', () => {
+	test('says Thinking only while reasoning AND thinking is hidden', () => {
+		expect(workingLabel('hidden', true)).toBe('Thinking');
+		expect(workingLabel('hidden', false)).toBe('Working');
+		expect(workingLabel('show', true)).toBe('Working');
+		expect(workingLabel('line', true)).toBe('Working');
+		expect(workingLabel('show', false)).toBe('Working');
 	});
 });
 

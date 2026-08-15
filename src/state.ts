@@ -1,6 +1,6 @@
 import {createMemo, createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
-import type {Mode, ResumeCwdMode, ToolProfile} from './settings';
+import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'tool';
@@ -432,11 +432,13 @@ export const [mcpServers, setMcpServers] = createSignal<string[]>([]);
 /** Status-line footer visibility (Settings → Appearance → Status Line). */
 export const [statusLineEnabled, setStatusLineEnabled] = createSignal(true);
 /**
- * Hide thinking: live Thinking + settled Thought blocks are skipped in the
- * history, and the Working indicator reads "Thinking…" while the model
- * reasons (settings.json `hideThinking`).
+ * Thinking display mode (settings.json `thinkingMode`): `hidden` skips the
+ * live Thinking + settled Thought blocks (the Working indicator reads
+ * "Thinking…"), `show` renders the full block + settled Thoughts, `line`
+ * renders the header + a single scrolling one-liner.
  */
-export const [hideThinking, setHideThinking] = createSignal(false);
+export const [thinkingMode, setThinkingMode] =
+	createSignal<ThinkingMode>('hidden');
 /**
  * Built-in caveman communication mode: when ON, the bundled caveman skill
  * body is injected into the stable system prompt (settings.json

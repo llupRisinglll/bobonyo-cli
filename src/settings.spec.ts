@@ -26,24 +26,36 @@ afterEach(() => {
 	rmSync(root, {recursive: true, force: true});
 });
 
-describe('hideThinking default', () => {
-	test('no settings file: defaults ON', () => {
-		expect(loadSettings().hideThinking).toBe(true);
+describe('thinkingMode default (hidden / show / line)', () => {
+	test('no settings file: defaults to hidden (legacy hide-thinking-on default)', () => {
+		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 
-	test('existing settings file without the field (pre-default files): defaults ON', () => {
+	test('existing settings file without the field: defaults to hidden', () => {
 		writeFileSync(join(root, 'settings.json'), JSON.stringify({mode: 'normal'}));
-		expect(loadSettings().hideThinking).toBe(true);
+		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 
-	test('explicit off is respected', () => {
+	test('migrates the legacy hideThinking flag: true → hidden, false → show', () => {
 		writeFileSync(join(root, 'settings.json'), JSON.stringify({hideThinking: false}));
-		expect(loadSettings().hideThinking).toBe(false);
+		expect(loadSettings().thinkingMode).toBe('show');
+		writeFileSync(join(root, 'settings.json'), JSON.stringify({hideThinking: true}));
+		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 
-	test('explicit on is respected', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({hideThinking: true}));
-		expect(loadSettings().hideThinking).toBe(true);
+	test('thinkingMode wins over the legacy flag', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({thinkingMode: 'line', hideThinking: true}),
+		);
+		expect(loadSettings().thinkingMode).toBe('line');
+	});
+
+	test('show and line are respected', () => {
+		writeFileSync(join(root, 'settings.json'), JSON.stringify({thinkingMode: 'show'}));
+		expect(loadSettings().thinkingMode).toBe('show');
+		writeFileSync(join(root, 'settings.json'), JSON.stringify({thinkingMode: 'line'}));
+		expect(loadSettings().thinkingMode).toBe('line');
 	});
 });
 

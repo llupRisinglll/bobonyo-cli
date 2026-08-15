@@ -24,7 +24,7 @@ import {
 	contextPercent,
 	exitConfirm,
 	gearGlyph,
-	hideThinking,
+	thinkingMode,
 	historyIndex,
 	input,
 	mode,
@@ -62,8 +62,11 @@ import {isDeleteKey} from '../input-keys';
  * Hide-thinking indicator label: "Thinking…" ONLY while the model is in the
  * reasoning phase (reply text rendering ⇒ Working again). Pure, unit-tested.
  */
-export function workingLabel(hideThinking: boolean, thinking: boolean): string {
-	return hideThinking && thinking ? 'Thinking' : 'Working';
+export function workingLabel(
+	mode: 'hidden' | 'show' | 'line',
+	thinking: boolean,
+): string {
+	return mode === 'hidden' && thinking ? 'Thinking' : 'Working';
 }
 
 /**
@@ -830,7 +833,7 @@ export function InputBox(props: {
 						}
 					>
 						{gearGlyph(spinnerFrame())}{' '}
-						{workingLabel(hideThinking(), thinkingActive())}
+						{workingLabel(thinkingMode(), thinkingActive())}
 						{workingDots(spinnerFrame())} ·{' '}
 						({formatElapsed(turnElapsed())})
 						{retryingAttempt() > 0

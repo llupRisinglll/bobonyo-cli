@@ -19,7 +19,7 @@ import {
 	expandedBlocks,
 	gearGlyph,
 	hoverRow,
-	hideThinking,
+	thinkingMode,
 	liveOutputs,
 	messages,
 	mode,
@@ -585,7 +585,7 @@ export function History(props: {
 			} else if (message.error) {
 				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else {
-				if (message.reasoning && !hideThinking()) {
+				if (message.reasoning && thinkingMode() !== 'hidden') {
 					const thoughtKey = `thought-${i}`;
 					// Full reasoning text for the DETAILS modal (collapsed
 					// previews cap at PREVIEW_LINES=3; click opens the modal).
@@ -892,16 +892,16 @@ export function History(props: {
 	 */
 	const historyTip = createMemo(() => {
 		// "Idle" = a turn is running but NOTHING is painting in the history:
-		// no tool rows, no streaming reply, and — when hide-thinking is on —
+		// no tool rows, no streaming reply, and — in hidden thinking mode —
 		// no visible thought block either. (The live thought renders only
-		// when hideThinking is OFF; with it ON, thinking runs in the
+		// when thinkingMode is show/line; when hidden, thinking runs in the
 		// background and the history is visually idle — exactly when the tip
 		// should take the stage.)
 		const idle =
 			running() &&
 			!liveToolRows().length &&
 			!liveReplyText() &&
-			!(!hideThinking() && liveThoughtHeader());
+			!(thinkingMode() !== 'hidden' && liveThoughtHeader());
 		if (!idle) return '';
 		const elapsed = turnElapsed();
 		if (elapsed < 10) return '';
@@ -1282,11 +1282,11 @@ export function History(props: {
 			{/* LIVE THOUGHT: PLAIN TEXT (no markdown re-parse) so the thinking
 			    block can never flicker while reasoning streams. The leading
 			    breakline matches the settled blank row before the block. */}
-			<Show when={!hideThinking() && liveThoughtHeader()}>
+			<Show when={thinkingMode() !== 'hidden' && liveThoughtHeader()}>
 				<box
 					ref={element => {
 						liveThoughtRef = element as never;
-						liveThoughtLines = 4;
+						liveThoughtLines = 3;
 					}}
 					flexDirection="column"
 				>
@@ -1294,16 +1294,27 @@ export function History(props: {
 					<text fg={colors().secondary} attributes={dim()}>
 						{liveThoughtHeader()}
 					</text>
-					<text fg={colors().secondary} attributes={dim()}>
-						{liveThoughtTail()}
-					</text>
-					<text fg={colors().secondary} attributes={dim()}>
-						{'  └ '}
-						{liveThoughtOneLine(
-							throttledReasoning(),
-							historyFillWidth(terminalDimensions().width ?? 80),
-						)}
-					</text>
+					{/* 'show' = the full wrapped tail; 'line' = ONE scrolling
+					    one-liner of the reasoning (hidden mode renders
+					    nothing at all). */}
+					<Show
+						when={thinkingMode() === 'line'}
+						fallback={
+							<text fg={colors().secondary} attributes={dim()}>
+								{liveThoughtTail()}
+							</text>
+						}
+					>
+						<text fg={colors().secondary} attributes={dim()}>
+							{'  └ '}
+							{liveThoughtOneLine(
+								throttledReasoning(),
+								historyFillWidth(
+									terminalDimensions().width ?? 80,
+								),
+							)}
+						</text>
+					</Show>
 				</box>
 			</Show>
 			{/* RUNNING tool rows (streaming output) — their own node so the

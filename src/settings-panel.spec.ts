@@ -25,13 +25,13 @@ describe('settings model rows (main Model lives in Capabilities only)', () => {
 	});
 });
 
-describe('hide thinking setting', () => {
-	test('Behavior exposes an on/off Hide thinking row', () => {
+describe('thinking display setting', () => {
+	test('Behavior exposes a hidden/show/line Thinking display row', () => {
 		const rows = settingsRows(SETTINGS_TABS.indexOf('Behavior'));
-		const row = rows.find(candidate => candidate.key === 'hideThinking');
-		expect(row?.label).toBe('Hide thinking');
-		expect(['on', 'off']).toContain(row!.value);
-		expect(SETTING_OPTIONS.hideThinking).toEqual(['on', 'off']);
+		const row = rows.find(candidate => candidate.key === 'thinkingMode');
+		expect(row?.label).toBe('Thinking display');
+		expect(['hidden', 'show', 'line']).toContain(row!.value);
+		expect(SETTING_OPTIONS.thinkingMode).toEqual(['hidden', 'show', 'line']);
 	});
 });
 
