@@ -4,9 +4,10 @@
 import '@opentui/solid/preload';
 import {appendFileSync, existsSync, mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {createCliRenderer} from '@opentui/core';
+import {createCliRenderer, parseKeypress} from '@opentui/core';
 import {render} from '@opentui/solid';
 import {App} from './app';
+import {kittyToXterm} from './kitty-keys';
 
 // Debug key logger (NANOCODER_KEYLOG=1): records every raw input sequence AND
 // every parsed key event to /tmp/otui-keys.log so herdr key-delivery problems
@@ -35,8 +36,7 @@ if (resumeIndex !== -1) {
 const continueIndex = cliArgs.indexOf('--continue');
 if (continueIndex !== -1) {
 	const ref = cliArgs[continueIndex + 1];
-	process.env.NANOCODER_RESUME =
-		ref && !ref.startsWith('-') ? ref : 'last';
+	process.env.NANOCODER_RESUME = ref && !ref.startsWith('-') ? ref : 'last';
 }
 const providerIndex = cliArgs.indexOf('--provider');
 if (providerIndex !== -1) {
@@ -72,7 +72,10 @@ if (PREVIEW_TUI) {
 	// `{name, effort}`) so the `model[effort]` badge renders in previews
 	// without any environment-variable hack.
 	const cfgDir = process.env.BOBONYO_CONFIG_DIR;
-	const providersFile = join(cfgDir ?? '/tmp/bobonyo-preview', 'providers.json');
+	const providersFile = join(
+		cfgDir ?? '/tmp/bobonyo-preview',
+		'providers.json',
+	);
 	if (!existsSync(providersFile)) {
 		mkdirSync(cfgDir ?? '/tmp/bobonyo-preview', {recursive: true});
 		writeFileSync(
@@ -106,12 +109,16 @@ const renderer = await createCliRenderer({
 	targetFps: 60,
 	exitOnCtrlC: false,
 	useMouse: true,
-	// herdr conflict: the kitty keyboard protocol breaks the PHYSICAL
-	// Backspace key inside herdr (openopcode/this rewrite both hit it; the
-	// Ink-based nanocoder doesn't enable kitty). Legacy key parsing forwards
-	// backspace as DEL (0x7f), which herdr delivers correctly.
-	// NOTE: must be `false`, not `null`, OpenTUI resolves
-	// `options.useKittyKeyboard ?? true`, so null still enables kitty mode.
+	// Kitty keyboard protocol (CSI u) is ENABLED below so terminals that
+	// support it (herdr, kitty, wezterm, foot, ghostty) report MODIFIED keys
+	// — most importantly Shift+Enter as `\x1b[13;2u` instead of a plain `\r`
+	// that is indistinguishable from Enter (the per-pane Shift+Enter bug).
+	// OpenTUI's OWN kitty parser mis-maps some shapes (herdr backspace
+	// arrives as `\x1b[8u` and OpenTUI names it `\b`, NOT `backspace` — the
+	// reason kitty was previously disabled), so the app does NOT use
+	// OpenTUI's kitty mode; instead a prependInputHandler below converts
+	// every CSI-u sequence to the xterm modifyOtherKeys form
+	// (`\x1b[27;mod;code~`) which OpenTUI parses natively and correctly.
 	useKittyKeyboard: false as unknown as null,
 	...(process.env.NANOCODER_KEYLOG
 		? {
@@ -125,6 +132,35 @@ const renderer = await createCliRenderer({
 				],
 			}
 		: {}),
+});
+
+// Kitty keyboard protocol: ENABLE at startup so modified keys (Shift+Enter,
+// Shift+Backspace, Ctrl+Enter…) are reported distinctly by any terminal that
+// supports CSI-u (herdr, kitty, wezterm, foot, ghostty). Terminals that do
+// not support it ignore the sequence and keep sending legacy codes — the
+// existing parsing path is untouched. The converter below then normalizes
+// every CSI-u key into OpenTUI's NATIVE modifyOtherKeys form, because
+// OpenTUI's own kitty parser mis-maps shapes like `\x1b[8u` (herdr
+// backspace) to `\b` instead of `backspace` — that mis-map is why kitty
+// mode was previously disabled entirely.
+process.stdout.write('\x1b[>1u');
+renderer.prependInputHandler((raw: string) => {
+	const converted = kittyToXterm(raw);
+	if (converted === null) return false;
+	const key = parseKeypress(converted);
+	if (key) {
+		logKey('RAW', raw);
+		// Route through the SAME path normal keys take: the internal handler
+		// wraps the parsed key in a KeyEvent and emits 'keypress' — the app
+		// listeners (useKeyboard / InputBox) receive it identically.
+		renderer._internalKeyInput.processParsedKey({
+			...key,
+			sequence: raw,
+			raw,
+		});
+		return true; // consume the original, the converted key was emitted
+	}
+	return false;
 });
 
 // Preview mode: spawn the keyword mock provider and clean it up on exit.
@@ -146,13 +182,9 @@ if (PREVIEW_TUI) {
 	// log into the running node executable, writeFileSync throws ETXTBSY,
 	// the request handler dies and every provider call hangs.
 	const mockLog = '/tmp/bobonyo-mock-requests.jsonl';
-	const mock = spawn(
-		'node',
-		[mockServer, '--port', '4123', '--log', mockLog],
-		{
+	const mock = spawn('node', [mockServer, '--port', '4123', '--log', mockLog], {
 		stdio: 'ignore',
-		},
-	);
+	});
 	process.on('exit', () => mock.kill());
 }
 
@@ -162,7 +194,8 @@ renderer.once('destroy', () => {
 	// after exit (parity: nanocoder restores the terminal on quit).
 	try {
 		process.stdout.write(
-			'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
+			// \x1b[<u disables the kitty keyboard protocol we enabled.
+			'\x1b[<u\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
 		);
 	} catch {
 		// stdout may already be gone

@@ -1152,6 +1152,25 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
+	test('kitty keyboard protocol is enabled and normalized to native parsing', () => {
+		// The per-pane Shift+Enter bug: terminals send Shift+Enter as a plain
+		// `\r` (indistinguishable from Enter) UNLESS the kitty keyboard
+		// protocol is enabled. The app must enable it and route every CSI-u
+		// sequence through kittyToXterm (OpenTUI's own kitty parser mis-names
+		// herdr backspace `\x1b[8u` as `\b`). A regression that re-disables
+		// kitty or drops the converter breaks Shift+Enter on other panes.
+		const index = read('./index.tsx');
+		expect(index).toMatch(/process\.stdout\.write\('\\x1b\[>1u'\)/);
+		expect(index).toMatch(/prependInputHandler/);
+		expect(index).toMatch(/kittyToXterm\(raw\)/);
+		expect(index).toMatch(/\\x1b\[<u/); // disabled cleanly on exit
+		const keys = read('./kitty-keys.ts');
+		expect(keys).toMatch(/export function kittyToXterm/);
+		// Shift+Enter: kitty stored mod 2 = shift → xterm mod 2.
+		expect(keys).toMatch(/Math\.max\(0, stored - 1\)/);
+		expect(keys).toMatch(/mask & 1 \? 1 : 0/);
+	});
+
 	test('ANY provider with a discovery URL fetches its models', () => {
 		// DeepSeek/Xiaomi have dedicated fetchers; every other preset
 		// (OpenAI, OpenRouter, Mistral, ...) carries a modelDiscoveryUrl and
