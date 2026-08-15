@@ -53,6 +53,23 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('every live tool row keeps the settled leading breakline', () => {
 		const src = read('./components/live-tool-rows.tsx');
 		expect(src).toMatch(/<box height=\{1\} \/>/);
+		// SINGLE breakline only: the bash/file row components render their
+		// OWN leading breakline, so the live wrapper must NOT add another
+		// before them — a double blank row appeared while running and
+		// collapsed when the row settled (the "extra breakline").
+		const beforeBash = src.slice(0, src.indexOf("row.lang === 'bashrow'"));
+		const bashBranch = src.slice(
+			src.indexOf("row.lang === 'bashrow'"),
+			src.indexOf("row.lang === 'filerow'"),
+		);
+		expect(bashBranch).not.toMatch(/<box height=\{1\} \/>/);
+		const fileBranch = src.slice(
+			src.indexOf("row.lang === 'filerow'"),
+			src.indexOf("row.lang !== 'bashrow'"),
+		);
+		expect(fileBranch).not.toMatch(/<box height=\{1\} \/>/);
+		// The breakline lives ONLY inside the generic (non-bash/file) branch.
+		expect(beforeBash).not.toMatch(/<box height=\{1\} \/>/);
 	});
 
 	test('the live streaming reply keeps the settled leading breakline', () => {

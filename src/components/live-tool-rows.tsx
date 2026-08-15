@@ -34,11 +34,8 @@ export function LiveToolRows(props: {
 	const dim = () => createTextAttributes({dim: true});
 	return (
 		<For each={props.rows}>
-			{(row) => (
+			{row => (
 				<box flexDirection="column">
-					{/* Leading breakline: parity with the settled blank rows
-					    between blocks (user msg → blank → tool row). */}
-					<box height={1} />
 					{/* RUNNING bash rows stream INSIDE the same bordered box
 					    the settled row uses (the border is drawn by OpenTUI,
 					    so streamed/wrapped content always stays inside). */}
@@ -71,13 +68,18 @@ export function LiveToolRows(props: {
 							row.lang !== 'filediff'
 						}
 					>
+						{/* Leading breakline ONLY for the generic path: the
+						    bash/file row components (BashToolRow,
+						    FileToolRow) render their OWN leading breakline
+						    (parity with their settled renderers). A
+						    breakline here AND in the component doubled the
+						    blank row while running — the "extra breakline"
+						    that vanished when the row settled. */}
+						<box height={1} />
 						<box flexDirection="row">
 							{/* Blinking secondary glyph, width-stable (the
 							    hidden frame keeps a space). */}
-							<text
-								fg={colors().secondary}
-								attributes={dim()}
-							>
+							<text fg={colors().secondary} attributes={dim()}>
 								{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
 							</text>
 							{/* ONE text renderable per header/body line,
@@ -91,7 +93,7 @@ export function LiveToolRows(props: {
 							    handles. */}
 							<text>
 								<For each={row.header}>
-									{(c) => (
+									{c => (
 										<span
 											style={{
 												fg: c.fg as never,
@@ -105,11 +107,11 @@ export function LiveToolRows(props: {
 							</text>
 						</box>
 						<For each={row.body}>
-							{(line) => (
+							{line => (
 								<box flexDirection="row">
 									<text>
 										<For each={line}>
-											{(c) => (
+											{c => (
 												<span
 													style={{
 														fg: c.fg as never,
@@ -125,7 +127,7 @@ export function LiveToolRows(props: {
 							)}
 						</For>
 					</Show>
-					</box>
+				</box>
 			)}
 		</For>
 	);

@@ -3,6 +3,7 @@ import {describe, expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
 import type {CapturedFrame} from '@opentui/core';
 import {FileToolRow} from './components/file-tool-row';
+import {LiveToolRows} from './components/live-tool-rows';
 import {liveRowSegments} from './live-tool-row';
 import {colors} from './theme';
 import {formatToolEntry} from './tool-display';
@@ -212,5 +213,55 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(textOf(frame, 9)).toMatch(/^ {3}404 \+ /);
 		// No anchor context rows (397-400) and no phantom row 10.
 		expect(textOf(frame, 10).trim()).toBe('');
+	});
+
+	test('LIVE and SETTLED file rows paint the SAME rows (one breakline, no double)', async () => {
+		// The reported bug: LiveToolRows rendered its own leading breakline
+		// AND FileToolRow/BashToolRow render theirs — the running row showed
+		// TWO blank lines that collapsed to ONE when it settled (a visible
+		// "extra breakline" that disappeared mid-turn). The live render must
+		// be byte-identical to the settled one: same painted rows.
+		const seg = diffSegments(
+			397,
+			'const a = 1;',
+			'const a = 1;\n\nconst b = 2;',
+		);
+		const painted = (frame: CapturedFrame): string[] =>
+			frame.lines
+				.map(line =>
+					line.spans
+						.map(s => s.text)
+						.join('')
+						.trimEnd(),
+				)
+				.filter(text => text.trim() !== '');
+
+		const live = await testRender(
+			() => <LiveToolRows rows={[{...seg, lang: 'filediff'}]} />,
+			{width: 100, height: 20},
+		);
+		await live.flush();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const liveRows = painted(live.captureSpans());
+
+		const settled = await testRender(
+			() => (
+				<FileToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={false}
+				/>
+			),
+			{width: 100, height: 20},
+		);
+		await settled.flush();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const settledRows = painted(settled.captureSpans());
+
+		expect(liveRows).toEqual(settledRows);
+		// Exactly ONE leading breakline: header at row 1, not row 2.
+		expect(liveRows[0]).toContain('✦ Edit src/foo.ts');
 	});
 });
