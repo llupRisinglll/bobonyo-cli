@@ -1152,20 +1152,28 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
-	test('kitty keyboard protocol is enabled and normalized to native parsing', () => {
+	test('kitty keyboard protocol is gated, dual-protocol, and normalized', () => {
 		// The per-pane Shift+Enter bug: terminals send Shift+Enter as a plain
-		// `\r` (indistinguishable from Enter) UNLESS the kitty keyboard
-		// protocol is enabled. The app must enable it and route every CSI-u
-		// sequence through kittyToXterm (OpenTUI's own kitty parser mis-names
-		// herdr backspace `\x1b[8u` as `\b`). A regression that re-disables
-		// kitty or drops the converter breaks Shift+Enter on other panes.
+		// `\r` (indistinguishable from Enter) UNLESS extended key reporting
+		// is enabled. The app must gate it on known-good terminals, write BOTH
+		// the kitty (`>1u`) and modifyOtherKeys (`>4;2m`) enables (tmux only
+		// accepts the latter), and route every CSI-u sequence through
+		// kittyToXterm (OpenTUI's own kitty parser mis-names herdr backspace
+		// `\x1b[8u` as `\b`). A regression that re-disables kitty, drops the
+		// gate, or drops the converter breaks Shift+Enter on other panes.
 		const index = read('./index.tsx');
-		expect(index).toMatch(/process\.stdout\.write\('\\x1b\[>1u'\)/);
+		expect(index).toMatch(/supportsExtendedKeys\(\)/);
+		expect(index).toMatch(/KITTY_KEYBOARD_ENABLE/);
+		expect(index).toMatch(/MODIFY_OTHER_KEYS_ENABLE/);
 		expect(index).toMatch(/prependInputHandler/);
 		expect(index).toMatch(/kittyToXterm\(raw\)/);
-		expect(index).toMatch(/\\x1b\[<u/); // disabled cleanly on exit
+		expect(index).toMatch(/KITTY_KEYBOARD_DISABLE/);
 		const keys = read('./kitty-keys.ts');
 		expect(keys).toMatch(/export function kittyToXterm/);
+		expect(keys).toMatch(/export function supportsExtendedKeys/);
+		// Allowlist safety: unknown terminals default OFF.
+		expect(keys).toMatch(/EXTENDED_KEYS_TERMINALS/);
+		expect(keys).toMatch(/return false;/);
 		// Shift+Enter: kitty stored mod 2 = shift → xterm mod 2.
 		expect(keys).toMatch(/Math\.max\(0, stored - 1\)/);
 		expect(keys).toMatch(/mask & 1 \? 1 : 0/);

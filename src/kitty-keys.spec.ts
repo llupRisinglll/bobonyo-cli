@@ -1,6 +1,13 @@
 import {describe, expect, test} from 'bun:test';
 import {parseKeypress} from '@opentui/core';
-import {kittyToXterm} from './kitty-keys';
+import {
+	KITTY_KEYBOARD_DISABLE,
+	KITTY_KEYBOARD_ENABLE,
+	MODIFY_OTHER_KEYS_DISABLE,
+	MODIFY_OTHER_KEYS_ENABLE,
+	kittyToXterm,
+	supportsExtendedKeys,
+} from './kitty-keys';
 
 describe('kittyToXterm (kitty CSI-u → native modifyOtherKeys)', () => {
 	test('Shift+Enter (kitty 13;2u) converts to the native shift-return form', () => {
@@ -72,5 +79,51 @@ describe('kittyToXterm (kitty CSI-u → native modifyOtherKeys)', () => {
 		]) {
 			expect(kittyToXterm(legacy)).toBeNull();
 		}
+	});
+});
+
+describe('supportsExtendedKeys (allowlist gate)', () => {
+	const savedProgram = process.env.TERM_PROGRAM;
+	const savedTerm = process.env.TERM;
+	const savedDisable = process.env.BOBONYO_DISABLE_EXTENDED_KEYS;
+	const restore = () => {
+		process.env.TERM_PROGRAM = savedProgram;
+		process.env.TERM = savedTerm;
+		process.env.BOBONYO_DISABLE_EXTENDED_KEYS = savedDisable;
+	};
+	test('known terminals (herdr/kitty/wezterm/ghostty/foot) are enabled', () => {
+		for (const term of ['herdr', 'kitty', 'WezTerm', 'ghostty', 'foot']) {
+			process.env.TERM_PROGRAM = term;
+			expect(supportsExtendedKeys()).toBe(true);
+		}
+		restore();
+	});
+	test('herdr via TERM (no TERM_PROGRAM) is enabled too', () => {
+		delete process.env.TERM_PROGRAM;
+		process.env.TERM = 'xterm-herdr';
+		expect(supportsExtendedKeys()).toBe(true);
+		restore();
+	});
+	test('unknown terminals default OFF (xterm.js/SSH safety)', () => {
+		process.env.TERM_PROGRAM = 'vscode';
+		expect(supportsExtendedKeys()).toBe(false);
+		process.env.TERM_PROGRAM = 'xterm';
+		expect(supportsExtendedKeys()).toBe(false);
+		restore();
+	});
+	test('explicit BOBONYO_DISABLE_EXTENDED_KEYS=1 wins over allowlist', () => {
+		process.env.TERM_PROGRAM = 'herdr';
+		process.env.BOBONYO_DISABLE_EXTENDED_KEYS = '1';
+		expect(supportsExtendedKeys()).toBe(false);
+		restore();
+	});
+});
+
+describe('enable/disable sequences (dual-protocol)', () => {
+	test('kitty AND modifyOtherKeys are both exported for the enable write', () => {
+		expect(KITTY_KEYBOARD_ENABLE).toBe('\x1b[>1u');
+		expect(MODIFY_OTHER_KEYS_ENABLE).toBe('\x1b[>4;2m');
+		expect(KITTY_KEYBOARD_DISABLE).toBe('\x1b[<u');
+		expect(MODIFY_OTHER_KEYS_DISABLE).toBe('\x1b[<4;2m');
 	});
 });

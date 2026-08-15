@@ -7,7 +7,14 @@ import {join} from 'node:path';
 import {createCliRenderer, parseKeypress} from '@opentui/core';
 import {render} from '@opentui/solid';
 import {App} from './app';
-import {kittyToXterm} from './kitty-keys';
+import {
+	KITTY_KEYBOARD_DISABLE,
+	KITTY_KEYBOARD_ENABLE,
+	MODIFY_OTHER_KEYS_DISABLE,
+	MODIFY_OTHER_KEYS_ENABLE,
+	kittyToXterm,
+	supportsExtendedKeys,
+} from './kitty-keys';
 
 // Debug key logger (NANOCODER_KEYLOG=1): records every raw input sequence AND
 // every parsed key event to /tmp/otui-keys.log so herdr key-delivery problems
@@ -143,7 +150,13 @@ const renderer = await createCliRenderer({
 // OpenTUI's own kitty parser mis-maps shapes like `\x1b[8u` (herdr
 // backspace) to `\b` instead of `backspace` — that mis-map is why kitty
 // mode was previously disabled entirely.
-process.stdout.write('\x1b[>1u');
+// Gate on terminal capability: some terminals HONOR the enable but emit
+// unparseable codepoints (xterm.js/VS Code, some SSH wrappers) — enabling
+// there breaks normal typing. Only known-good terminals get the protocol.
+if (supportsExtendedKeys()) {
+	process.stdout.write(KITTY_KEYBOARD_ENABLE);
+	process.stdout.write(MODIFY_OTHER_KEYS_ENABLE);
+}
 renderer.prependInputHandler((raw: string) => {
 	const converted = kittyToXterm(raw);
 	if (converted === null) return false;
@@ -195,7 +208,9 @@ renderer.once('destroy', () => {
 	try {
 		process.stdout.write(
 			// \x1b[<u disables the kitty keyboard protocol we enabled.
-			'\x1b[<u\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
+			KITTY_KEYBOARD_DISABLE +
+				MODIFY_OTHER_KEYS_DISABLE +
+				'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
 		);
 	} catch {
 		// stdout may already be gone
