@@ -76,25 +76,22 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 			'const a = 1;',
 			'const a = 1;\nconst b = 2;\nconst c = 3;',
 		);
-		// 0: (blank breakline) 1: header 2: summary 3+: diff rows.
-		const context = textOf(frame, 3);
-		const add1 = textOf(frame, 4);
-		const add2 = textOf(frame, 5);
+		// 0: (blank breakline) 1: header 2: summary 3+: diff rows. The
+		// unchanged `const a = 1;` anchor is stripped; only the 2 adds paint.
+		const add1 = textOf(frame, 3);
+		const add2 = textOf(frame, 4);
 		// NOT flush: the number gutter starts after the 2-space container
 		// lead, so the block nests under `✦ Edit` instead of column 0.
-		expect(context.startsWith('  ')).toBe(true);
-		expect(context.indexOf('42')).toBeGreaterThan(0);
-		// Absolute file lines: 42 (context) then 43 / 44 (adds) — never the
-		// snippet-relative 1 / 2 / 3.
-		expect(context).toContain('42   const a = 1;');
+		expect(add1.startsWith('  ')).toBe(true);
+		expect(add1.indexOf('43')).toBeGreaterThan(0);
+		// Absolute file lines: 43 / 44 (adds) — never the snippet-relative
+		// 1 / 2 / 3.
 		expect(add1).toContain('43 + const b = 2;');
 		expect(add2).toContain('44 + const c = 3;');
-		// The CODE column is identical across context and add rows (the
-		// sigil sits in its own column with a trailing space).
-		const codeCol = colOf(context, 'const a');
+		// The summary reflects ONLY the true change: 0 removed, 2 added.
+		expect(textOf(frame, 2)).toContain(' ⎿ 0 lines → 2 lines');
 		// EXACT layout: 2-space lead + 4-wide gutter + sigil column + sigil
 		// space = code always starts at column 9, for every row.
-		expect(codeCol).toBe(9);
 		expect(colOf(add1, 'const b')).toBe(9);
 		expect(colOf(add2, 'const c')).toBe(9);
 		// Sigil spaced: `+ const`, never `+const`.
@@ -104,35 +101,31 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 
 	test('3-digit line numbers stay aligned (right-aligned 4-wide gutter)', async () => {
 		const frame = await renderDiff(142, 'old line', 'old line\nnew line');
-		const context = textOf(frame, 3);
-		const add = textOf(frame, 4);
-		expect(context).toContain('142   old line');
+		const add = textOf(frame, 3);
 		expect(add).toContain('143 + new line');
 		// The 4-wide gutter absorbs the extra digit: the code still lands at
 		// column 9, identical to the 2-digit case.
-		expect(colOf(context, 'old line')).toBe(9);
 		expect(colOf(add, 'new line')).toBe(9);
 	});
 
-	test('a mid-file replace shows the correct remove/add/context lines', async () => {
+	test('a mid-file replace shows the correct remove/add lines', async () => {
 		const frame = await renderDiff(
 			7,
 			'x = 1;\ny = 2;',
 			'x = 1;\nx = 10;\ny = 2;',
 		);
-		expect(textOf(frame, 3)).toContain('7   x = 1;');
-		expect(textOf(frame, 4)).toContain('8 + x = 10;');
-		expect(textOf(frame, 5)).toContain('8   y = 2;');
-		// Same code column across all three rows.
-		expect(textOf(frame, 3).indexOf('x = 1;')).toBe(9);
-		expect(textOf(frame, 4).indexOf('x = 10;')).toBe(9);
-		expect(textOf(frame, 5).indexOf('y = 2;')).toBe(9);
+		// `x = 1;` (prefix) and `y = 2;` (suffix) are unchanged anchors and
+		// stripped; the true change is ONE addition at line 8 — no phantom
+		// remove of the unchanged `y = 2;`.
+		expect(textOf(frame, 2)).toContain(' ⎿ 0 lines → 1 line');
+		expect(textOf(frame, 3)).toContain('8 + x = 10;');
+		expect(textOf(frame, 4).trim()).toBe('');
 	});
 
 	test('remove rows carry the - sigil with its trailing space too', async () => {
 		const frame = await renderDiff(3, 'a\nb\nc', 'a\nc');
-		// Row 3 = context a, 4 = remove b (line 4), 5 = context c (line 5).
-		const remove = textOf(frame, 4);
+		// Common `a` prefix + `c` suffix stripped: 1 remove at line 4.
+		const remove = textOf(frame, 3);
 		expect(remove).toContain('4 - b');
 		expect(remove).not.toMatch(/-b\b/);
 	});
@@ -154,39 +147,70 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 			'\t});',
 		].join('\n');
 		const frame = await renderDiff(1, oldStr, newStr);
-		// 0 blank, 1 header, 2 summary, 3-4 context, 5-6 ADDS, 7 context.
-		const add1 = textOf(frame, 5);
-		const add2 = textOf(frame, 6);
-		// The added lines render with the SAME leading indentation as the
-		// context rows (the test renderer expands tabs, so compare COLUMNS):
-		// the code after `+ ` starts exactly where the context code starts.
-		expect(colOf(add1, '// INDENTATION')).toBe(
-			colOf(textOf(frame, 3), 'const display'),
-		);
-		expect(colOf(add2, 'expect(display)')).toBe(
-			colOf(textOf(frame, 3), 'const display'),
-		);
-		// And that column is PAST the 4-wide number gutter (not flush).
+		// 0 blank, 1 header, 2 summary, 3-4 ADDS (the common prefix/suffix
+		// anchor lines are stripped).
+		const add1 = textOf(frame, 3);
+		const add2 = textOf(frame, 4);
+		// Both added lines render with the SAME leading indentation (the
+		// test renderer expands tabs, so compare COLUMNS) — past the gutter.
 		expect(colOf(add1, '// INDENTATION')).toBeGreaterThan(9);
+		expect(colOf(add2, 'expect(display)')).toBe(colOf(add1, '// INDENTATION'));
 	});
 
 	test('a blank line added mid-edit renders ONE row, never a phantom extra', async () => {
 		// The reported bug: `new_string` with an interior blank line made
 		// the summary say `1 line → 2 lines` while the diff rendered 3 rows
 		// (the blank line) — the phantom extra. The summary must count the
-		// blank and the painted rows must match it exactly.
+		// blank and the painted rows must match it exactly. The unchanged
+		// `const a = 1;` anchor is stripped.
 		const frame = await renderDiff(
 			3,
 			'const a = 1;',
 			'const a = 1;\n\nconst b = 2;',
 		);
-		// 0 blank, 1 header, 2 summary, 3 ctx (line 3), 4 blank add (line 4),
-		// 5 add (line 5). No row 6 — never a phantom extra.
-		expect(textOf(frame, 2)).toContain(' ⎿ 1 line → 3 lines');
-		expect(textOf(frame, 3)).toContain('3   const a = 1;');
-		expect(textOf(frame, 4)).toMatch(/^ {5}4 \+ /);
-		expect(textOf(frame, 5)).toContain('5 + const b = 2;');
+		// 0 blank, 1 header, 2 summary, 3 blank add (line 4), 4 add (line 5).
+		// No row 5 — never a phantom extra.
+		expect(textOf(frame, 2)).toContain(' ⎿ 0 lines → 2 lines');
+		expect(textOf(frame, 3)).toMatch(/^ {5}4 \+ /);
+		expect(textOf(frame, 4)).toContain('5 + const b = 2;');
 		// The blank-add row paints the number + sigil (not empty).
-		expect(textOf(frame, 4).trim()).not.toBe('');
+		expect(textOf(frame, 3).trim()).not.toBe('');
+	});
+
+	test('redundant anchor context never renders (the 7→8 phantom)', async () => {
+		// The reported bug: old_string/new_string both carried 4 IDENTICAL
+		// anchoring lines around the change, so the diff rendered them as
+		// context and the summary said `7 → 8` for a real 3 → 4 edit — the
+		// "extra 1 more line". The painted rows must show ONLY the true
+		// change: 3 removes + 4 adds, numbered 401-404.
+		const ctx = [
+			"\t\texpect(raw).toContain(' ⎿ 1 line → 3 lines');",
+			"\t\tconst {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);",
+			'\t\t// summary + 3 diff rows (ctx, blank add, add) — never 4.',
+			'\t\texpect(body.length).toBe(4);',
+		].join('\n');
+		const oldBlock = [
+			'\t\t// The blank add renders as a numbered `+` row, not an empty row.',
+			"\t\texpect(body[2]?.map(c => c.text).join('')).toMatch(/3 \\+ /);",
+			"\t\texpect(body[3]?.map(c => c.text).join('')).toContain('4 + const b');",
+		].join('\n');
+		const newBlock = [
+			'\t\t// The blank add renders as a numbered `+` row (line 4), not an',
+			'\t\t// empty row; the real add lands at line 5.',
+			"\t\texpect(body[2]?.map(c => c.text).join('')).toMatch(/4 \\+ /);",
+			"\t\texpect(body[3]?.map(c => c.text).join('')).toContain('5 + const b');",
+		].join('\n');
+		const frame = await renderDiff(
+			397,
+			`${ctx}\n${oldBlock}`,
+			`${ctx}\n${newBlock}`,
+		);
+		// 0 blank, 1 header, 2 summary, 3-9 = 3 removes + 4 adds (7 rows).
+		expect(textOf(frame, 2)).toContain(' ⎿ 3 lines → 4 lines');
+		// 3-digit numbers: 2-space lead + 1 pad = 3 spaces before `401`.
+		expect(textOf(frame, 3)).toMatch(/^ {3}401 - /);
+		expect(textOf(frame, 9)).toMatch(/^ {3}404 \+ /);
+		// No anchor context rows (397-400) and no phantom row 10.
+		expect(textOf(frame, 10).trim()).toBe('');
 	});
 });

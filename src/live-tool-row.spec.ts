@@ -224,10 +224,15 @@ describe('liveRowSegments', () => {
 	});
 
 	describe('edit diff preview cap', () => {
+		// A genuinely LARGE change (no common lines): 80 old lines all
+		// replaced by 80 different new lines. The 50-line collapse cap and
+		// the `+N more lines` footer must still apply.
 		const bigOld = Array.from({length: 80}, (_, i) => `old line ${i + 1}`).join(
 			'\n',
 		);
-		const bigNew = `${bigOld}\nnew line added`;
+		const bigNew = Array.from({length: 80}, (_, i) => `new line ${i + 1}`).join(
+			'\n',
+		);
 		const tool = (expanded: boolean) =>
 			formatToolEntry(
 				{
@@ -249,7 +254,8 @@ describe('liveRowSegments', () => {
 
 		test('collapsed caps at 50 lines with a +N more lines footer', () => {
 			const raw = tool(false);
-			expect(raw).toMatch(/… \+31 more lines/);
+			// 160 diff rows (80 removes + 80 adds), first 50 shown → 110 hidden.
+			expect(raw).toMatch(/… \+110 more lines/);
 			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
 			// summary + 50 diff lines + footer
 			expect(body.length).toBe(52);
@@ -259,7 +265,8 @@ describe('liveRowSegments', () => {
 			const raw = tool(true);
 			expect(raw).not.toMatch(/more lines/);
 			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
-			expect(body.length).toBe(82);
+			// summary + 160 diff rows
+			expect(body.length).toBe(161);
 		});
 
 		test('diff lines render CONTIGUOUSLY (no blank rows between)', () => {
@@ -272,7 +279,7 @@ describe('liveRowSegments', () => {
 			);
 			// Every diff line is a real row — a regression here means the
 			// edit preview gained an extra breakline per line.
-			expect(body.length).toBe(82);
+			expect(body.length).toBe(161);
 			for (const line of body) {
 				expect(
 					line
@@ -290,6 +297,11 @@ describe('liveRowSegments', () => {
 		// the old_string/new_string SNIPPET (starting at 1); the tool now
 		// reports the first occurrence's absolute line and the preview
 		// shifts every diff row by that base.
+		//
+		// The old_string anchors the change with the UNCHANGED first line
+		// (`const a = 1;` appears in BOTH strings): the diff strips that
+		// redundant context and shows ONLY the true addition, still numbered
+		// against the real file.
 		const tool = (output: string) =>
 			formatToolEntry(
 				{
@@ -313,15 +325,14 @@ describe('liveRowSegments', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts (at line 42)\nconst a = 1;\nconst b = 2;',
 			);
-			// Context row: unchanged `const a` sits at file line 42; the
-			// added line lands at 43 — NEVER the snippet-relative 1 / 2.
-			// Every row also carries the fixed 2-space container lead (the
-			// diff block must not render flush at column 0) and the sigil
-			// keeps its trailing space (`+ const`, never `+const`).
-			expect(raw).toContain('    42   const a = 1;');
+			// The unchanged `const a = 1;` is stripped as redundant context;
+			// the ADDED line lands at the REAL file line 43 — never the
+			// snippet-relative 1 / 2. Every row carries the fixed 2-space
+			// container lead and the sigil keeps its trailing space.
+			expect(raw).toContain(' ⎿ 0 lines → 1 line');
 			expect(raw).toContain('    43 + const b = 2;');
+			expect(raw).not.toContain('42   const a = 1;');
 			expect(raw).not.toMatch(/\n\s*1\s/);
-			expect(raw).not.toContain('     1   const a = 1;');
 			expect(raw).not.toContain('+const');
 			expect(raw).not.toContain('-const');
 		});
@@ -329,14 +340,14 @@ describe('liveRowSegments', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts (at line 1)\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain('     1   const a = 1;');
+			expect(raw).toContain(' ⎿ 0 lines → 1 line');
 			expect(raw).toContain('     2 + const b = 2;');
 		});
 		test('legacy results without the marker keep snippet-relative numbers', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain('     1   const a = 1;');
+			expect(raw).toContain(' ⎿ 0 lines → 1 line');
 			expect(raw).toContain('     2 + const b = 2;');
 		});
 		test('the diff body is INDENTED (2-space container lead on every row)', () => {
@@ -375,7 +386,8 @@ describe('liveRowSegments', () => {
 			// The reported bug: `new_string` with an interior blank line made
 			// the summary filter the empty line (saying `1 line → 2 lines`)
 			// while the diff renderer kept it (rendering 3 rows) — the
-			// phantom "extra line". The summary must count blanks too.
+			// phantom "extra line". The summary must count blanks too, and
+			// the unchanged `const a = 1;` anchor is stripped as context.
 			const raw = formatToolEntry(
 				{
 					name: 'string_replace',
@@ -394,14 +406,69 @@ describe('liveRowSegments', () => {
 				true,
 				84,
 			);
-			expect(raw).toContain(' ⎿ 1 line → 3 lines');
+			// 0 removed, 2 added (blank + line) — exactly the diff rows.
+			expect(raw).toContain(' ⎿ 0 lines → 2 lines');
 			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
-			// summary + 3 diff rows (ctx, blank add, add) — never 4.
-			expect(body.length).toBe(4);
+			// summary + 2 diff rows (blank add, add) — never 3.
+			expect(body.length).toBe(3);
 			// The blank add renders as a numbered `+` row (line 4), not an
 			// empty row; the real add lands at line 5.
-			expect(body[2]?.map(c => c.text).join('')).toMatch(/4 \+ /);
-			expect(body[3]?.map(c => c.text).join('')).toContain('5 + const b');
+			expect(body[1]?.map(c => c.text).join('')).toMatch(/4 \+ /);
+			expect(body[2]?.map(c => c.text).join('')).toContain('5 + const b');
+		});
+		test('redundant anchor context is stripped (no phantom extra rows)', () => {
+			// The reported bug: old_string/new_string both carried 4
+			// IDENTICAL anchoring lines around the change, so the diff
+			// rendered them as "context" and the summary said `7 → 8` for a
+			// real 3 → 4 edit — the "extra 1 more line". Identical leading
+			// and trailing lines must be stripped; only the true change
+			// renders and the summary must match the rows exactly.
+			const ctx = [
+				"\t\t\texpect(raw).toContain(' ⎿ 1 line → 3 lines');",
+				"\t\t\tconst {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);",
+				'\t\t\t// summary + 3 diff rows (ctx, blank add, add) — never 4.',
+				'\t\t\texpect(body.length).toBe(4);',
+			].join('\n');
+			const oldBlock = [
+				'\t\t\t// The blank add renders as a numbered `+` row, not an empty row.',
+				"\t\t\texpect(body[2]?.map(c => c.text).join('')).toMatch(/3 \\+ /);",
+				"\t\t\texpect(body[3]?.map(c => c.text).join('')).toContain('4 + const b');",
+			].join('\n');
+			const newBlock = [
+				'\t\t\t// The blank add renders as a numbered `+` row (line 4), not an',
+				'\t\t\t// empty row; the real add lands at line 5.',
+				"\t\t\texpect(body[2]?.map(c => c.text).join('')).toMatch(/4 \\+ /);",
+				"\t\t\texpect(body[3]?.map(c => c.text).join('')).toContain('5 + const b');",
+			].join('\n');
+			const raw = formatToolEntry(
+				{
+					name: 'string_replace',
+					detail: 'src/live-tool-row.spec.ts',
+					output: `Replaced 1 occurrence in src/live-tool-row.spec.ts (at line 397)\n${ctx}\n${newBlock}`,
+					args: {
+						path: 'src/live-tool-row.spec.ts',
+						old_string: `${ctx}\n${oldBlock}`,
+						new_string: `${ctx}\n${newBlock}`,
+					},
+				},
+				true,
+				'done',
+				true,
+				true,
+				84,
+			);
+			// The 4 identical anchor lines are stripped: true change 3 → 4,
+			// never the inflated 7 → 8.
+			expect(raw).toContain(' ⎿ 3 lines → 4 lines');
+			expect(raw).not.toContain('7 lines → 8 lines');
+			// No context rows — the stripped middle renders ONLY removes +
+			// adds, numbered against the real file (401-404).
+			expect(raw).not.toMatch(/\n\s+397\s/);
+			expect(raw).toContain('   401 - ');
+			expect(raw).toContain('   404 + ');
+			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
+			// summary + 3 removes + 4 adds = 8 rows — never 12.
+			expect(body.length).toBe(8);
 		});
 	});
 });

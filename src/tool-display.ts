@@ -268,11 +268,40 @@ function formatFilePreview(
 	// invents a phantom final line.
 	const oldLines = oldStr.replace(/\n+$/, '').split('\n');
 	const newLines = newStr.replace(/\n+$/, '').split('\n');
-	const summary = ` ⎿ ${oldLines.length} line${oldLines.length === 1 ? '' : 's'} → ${newLines.length} line${newLines.length === 1 ? '' : 's'}`;
+	// STRIP REDUNDANT CONTEXT: the edit tool's old/new strings usually
+	// ANCHOR the change with identical surrounding lines. Those lines are
+	// not part of the change — rendering them as context inflated the diff
+	// (a real 3 → 4 edit showed `7 → 8` and 4 phantom "extra" rows). Diff
+	// only the MIDDLE that actually differs; the summary then reflects the
+	// true change and the rendered rows match it exactly.
+	let prefix = 0;
+	while (
+		prefix < oldLines.length &&
+		prefix < newLines.length &&
+		oldLines[prefix] === newLines[prefix]
+	) {
+		prefix++;
+	}
+	let suffix = 0;
+	while (
+		suffix < oldLines.length - prefix &&
+		suffix < newLines.length - prefix &&
+		oldLines[oldLines.length - 1 - suffix] ===
+			newLines[newLines.length - 1 - suffix]
+	) {
+		suffix++;
+	}
+	const diffOld = oldLines.slice(prefix, oldLines.length - suffix);
+	const diffNew = newLines.slice(prefix, newLines.length - suffix);
+	const summary = ` ⎿ ${diffOld.length} line${diffOld.length === 1 ? '' : 's'} → ${diffNew.length} line${diffNew.length === 1 ? '' : 's'}`;
 	// Number the diff against the REAL file, not the snippet: the tool
-	// reports where the FIRST occurrence sat (`(at line N)`), so an edit at
-	// file line 42 renders `42 - old` / `42 + new` instead of always 1..N.
-	const diff = lineDiffText(oldStr, newStr, replacementBaseLine(tool.output));
+	// reports where the FIRST occurrence sat (`(at line N)`), and the
+	// stripped middle starts `prefix` lines into that occurrence.
+	const diff = lineDiffText(
+		diffOld.join('\n'),
+		diffNew.join('\n'),
+		replacementBaseLine(tool.output) + prefix,
+	);
 	// Cap the diff preview like the Write preview: collapsed shows the first
 	// 50 lines with a `+N more lines` footer (expand via click / ctrl+o);
 	// expanded shows the whole diff.

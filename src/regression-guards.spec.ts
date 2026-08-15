@@ -901,7 +901,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The offset math must actually move the rendered numbers: the
 		// marker line number minus 1 is added to every diff row.
 		expect(display).toMatch(/baseLine - 1/);
-		expect(display).toMatch(/lineDiffText\(oldStr, newStr, /);
+		// The diff runs on the STRIPPED middle (diffOld/diffNew), numbered
+		// from the real file line of that middle.
+		expect(display).toMatch(/lineDiffText\(\s*diffOld\.join/);
 		// INDENTATION: the diff rows must NOT render flush at column 0 —
 		// every row carries a fixed container lead (the 2-space `lead`
 		// baked into lineDiffText), so the numbered block nests under the
@@ -931,9 +933,22 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		const countBlock = display.slice(
 			display.indexOf('const oldLines = oldStr'),
-			display.indexOf('const summary'),
+			display.indexOf(
+				'const summary',
+				display.indexOf('const oldLines = oldStr'),
+			),
 		);
 		expect(countBlock).not.toMatch(/filter/);
+		// REDUNDANT CONTEXT STRIPPING: identical leading/trailing lines in
+		// old_string/new_string (the edit's ANCHOR) must NOT render as
+		// context — they inflated the summary (`7 → 8` for a real 3 → 4
+		// edit, the "extra 1 more line"). The diff must strip the common
+		// prefix/suffix, and the summary must count ONLY the stripped
+		// middle so the rendered rows always match it.
+		expect(countBlock).toMatch(/const diffOld = oldLines\.slice\(prefix/);
+		expect(countBlock).toMatch(/const diffNew = newLines\.slice\(prefix/);
+		expect(display).toMatch(/` ⎿ \$\{diffOld\.length\} line/);
+		expect(display).toMatch(/replacementBaseLine\(tool\.output\) \+ prefix/);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
