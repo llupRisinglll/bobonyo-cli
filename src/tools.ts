@@ -23,10 +23,7 @@ import {lintBody, loadSkills} from './custom';
 import {subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
 import {snapshotMutationTargets} from './file-undo';
-import {
-	executeNativeWebSearch,
-	resolveWebSearchFallback,
-} from './web-search';
+import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
 import type {Mode, ToolProfile} from './settings';
 
 export interface ToolResult {
@@ -40,7 +37,10 @@ export interface ToolContext {
 }
 
 interface ToolDef {
-	execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string> | string;
+	execute: (
+		args: Record<string, unknown>,
+		ctx: ToolContext,
+	) => Promise<string> | string;
 	/** Read-only tools never require approval (B16/D4 default). */
 	readOnly?: boolean;
 	/** Model-facing description (the provider sees this in the tools array). */
@@ -95,7 +95,10 @@ export function requiresApproval(
 	alwaysAllow: string[] = [],
 ): boolean {
 	if (mode === 'yolo' || mode === 'auto-accept') return false;
-	if (alwaysAllow.includes(name) || alwaysAllow.includes(resolveToolName(name))) {
+	if (
+		alwaysAllow.includes(name) ||
+		alwaysAllow.includes(resolveToolName(name))
+	) {
 		return false;
 	}
 	if (READ_ONLY_TOOLS.has(name)) return false;
@@ -106,7 +109,10 @@ export function requiresApproval(
 /** Read-only tools never mutate state (B17 parallel batch eligibility). */
 export function isReadOnlyTool(name: string): boolean {
 	const canonical = resolveToolName(name);
-	return READ_ONLY_TOOLS.has(canonical) || toolRegistry.get(canonical)?.readOnly === true;
+	return (
+		READ_ONLY_TOOLS.has(canonical) ||
+		toolRegistry.get(canonical)?.readOnly === true
+	);
 }
 
 /** Plan mode excludes mutation tools (D3 MODE_EXCLUDED_TOOLS). */
@@ -201,7 +207,10 @@ export function toolAvailability(
 	return {available: true};
 }
 
-export function isSingleToolProfile(profile: ToolProfile, model: string): boolean {
+export function isSingleToolProfile(
+	profile: ToolProfile,
+	model: string,
+): boolean {
 	const resolved = resolveProfile(profile, model);
 	return resolved === 'nano' || resolved === 'minimal';
 }
@@ -241,7 +250,10 @@ export function displayToolName(name: string): string {
 
 /** Reverse alias map (D2): `Bash` → `execute_bash`, `Read` → `read_file`, … */
 const CANONICAL_BY_ALIAS: Record<string, string> = Object.fromEntries(
-	Object.entries(CLAUDE_CODE_NAMES).map(([canonical, alias]) => [alias, canonical]),
+	Object.entries(CLAUDE_CODE_NAMES).map(([canonical, alias]) => [
+		alias,
+		canonical,
+	]),
 );
 
 export function resolveToolName(name: string): string {
@@ -299,7 +311,11 @@ export function toolArgsSummary(call: MockToolCall): string {
 	// Git tools synthesize the equivalent CLI invocation from the structured
 	// args (parity: nanocoder's getCompactToolDetail) so the header shows
 	// what actually ran (`✦ git_diff(git diff --staged --stat)`).
-	if (call.name === 'git_diff' || call.name === 'git_log' || call.name === 'git_status') {
+	if (
+		call.name === 'git_diff' ||
+		call.name === 'git_log' ||
+		call.name === 'git_status'
+	) {
 		if (call.name === 'git_status') return 'git status';
 		const parts = call.name === 'git_diff' ? ['git diff'] : ['git log'];
 		if (call.name === 'git_diff') {
@@ -309,8 +325,10 @@ export function toolArgsSummary(call: MockToolCall): string {
 			parts.push(`-n ${args.count}`);
 		}
 		if (typeof args?.base === 'string' && args.base) parts.push(args.base);
-		if (typeof args?.author === 'string' && args.author) parts.push(`--author=${args.author}`);
-		if (typeof args?.since === 'string' && args.since) parts.push(`--since=${args.since}`);
+		if (typeof args?.author === 'string' && args.author)
+			parts.push(`--author=${args.author}`);
+		if (typeof args?.since === 'string' && args.since)
+			parts.push(`--since=${args.since}`);
 		if (typeof args?.file === 'string' && args.file) parts.push(args.file);
 		return parts.join(' ');
 	}
@@ -342,11 +360,17 @@ export function toolDisplayDetail(call: MockToolCall): string {
  * First N lines of a tool result, truncated to a sane width per line,
  * the `└` output tail of a settled tool row.
  */
-export function toolResultTail(content: string, maxLines = 3, maxWidth = 100): string {
+export function toolResultTail(
+	content: string,
+	maxLines = 3,
+	maxWidth = 100,
+): string {
 	return content
 		.split('\n')
 		.slice(0, maxLines)
-		.map(line => (line.length > maxWidth ? `${line.slice(0, maxWidth)}…` : line))
+		.map(line =>
+			line.length > maxWidth ? `${line.slice(0, maxWidth)}…` : line,
+		)
 		.join('\n');
 }
 
@@ -513,13 +537,17 @@ registerTool('string_replace', {
 			// seed from old_string so the replacement is deterministic.
 			if (current.trim() === '') current = oldString;
 			else {
-			return `Error: '${oldString}' not found in ${path}`;
+				return `Error: '${oldString}' not found in ${path}`;
 			}
 		}
 		const count = current.split(oldString).length - 1;
 		const updated = current.split(oldString).join(newString);
 		await Bun.write(path, updated);
-		return `Replaced ${count} occurrence${count === 1 ? '' : 's'} in ${path}\n${updated}`;
+		// Report the ABSOLUTE line of the FIRST occurrence in the OLD file so
+		// the preview can number the diff against the real file, never the
+		// snippet-relative 1..N the raw old/new strings would produce.
+		const baseLine = current.split(oldString, 1)[0]?.split('\n').length ?? 1;
+		return `Replaced ${count} occurrence${count === 1 ? '' : 's'} in ${path} (at line ${baseLine})\n${updated}`;
 	},
 });
 
@@ -566,8 +594,7 @@ registerTool('delete_file', {
 		properties: {
 			path: {
 				type: 'string',
-				description:
-					'Absolute or cwd-relative path of the file to delete.',
+				description: 'Absolute or cwd-relative path of the file to delete.',
 			},
 		},
 		required: ['path'],
@@ -621,7 +648,12 @@ registerTool('git_diff', {
 		const staged = args.staged === true;
 		const stat = args.stat === true;
 		const result = Bun.spawnSync(
-			['git', 'diff', ...(staged ? ['--staged'] : []), ...(stat ? ['--stat'] : [])],
+			[
+				'git',
+				'diff',
+				...(staged ? ['--staged'] : []),
+				...(stat ? ['--stat'] : []),
+			],
 			{cwd},
 		);
 		const out = (result.stdout?.toString() ?? '').trim();
@@ -654,9 +686,7 @@ registerTool('git_commit', {
 		const rest = Array.isArray(args.args) ? args.args.map(String) : [];
 		// House rule: refuse multi-line / AI-attributed commit messages
 		// before they land (pure, unit-tested in commit-guard.ts).
-		const violation = gitCommitMessagesViolation(
-			commitMessagesFromArgs(rest),
-		);
+		const violation = gitCommitMessagesViolation(commitMessagesFromArgs(rest));
 		if (violation) {
 			return (
 				`REFUSED to commit — ${violation}.\n` +
@@ -696,7 +726,11 @@ registerTool('git_pr', {
 			return `EXIT_CODE: ${result.exitCode}\n${out}`.trim();
 		}
 		try {
-			const pr = JSON.parse(out) as {url?: string; title?: string; state?: string};
+			const pr = JSON.parse(out) as {
+				url?: string;
+				title?: string;
+				state?: string;
+			};
 			return `PR: ${pr.title ?? ''} (${pr.state ?? ''})\n${pr.url ?? ''}`;
 		} catch {
 			return `EXIT_CODE: ${result.exitCode}\n${out}`.trim();
@@ -754,10 +788,9 @@ registerTool('find_files', {
 	async execute(args, ctx) {
 		const pattern = text(args, 'pattern') || '**/*';
 		const path = text(args, 'path') || '.';
-		const result = Bun.spawnSync(
-			['rg', '--files', '-g', pattern, path],
-			{cwd: process.cwd()},
-		);
+		const result = Bun.spawnSync(['rg', '--files', '-g', pattern, path], {
+			cwd: process.cwd(),
+		});
 		const out = (result.stdout?.toString() ?? '').trim();
 		return streamLines(out || `no files matched ${pattern}`, ctx);
 	},
@@ -782,8 +815,7 @@ registerTool('search_file_contents', {
 			cwd: process.cwd(),
 		});
 		return (
-			(result.stdout?.toString() ?? '').trim() ||
-			`no matches for ${pattern}`
+			(result.stdout?.toString() ?? '').trim() || `no matches for ${pattern}`
 		);
 	},
 });
@@ -940,7 +972,7 @@ registerTool('write_tasks', {
 					? task
 					: typeof task === 'object' && task !== null && 'title' in task
 						? String((task as {title?: unknown}).title ?? 'task')
-				: 'task';
+						: 'task';
 			return `${index + 1}. ${title}`;
 		});
 		// A7/C9: publish the live task list for the running overlay.
@@ -975,17 +1007,21 @@ async function runSubagent(
 					customPrompt ||
 					(SUBAGENT_TYPES[subagentType]?.instruction ??
 						SUBAGENT_TYPES.general!.instruction)
-				}\n\n` +
-				`Task: ${description}`,
+				}\n\n` + `Task: ${description}`,
 		},
 	];
 	for (let round = 0; round < 6; round++) {
-		const result = await streamChat(history, {
-			// C10: stream the subagent's reasoning/text into the running row so
-			// its per-call progress is visible while it works.
-			onText: text => onProgress?.(text),
-			onReasoning: () => {},
-		}, undefined, toolCatalog());
+		const result = await streamChat(
+			history,
+			{
+				// C10: stream the subagent's reasoning/text into the running row so
+				// its per-call progress is visible while it works.
+				onText: text => onProgress?.(text),
+				onReasoning: () => {},
+			},
+			undefined,
+			toolCatalog(),
+		);
 		if (result.toolCalls.length === 0) {
 			return result.text.trim() || 'Subagent produced no output.';
 		}

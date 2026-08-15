@@ -881,6 +881,29 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		}
 	});
 
+	test('edit diff numbers are FILE-absolute, never snippet-relative 1..N', () => {
+		// The reported bug: adding a line showed `1 - 2 - 3 - 4` no matter
+		// where in the file the edit happened (the diff was numbered against
+		// the old/new SNIPPET). string_replace must report the first
+		// occurrence's absolute line and the preview must shift every diff
+		// row by that base.
+		const tools = read('./tools.ts');
+		const replace = tools.slice(
+			tools.indexOf("registerTool('string_replace'"),
+			tools.indexOf("registerTool('diff_edit'"),
+		);
+		expect(replace).toMatch(/\(at line \$\{baseLine\}\)/);
+		expect(replace).toMatch(/baseLine/);
+		expect(replace).toMatch(/split\('\\n'\)\.length/);
+		const display = read('./tool-display.ts');
+		expect(display).toMatch(/replacementBaseLine\(tool\.output\)/);
+		expect(display).toMatch(/export function replacementBaseLine/);
+		// The offset math must actually move the rendered numbers: the
+		// marker line number minus 1 is added to every diff row.
+		expect(display).toMatch(/baseLine - 1/);
+		expect(display).toMatch(/lineDiffText\(oldStr, newStr, /);
+	});
+
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
 		// The tip must NOT ride the Working indicator line anymore; it
 		// renders INSIDE the transcript (breakline above, centered) and only

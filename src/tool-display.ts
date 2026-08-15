@@ -92,7 +92,8 @@ export function formatToolEntry(
 /** Row language id for a tool (used by the History renderNode). */
 export function rowLanguage(name: string): string {
 	const canonical = resolveToolName(name);
-	if (canonical === 'execute_bash' || canonical === 'execute_bash:user') return 'bashrow';
+	if (canonical === 'execute_bash' || canonical === 'execute_bash:user')
+		return 'bashrow';
 	if (name === 'write_file') return 'filerow';
 	if (name === 'string_replace' || name === 'diff_edit') return 'filediff';
 	if (name === 'git_diff') return 'diffrow';
@@ -119,7 +120,11 @@ function formatGenericEntry(
 	status: RowStatus,
 	width: number,
 ): string {
-	if (tool.name === 'write_file' || tool.name === 'string_replace' || tool.name === 'diff_edit') {
+	if (
+		tool.name === 'write_file' ||
+		tool.name === 'string_replace' ||
+		tool.name === 'diff_edit'
+	) {
 		return formatFilePreview(tool, expanded, status, width);
 	}
 	if (tool.name === 'git_diff') {
@@ -168,16 +173,16 @@ function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
  */
 function formatSkillRow(tool: ToolDisplayData, status: RowStatus): string {
 	const name = tool.detail || 'skill';
-	const [loadedLine, ...bodyLines] = tool.output.replace(/\s+$/, '').split('\n');
-	const previewLines = bodyLines
-		.slice(0, 4)
-		.map(line =>
-			line
-				.replace(/^#{1,6}\s+/, '')
-				.replace(/`/g, '')
-				.replace(/^\s*[-*]\s+/, '')
-				.replace(/\*\*/g, ''),
-		);
+	const [loadedLine, ...bodyLines] = tool.output
+		.replace(/\s+$/, '')
+		.split('\n');
+	const previewLines = bodyLines.slice(0, 4).map(line =>
+		line
+			.replace(/^#{1,6}\s+/, '')
+			.replace(/`/g, '')
+			.replace(/^\s*[-*]\s+/, '')
+			.replace(/\*\*/g, ''),
+	);
 	const hidden = Math.max(0, bodyLines.length - previewLines.length);
 	const footer =
 		hidden > 0
@@ -191,7 +196,10 @@ function formatSkillRow(tool: ToolDisplayData, status: RowStatus): string {
 	);
 }
 
-function textArg(args: Record<string, unknown> | undefined, key: string): string {
+function textArg(
+	args: Record<string, unknown> | undefined,
+	key: string,
+): string {
 	const value = args?.[key];
 	return typeof value === 'string' ? value : '';
 }
@@ -217,19 +225,19 @@ function formatFilePreview(
 		// otherwise the row would show the proposed content as if written.
 		if (!/^Wrote /.test(tool.output)) {
 			const tail = formatOutputTail(tool.output, expanded, width);
-			return tail ? `${displayName} ${path}\n${tail}` : `${displayName} ${path}`;
+			return tail
+				? `${displayName} ${path}\n${tail}`
+				: `${displayName} ${path}`;
 		}
-		const body = textArg(tool.args, 'content') || stripResultPrefix(tool.output);
+		const body =
+			textArg(tool.args, 'content') || stripResultPrefix(tool.output);
 		const lines = body.replace(/\n+$/, '').split('\n');
 		const visible = expanded ? lines : lines.slice(0, 50);
 		const hidden = lines.length - visible.length;
 		const numbered = visible
 			.map((line, index) => `${String(index + 1).padStart(4, ' ')} ${line}`)
 			.join('\n');
-		const footer =
-			hidden > 0
-				? `\n  … +${hidden} more lines`
-				: '';
+		const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
 		const header = `✦ ${displayName} ${path}`;
 		const summary = ` ⎿ ${displayName}: ${lines.length} line${lines.length === 1 ? '' : 's'}`;
 		// Header through the `filerow` tokenizer; the numbered CODE gets its
@@ -251,12 +259,20 @@ function formatFilePreview(
 	}
 	const oldStr = textArg(tool.args, 'old_string') || '';
 	const newStr =
-		textArg(tool.args, 'new_string') ||
-		stripResultPrefix(tool.output);
-	const oldLines = oldStr.replace(/\n+$/, '').split('\n').filter(line => line !== '');
-	const newLines = newStr.replace(/\n+$/, '').split('\n').filter(line => line !== '');
+		textArg(tool.args, 'new_string') || stripResultPrefix(tool.output);
+	const oldLines = oldStr
+		.replace(/\n+$/, '')
+		.split('\n')
+		.filter(line => line !== '');
+	const newLines = newStr
+		.replace(/\n+$/, '')
+		.split('\n')
+		.filter(line => line !== '');
 	const summary = ` ⎿ ${oldLines.length} line${oldLines.length === 1 ? '' : 's'} → ${newLines.length} line${newLines.length === 1 ? '' : 's'}`;
-	const diff = lineDiffText(oldStr, newStr);
+	// Number the diff against the REAL file, not the snippet: the tool
+	// reports where the FIRST occurrence sat (`(at line N)`), so an edit at
+	// file line 42 renders `42 - old` / `42 + new` instead of always 1..N.
+	const diff = lineDiffText(oldStr, newStr, replacementBaseLine(tool.output));
 	// Cap the diff preview like the Write preview: collapsed shows the first
 	// 50 lines with a `+N more lines` footer (expand via click / ctrl+o);
 	// expanded shows the whole diff.
@@ -264,8 +280,7 @@ function formatFilePreview(
 	const visibleDiff = expanded ? diffLines : diffLines.slice(0, 50);
 	const hiddenDiff = diffLines.length - visibleDiff.length;
 	const diffBody = visibleDiff.join('\n');
-	const diffFooter =
-		hiddenDiff > 0 ? `\n  … +${hiddenDiff} more lines` : '';
+	const diffFooter = hiddenDiff > 0 ? `\n  … +${hiddenDiff} more lines` : '';
 	const header = `✦ ${displayName} ${path}`;
 	// Diff rows stay in ONE `filediff` fence (the +/- markers are not valid
 	// code, so the custom tokenizer colors them + the red/green row bg).
@@ -287,24 +302,45 @@ function languageForFile(path: string): string {
 
 /** Strip the `Wrote/Replaced …` prefix from a tool RESULT, keep the body. */
 function stripResultPrefix(output: string): string {
-	const match = /^(?:Wrote|Edited|Replaced|Deleted)[^\n]*\n?([\s\S]*)$/.exec(output);
+	const match = /^(?:Wrote|Edited|Replaced|Deleted)[^\n]*\n?([\s\S]*)$/.exec(
+		output,
+	);
 	return match?.[1]?.replace(/^\n/, '') ?? output;
 }
 
-function lineDiffText(oldStr: string, newStr: string): string {
+/**
+ * Absolute 1-based line of the FIRST replaced occurrence, parsed from the
+ * string_replace result (`Replaced N occurrences in <path> (at line L)`).
+ * Falls back to 1 when the result predates the marker (legacy saved
+ * sessions, mocks) — the old snippet-relative numbering.
+ */
+export function replacementBaseLine(output: string): number {
+	const match = /^Replaced \d+ occurrences? in .*? \(at line (\d+)\)/.exec(
+		output,
+	);
+	const line = match ? Number(match[1]) : NaN;
+	return Number.isFinite(line) && line > 0 ? line : 1;
+}
+
+function lineDiffText(oldStr: string, newStr: string, baseLine = 1): string {
 	const diff = lineDiff(oldStr, newStr);
+	// The diff rows are numbered 1..N relative to the snippet; shift them so
+	// they match the REAL file position (the tool reports where the first
+	// occurrence sat). Context rows carry the old line number, which equals
+	// the new line number for unchanged lines.
+	const offset = Math.max(0, baseLine - 1);
 	return diff
 		.map(line => {
 			const text = line.text;
 			if (line.kind === 'add') {
-				return `${String(line.newLineNo ?? '').padStart(4, ' ')} + ${text}`;
+				return `${String((line.newLineNo ?? 1) + offset).padStart(4, ' ')} + ${text}`;
 			}
 			if (line.kind === 'remove') {
-				return `${String(line.oldLineNo ?? '').padStart(4, ' ')} - ${text}`;
+				return `${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')} - ${text}`;
 			}
 			// Context rows carry a SPACE in the sigil column so the numbers
 			// align with the +/- rows (`   3   text`).
-			return `${String(line.oldLineNo ?? '').padStart(4, ' ')}   ${text}`;
+			return `${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
 		})
 		.join('\n');
 }

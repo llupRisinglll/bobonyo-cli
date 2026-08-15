@@ -6,6 +6,7 @@ import {
 	fence,
 	formatOutputTail,
 	formatToolEntry,
+	replacementBaseLine,
 	rowLanguage,
 } from './tool-display';
 import type {TextChunk} from '@opentui/core';
@@ -30,7 +31,8 @@ function themeRgb(hex: string): string {
  * pipeline and its NESTED ` ```filediff ` fences leaked as visible lines
  * between the Read row and the Edit diff.
  */
-const SETTLED_FENCE_MATCH = /^```+([^:\n]+):([^:\n]+)(?::[^:\n]*)?\n+([\s\S]*?)\n+```+$/;
+const SETTLED_FENCE_MATCH =
+	/^```+([^:\n]+):([^:\n]+)(?::[^:\n]*)?\n+([\s\S]*?)\n+```+$/;
 
 describe('splitChunksByLine', () => {
 	test('splits a chunk stream on newline separators', () => {
@@ -71,8 +73,7 @@ describe('liveRowSegments', () => {
 		// The settled row and the live row both go through formatOutputTail,
 		// so the `  └   ` container + cap + `+N lines` footer must match
 		// exactly while streaming and when done (spacing parity).
-		const output =
-			'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7';
+		const output = 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7';
 		const settledTail = formatOutputTail(output, false).split('\n');
 		const {body} = liveRowSegments(
 			`Bash(echo hi)\n${settledTail.join('\n')}`,
@@ -262,13 +263,95 @@ describe('liveRowSegments', () => {
 		});
 
 		test('diff lines render CONTIGUOUSLY (no blank rows between)', () => {
-			const {body} = liveRowSegments(tool(true), 'filediff', 'done', colors(), 84);
+			const {body} = liveRowSegments(
+				tool(true),
+				'filediff',
+				'done',
+				colors(),
+				84,
+			);
 			// Every diff line is a real row — a regression here means the
 			// edit preview gained an extra breakline per line.
 			expect(body.length).toBe(82);
 			for (const line of body) {
-				expect(line.map(c => c.text).join('').trim()).not.toBe('');
+				expect(
+					line
+						.map(c => c.text)
+						.join('')
+						.trim(),
+				).not.toBe('');
 			}
+		});
+	});
+
+	describe('edit diff line numbers are FILE-absolute, never snippet-relative', () => {
+		// The reported bug: adding a line showed `1 - 2 - 3 - 4` no matter
+		// where in the file the edit happened. The diff was numbered against
+		// the old_string/new_string SNIPPET (starting at 1); the tool now
+		// reports the first occurrence's absolute line and the preview
+		// shifts every diff row by that base.
+		const tool = (output: string) =>
+			formatToolEntry(
+				{
+					name: 'string_replace',
+					detail: 'src/foo.ts',
+					output,
+					args: {
+						path: 'src/foo.ts',
+						old_string: 'const a = 1;',
+						new_string: 'const a = 1;\nconst b = 2;',
+					},
+				},
+				true,
+				'done',
+				true,
+				true,
+				84,
+			);
+
+		test('the (at line N) marker shifts every diff row to the REAL line', () => {
+			const raw = tool(
+				'Replaced 1 occurrence in src/foo.ts (at line 42)\nconst a = 1;\nconst b = 2;',
+			);
+			// Context row: unchanged `const a` sits at file line 42; the
+			// added line lands at 43 — NEVER the snippet-relative 1 / 2.
+			expect(raw).toContain('  42   const a = 1;');
+			expect(raw).toContain('  43 + const b = 2;');
+			expect(raw).not.toMatch(/\n\s*1\s/);
+			expect(raw).not.toContain('   1   const a = 1;');
+		});
+
+		test('an edit at the TOP of the file stays line 1 (no bogus offset)', () => {
+			const raw = tool(
+				'Replaced 1 occurrence in src/foo.ts (at line 1)\nconst a = 1;\nconst b = 2;',
+			);
+			expect(raw).toContain('   1   const a = 1;');
+			expect(raw).toContain('   2 + const b = 2;');
+		});
+
+		test('legacy results without the marker keep snippet-relative numbers', () => {
+			const raw = tool(
+				'Replaced 1 occurrence in src/foo.ts\nconst a = 1;\nconst b = 2;',
+			);
+			expect(raw).toContain('   1   const a = 1;');
+			expect(raw).toContain('   2 + const b = 2;');
+		});
+
+		test('replacementBaseLine parses the marker and falls back to 1', () => {
+			expect(
+				replacementBaseLine(
+					'Replaced 1 occurrence in src/foo.ts (at line 42)\nx',
+				),
+			).toBe(42);
+			expect(
+				replacementBaseLine(
+					'Replaced 3 occurrences in src/foo.ts (at line 7)\nx',
+				),
+			).toBe(7);
+			expect(
+				replacementBaseLine('Replaced 1 occurrence in src/foo.ts\nx'),
+			).toBe(1);
+			expect(replacementBaseLine('')).toBe(1);
 		});
 	});
 });
