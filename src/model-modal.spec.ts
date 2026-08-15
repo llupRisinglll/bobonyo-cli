@@ -4,6 +4,7 @@ import {
 	initialModelRowIndex,
 	modelWithProvider,
 	nextModelCursor,
+	providerDisplayName,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
@@ -38,6 +39,61 @@ describe('modelWithProvider (provider name in parentheses)', () => {
 		expect(modelWithProvider('mock-model-1', undefined)).toBe(
 			'mock-model-1',
 		);
+	});
+});
+
+describe('providerDisplayName (actual provider name, not the raw id)', () => {
+	test('resolves the builtin preset title for known endpoints', () => {
+		expect(
+			providerDisplayName({
+				id: 'deepseek',
+				name: 'deepseek',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('DeepSeek');
+		expect(
+			providerDisplayName({
+				id: 'opencode-go',
+				name: 'opencode-go',
+				baseUrl: 'https://opencode.ai/zen/go/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('OpenCode Go');
+	});
+
+	test('matches by endpoint even when the id was renamed', () => {
+		expect(
+			providerDisplayName({
+				id: 'my-ds',
+				name: 'my-ds',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('DeepSeek');
+	});
+
+	test('falls back to the user-given name for non-preset / baseUrl-less providers', () => {
+		expect(
+			providerDisplayName({
+				id: 'my-gateway',
+				name: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('my-gateway');
+		expect(
+			providerDisplayName({
+				id: 'legacy',
+				name: '',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('legacy');
 	});
 });
 

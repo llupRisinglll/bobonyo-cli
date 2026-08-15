@@ -3340,6 +3340,7 @@ export function App() {
 		listProviders().map(provider => ({
 			id: provider.id,
 			name: provider.name ?? provider.id,
+			baseUrl: provider.baseUrl,
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow,

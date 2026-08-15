@@ -9,6 +9,7 @@ import {
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
+import {knownPresetFor} from './connect-provider-modal';
 import {loadPreferences} from '../config';
 import {wrapText} from '../text-wrap';
 
@@ -18,6 +19,8 @@ export const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
 export interface ModelProvider {
 	id: string;
 	name: string;
+	/** Endpoint the connection runs on — resolves the REAL provider title. */
+	baseUrl?: string;
 	models: string[];
 	modelEfforts: Record<string, string>;
 	contextWindow?: number;
@@ -39,8 +42,22 @@ export function modelWithProvider(
 	model: string,
 	provider?: ModelProvider,
 ): string {
-	const label = provider?.name || provider?.id;
+	const label = provider ? providerDisplayName(provider) : undefined;
 	return label && model ? `${model} (${label})` : model;
+}
+
+/**
+ * The ACTUAL provider name shown in the model modal: the matching builtin
+ * preset's title (DeepSeek, OpenCode Go, Xiaomi MiMo, …) when the
+ * connection is an instance of one, otherwise the user-given connection
+ * name. A connection named `deepseek` must read `DeepSeek`, not the raw id.
+ * Pure, unit-tested.
+ */
+export function providerDisplayName(provider: ModelProvider): string {
+	const preset = provider.baseUrl
+		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
+		: undefined;
+	return preset?.title ?? (provider.name || provider.id);
 }
 
 type Row =
@@ -832,8 +849,11 @@ export function ModelModal(props: {
 										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
 											(
-											{line.provider?.name ??
-												line.provider?.id}
+											{line.provider
+												? providerDisplayName(
+														line.provider,
+													)
+												: ''}
 											)
 											{line.isCurrent ? ' (current)' : ''}
 										</text>

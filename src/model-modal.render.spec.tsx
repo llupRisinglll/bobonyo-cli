@@ -12,9 +12,10 @@ import {ModelModal} from './components/model-modal';
  * 2. Bracketed paste lands in the modal's search, not the chat box behind.
  */
 
-const provider = (id: string, models: string[]) => ({
+const provider = (id: string, models: string[], baseUrl: string) => ({
 	id,
 	name: id,
+	baseUrl,
 	models,
 	modelEfforts: {},
 });
@@ -34,8 +35,16 @@ describe('model modal provider header + paste', () => {
 			() => (
 				<ModelModal
 					providers={[
-						provider('codex', ['gpt-5.4-mini']),
-						provider('deepseek', ['deepseek-v4-flash']),
+						provider(
+							'codex',
+							['gpt-5.4-mini'],
+							'https://api.openai.com/v1',
+						),
+						provider(
+							'deepseek',
+							['deepseek-v4-flash'],
+							'https://api.deepseek.com',
+						),
 					]}
 					currentProvider="codex"
 					currentModel="gpt-5.4-mini"
@@ -50,8 +59,8 @@ describe('model modal provider header + paste', () => {
 		try {
 			await setup.flush();
 			const frame = setup.captureSpans();
-			expect(frameHas(frame, '(codex) (current)')).toBe(true);
-			expect(frameHas(frame, '(deepseek)')).toBe(true);
+			expect(frameHas(frame, '(Codex) (current)')).toBe(true);
+			expect(frameHas(frame, '(DeepSeek)')).toBe(true);
 			// The model cells do NOT repeat the provider per model.
 			expect(frameHas(frame, 'gpt-5.4-mini(codex)')).toBe(false);
 			expect(frameHas(frame, 'deepseek-v4-flash(deepseek)')).toBe(false);
@@ -64,7 +73,13 @@ describe('model modal provider header + paste', () => {
 		const setup = await testRender(
 			() => (
 				<ModelModal
-					providers={[provider('deepseek', ['deepseek-v4-flash'])]}
+					providers={[
+						provider(
+							'deepseek',
+							['deepseek-v4-flash'],
+							'https://api.deepseek.com',
+						),
+					]}
 					currentProvider="deepseek"
 					currentModel="deepseek-v4-flash"
 					onSelect={() => {}}
@@ -84,7 +99,7 @@ describe('model modal provider header + paste', () => {
 			// group header separately shows `(deepseek)`.
 			const frame = setup.captureSpans();
 			expect(frameHas(frame, 'deepseek▌')).toBe(true);
-			expect(frameHas(frame, '(deepseek)')).toBe(true);
+			expect(frameHas(frame, '(DeepSeek)')).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}
