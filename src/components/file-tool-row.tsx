@@ -4,6 +4,7 @@ import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
+import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
 
 /**
  * FILE-WRITE / EDIT tool row (Write / Edit / diff previews).
@@ -18,8 +19,15 @@ import {settledGlyphColor, type RowStatus} from '../row-highlight';
  * breakline and hover highlight.
  */
 export function FileToolRow(props: {
-	header: Array<{text: string; fg?: unknown; bg?: unknown; attributes?: number}>;
-	body: Array<Array<{text: string; fg?: unknown; bg?: unknown; attributes?: number}>>;
+	header: Array<{
+		text: string;
+		fg?: unknown;
+		bg?: unknown;
+		attributes?: number;
+	}>;
+	body: Array<
+		Array<{text: string; fg?: unknown; bg?: unknown; attributes?: number}>
+	>;
 	status: RowStatus;
 	glyph: '✦' | '⚙';
 	hovered: boolean;
@@ -27,6 +35,8 @@ export function FileToolRow(props: {
 	brief?: string;
 	/** Batch marker: part of a briefed batch (share the glyph/indent). */
 	batchBriefed?: boolean;
+	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
+	md: MarkdownBriefRenderer;
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
@@ -45,13 +55,12 @@ export function FileToolRow(props: {
 			{/* Pre-tool brief, integrated with the row: `✦ I will check X`
 			    above the content — same entry, same hover region. */}
 			<Show when={briefed()}>
-				<box
-					flexDirection="row"
-					backgroundColor={props.hovered ? hoverBg : undefined}
-				>
-					<text fg={glyph}>✦ </text>
-					<text>{props.brief}</text>
-				</box>
+				<MarkdownBrief
+					text={props.brief ?? ''}
+					glyph={glyph}
+					hovered={props.hovered}
+					md={props.md}
+				/>
 			</Show>
 			<Show when={props.header.length > 0}>
 				<box
@@ -73,15 +82,15 @@ export function FileToolRow(props: {
 										: c.text;
 								if (!text) return null;
 								return (
-								<span
-									style={{
-										fg: c.fg as never,
-										bg: c.bg as never,
-										attributes: c.attributes,
-									}}
-								>
-									{text}
-								</span>
+									<span
+										style={{
+											fg: c.fg as never,
+											bg: c.bg as never,
+											attributes: c.attributes,
+										}}
+									>
+										{text}
+									</span>
 								);
 							}}
 						</For>
@@ -89,7 +98,7 @@ export function FileToolRow(props: {
 				</box>
 			</Show>
 			<For each={props.body}>
-				{(line) => (
+				{line => (
 					<box
 						flexDirection="row"
 						backgroundColor={props.hovered ? hoverBg : undefined}
@@ -99,7 +108,7 @@ export function FileToolRow(props: {
 						</Show>
 						<text>
 							<For each={line}>
-								{(c) => (
+								{c => (
 									<span
 										style={{
 											fg: c.fg as never,

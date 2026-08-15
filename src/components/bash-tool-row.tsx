@@ -4,6 +4,7 @@ import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
+import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
 
 /**
  * BASH tool row — the entire execution renders as ONE bordered entry:
@@ -30,6 +31,8 @@ export function BashToolRow(props: {
 	brief?: string;
 	/** Batch marker: this box is part of a briefed batch (share the glyph). */
 	batchBriefed?: boolean;
+	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
+	md: MarkdownBriefRenderer;
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
@@ -47,23 +50,17 @@ export function BashToolRow(props: {
 			    check X` above the box — part of the SAME block, so hover/
 			    click cover it too. */}
 			<Show when={props.brief && props.brief.trim()}>
-				<box
-					flexDirection="row"
-					backgroundColor={props.hovered ? hoverBg : undefined}
-				>
-					{/* The brief line carries the entry's single glyph; the
-					    box below must NOT paint another. */}
-					<text fg={glyph}>✦ </text>
-					<text>{props.brief}</text>
-				</box>
+				<MarkdownBrief
+					text={props.brief ?? ''}
+					glyph={glyph}
+					hovered={props.hovered}
+					md={props.md}
+				/>
 			</Show>
 			<box flexDirection="row">
 				{/* Glyph OUTSIDE the border (blinks live, status-colored done). */}
 				<Show when={!props.brief && !props.batchBriefed}>
-					<text
-						fg={glyph}
-						attributes={props.glyph === '⚙' ? dim() : undefined}
-					>
+					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
 						{(props.glyph ?? '✦') + ' '}
 					</text>
 				</Show>
@@ -88,7 +85,7 @@ export function BashToolRow(props: {
 					<box flexDirection="row">
 						<text>
 							<For each={props.header}>
-								{(c) => (
+								{c => (
 									<span
 										style={{
 											fg: c.fg as never,
@@ -104,11 +101,11 @@ export function BashToolRow(props: {
 					{/* Output lines: secondary, never competes with the
 					    command. */}
 					<For each={props.body}>
-						{(line) => (
+						{line => (
 							<box flexDirection="row">
 								<text>
 									<For each={line}>
-										{(c) => (
+										{c => (
 											<span
 												style={{
 													fg: c.fg as never,

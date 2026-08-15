@@ -6,6 +6,7 @@ import {colors} from '../theme';
 import {glyphBlinkOn, spinnerFrame} from '../state';
 import {BashToolRow} from './bash-tool-row';
 import {FileToolRow} from './file-tool-row';
+import type {MarkdownBriefRenderer} from './markdown-brief';
 
 /**
  * FOOLPROOF live tool-row renderer — the ONLY way running tool rows render.
@@ -29,6 +30,8 @@ export function LiveToolRows(props: {
 	rows: Array<
 		LiveRowSegments & {lang?: string; brief?: string; batchBriefed?: boolean}
 	>;
+	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
+	md: MarkdownBriefRenderer;
 }) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
@@ -48,6 +51,7 @@ export function LiveToolRows(props: {
 							hovered={false}
 							brief={row.brief}
 							batchBriefed={row.batchBriefed}
+							md={props.md}
 						/>
 					</Show>
 					<Show when={row.lang === 'filerow' || row.lang === 'filediff'}>
@@ -59,6 +63,7 @@ export function LiveToolRows(props: {
 							hovered={false}
 							brief={row.brief}
 							batchBriefed={row.batchBriefed}
+							md={props.md}
 						/>
 					</Show>
 					<Show

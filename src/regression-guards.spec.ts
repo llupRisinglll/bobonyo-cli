@@ -45,7 +45,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('history renders running tool rows ONLY via LiveToolRows', () => {
 		const src = read('./components/history.tsx');
-		expect(src).toMatch(/<LiveToolRows rows=\{liveToolRows\(\)\} \/>/);
+		expect(src).toMatch(/<LiveToolRows rows=\{liveToolRows\(\)\}[^>]*\/>/);
 		// The live rows memo builds segments through the shared util.
 		expect(src).toMatch(/liveRowSegments/);
 	});
@@ -95,7 +95,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(highlight).not.toMatch(/applyHoverBackground/);
 		// The component itself is plain boxes/text — no markdown anywhere.
 		const component = read('./components/settled-tool-row.tsx');
-		expect(component).not.toMatch(/<markdown|MarkdownRenderable/i);
+		expect(component).not.toMatch(/<markdown[\s>]/);
 		// Same handle budget rule as the live rows: per-line <text> with
 		// styled spans, never a per-cell <text>.
 		expect(component).toMatch(/<span\s+style=\{\{/);
@@ -742,7 +742,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(row).toMatch(/borderStyle="rounded"/);
 		// Glyph outside the border: the glyph <text> is a SIBLING of the
 		// bordered <box>, never inside it.
-		expect(row).toMatch(/<text fg=\{glyph\}/);
+		expect(row).toMatch(/fg=\{glyph\}/);
 		expect(row).toMatch(/border\s*$/m);
 		// The `$` prompt is part of the header chunks (never duplicated).
 		const history = read('./components/history.tsx');
@@ -1416,5 +1416,44 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(
 			/toolRowFillWidth\(\s*terminalDimensions\(\)\.width \?\? 80,\s*message\.brief\)/,
 		);
+	});
+
+	test('the pre-tool brief renders through MARKDOWN, never a plain <text>', () => {
+		// The model's pre-tool narration carries real markdown
+		// (`**bold**`, `` `code` ``); a plain `<text>{props.brief}</text>`
+		// leaked the raw markers. Every tool row must render the brief via
+		// MarkdownBrief (a `<markdown>` node with the transcript's renderer),
+		// in the LIVE rows and once settled.
+		const brief = read('./components/markdown-brief.tsx');
+		expect(brief).toMatch(/export function MarkdownBrief/);
+		// The brief node is a REAL markdown element (the same pipeline the
+		// replies use), with the transcript's syntax style + renderer.
+		expect(brief).toMatch(/<markdown/);
+		expect(brief).toMatch(/syntaxStyle=\{props\.md\.syntaxStyle\(\)\}/);
+		expect(brief).toMatch(/renderNode=\{props\.md\.renderNode\}/);
+		// The components must route the brief through MarkdownBrief — a
+		// regression to `<text>{props.brief}</text>` fails here.
+		for (const file of [
+			'./components/bash-tool-row.tsx',
+			'./components/file-tool-row.tsx',
+			'./components/settled-tool-row.tsx',
+		]) {
+			const src = read(file);
+			expect(src).toMatch(/<MarkdownBrief/);
+			expect(src).not.toMatch(/<text>\{props\.brief\}<\/text>/);
+			expect(src).not.toMatch(/<text>\{props\.brief\}/);
+		}
+		// The LIVE renderer threads the same renderer bits through.
+		const live = read('./components/live-tool-rows.tsx');
+		expect(live).toMatch(/md: MarkdownBriefRenderer/);
+		expect(live).toMatch(/md=\{props\.md\}/);
+		// history.tsx builds the renderer from the transcript's OWN markdown
+		// pipeline (same syntaxStyle/renderNode as the replies) and hands it
+		// to every row component + the live region.
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/const briefMarkdown: MarkdownBriefRenderer/);
+		expect(history).toMatch(/syntaxStyle,/);
+		expect(history).toMatch(/renderNode,/);
+		expect(history).toMatch(/md=\{briefMarkdown\}/);
 	});
 });

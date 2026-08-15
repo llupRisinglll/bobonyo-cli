@@ -65,6 +65,7 @@ import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
 import {BashToolRow} from './bash-tool-row';
 import {FileToolRow} from './file-tool-row';
+import type {MarkdownBriefRenderer} from './markdown-brief';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -411,6 +412,17 @@ export function History(props: {
 			token as Parameters<NonNullable<typeof diffCodeBlockRenderer>>[0],
 			context,
 		);
+	};
+	// The pre-tool brief (model narration before a tool call) renders
+	// through the SAME markdown pipeline as the replies — real markdown
+	// formatting (`**bold**`, `` `code` ``, lists) — in the LIVE rows and
+	// once settled. The brief is STATIC (never re-streamed), so the
+	// markdown node can't re-parse per tick (the live flicker guard is
+	// about the streaming BODY, which stays plain text cells).
+	const briefMarkdown: MarkdownBriefRenderer = {
+		syntaxStyle,
+		renderNode,
+		treeSitter,
 	};
 
 	// C1: PageUp/PageDn scroll the transcript by one viewport (wheel is
@@ -1159,6 +1171,7 @@ export function History(props: {
 									hovered={block.part.key === hoveredBlock()}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
+									md={briefMarkdown}
 								/>
 							);
 						}
@@ -1176,6 +1189,7 @@ export function History(props: {
 									hovered={block.part.key === hoveredBlock()}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
+									md={briefMarkdown}
 								/>
 							);
 						}
@@ -1188,6 +1202,7 @@ export function History(props: {
 								hovered={block.part.key === hoveredBlock()}
 								brief={block.brief}
 								batchBriefed={block.batchBriefed}
+								md={briefMarkdown}
 								width={historyFillWidth(terminalDimensions().width ?? 80)}
 							/>
 						);
@@ -1276,7 +1291,7 @@ export function History(props: {
 			    same syntax colors/spacing as settled rows, ZERO re-parse
 			    flicker, and each row carries the settled leading breakline. */}
 			<Show when={liveToolRows().length > 0}>
-				<LiveToolRows rows={liveToolRows()} />
+				<LiveToolRows rows={liveToolRows()} md={briefMarkdown} />
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are

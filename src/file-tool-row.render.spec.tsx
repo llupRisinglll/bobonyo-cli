@@ -1,11 +1,13 @@
 import '@opentui/solid/preload';
 import {describe, expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
-import type {CapturedFrame} from '@opentui/core';
+import {createTextAttributes, type CapturedFrame} from '@opentui/core';
 import {FileToolRow} from './components/file-tool-row';
 import {LiveToolRows} from './components/live-tool-rows';
+import type {MarkdownBriefRenderer} from './components/markdown-brief';
 import {liveRowSegments} from './live-tool-row';
 import {colors} from './theme';
+import {markdownSyntaxStyleFor} from './syntax';
 import {formatToolEntry} from './tool-display';
 /**
  * RENDER-LEVEL regression guard for the Edit diff view.
@@ -62,6 +64,7 @@ async function renderDiff(atLine: number, oldStr: string, newStr: string) {
 				status="done"
 				glyph="✦"
 				hovered={false}
+				md={testMd}
 			/>
 		),
 		{width: 100, height: 20},
@@ -70,6 +73,12 @@ async function renderDiff(atLine: number, oldStr: string, newStr: string) {
 	await new Promise(resolve => setTimeout(resolve, 50));
 	return setup.captureSpans();
 }
+/** The markdown renderer bits history.tsx hands to the tool rows. */
+const testMd: MarkdownBriefRenderer = {
+	syntaxStyle: () => markdownSyntaxStyleFor(colors()),
+	renderNode: () => undefined,
+	treeSitter: undefined,
+};
 describe('Edit diff rendering (indent + absolute line numbers)', () => {
 	test('rows indent under the header and the code lands at a FIXED column', async () => {
 		const frame = await renderDiff(
@@ -255,7 +264,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 				.filter(text => text.trim() !== '');
 
 		const live = await testRender(
-			() => <LiveToolRows rows={[{...seg, lang: 'filediff'}]} />,
+			() => <LiveToolRows rows={[{...seg, lang: 'filediff'}]} md={testMd} />,
 			{width: 100, height: 20},
 		);
 		await live.flush();
@@ -270,6 +279,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 					status="done"
 					glyph="✦"
 					hovered={false}
+					md={testMd}
 				/>
 			),
 			{width: 100, height: 20},
@@ -312,6 +322,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 					status="done"
 					glyph="✦"
 					hovered={false}
+					md={testMd}
 				/>
 			),
 			{width: 84, height: 30},
@@ -339,5 +350,49 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(
 			frame.lines[contY]?.spans.some(s => (s.bg as never) !== undefined),
 		).toBe(true);
+	});
+	test('the pre-tool brief renders through MARKDOWN (bold/code formatted, live parity)', async () => {
+		// The reported bug: the model's pre-tool narration was a plain
+		// <text>, so markdown in the brief (`**bold**`, `` `code` ``) leaked
+		// its raw markers. The brief must render through the SAME markdown
+		// pipeline the replies use — while the row is LIVE and once settled.
+		// 0 blank, 1 brief (markdown), 2 header, 3 summary, 4+ diff rows.
+		const seg = diffSegments(8, 'old', 'new');
+		const setup = await testRender(
+			() => (
+				<FileToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={false}
+					md={testMd}
+					brief="Check **AGENTS.md** and run `bun test`"
+				/>
+			),
+			{width: 100, height: 20},
+		);
+		await setup.flush();
+		// The markdown brief node lays out asynchronously (like the reply
+		// nodes) — give it the same settle window the reply render tests use.
+		await new Promise(resolve => setTimeout(resolve, 300));
+		const frame = setup.captureSpans();
+		const brief = textOf(frame, 1);
+		// Markdown consumed the emphasis + inline-code markers: the raw
+		// `**` / backticks never paint.
+		expect(brief).toContain('Check');
+		expect(brief).toContain('AGENTS.md');
+		expect(brief).toContain('bun test');
+		expect(brief).not.toContain('**');
+		expect(brief).not.toContain('`');
+		// The bold span carries the BOLD attribute (the same bit replies
+		// use) — the emphasis is real formatting, not plain text.
+		const boldSpan = frame.lines[1]?.spans.find(s =>
+			s.text.includes('AGENTS.md'),
+		);
+		expect(boldSpan?.attributes).toBe(createTextAttributes({bold: true}));
+		// The glyph column still reads `✦ ` (the brief row keeps its entry
+		// glyph), and the brief text starts after it.
+		expect(brief.startsWith('✦ ')).toBe(true);
 	});
 });

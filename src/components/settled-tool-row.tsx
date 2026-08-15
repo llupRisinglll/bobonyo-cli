@@ -5,6 +5,7 @@ import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
+import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
 
 /**
  * SETTLED tool/thought row — rendered as plain OpenTUI components (boxes +
@@ -28,6 +29,8 @@ export function SettledToolRow(props: {
 	brief?: string;
 	/** Batch marker: part of a briefed batch (share the glyph/indent). */
 	batchBriefed?: boolean;
+	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
+	md: MarkdownBriefRenderer;
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
@@ -49,14 +52,12 @@ export function SettledToolRow(props: {
 			{/* Pre-tool brief, integrated with the row: `✦ I will check X`
 			    above the header — same entry, same hover region. */}
 			<Show when={briefed()}>
-				<box
-					flexDirection="row"
-					width={props.width}
-					backgroundColor={props.hovered ? hoverBg : undefined}
-				>
-					<text fg={glyph}>✦ </text>
-					<text>{props.brief}</text>
-				</box>
+				<MarkdownBrief
+					text={props.brief ?? ''}
+					glyph={glyph}
+					hovered={props.hovered}
+					md={props.md}
+				/>
 			</Show>
 			{/* HEADER line: status-colored glyph + name/detail chunks. The
 			    header carries the SAME hover background as the body (the
@@ -70,10 +71,7 @@ export function SettledToolRow(props: {
 				{/* With a brief, the brief line carries the entry's single
 				    glyph; the header indents to the brief's text column. */}
 				<Show when={!briefed() && !props.batchBriefed}>
-					<text
-						fg={glyph}
-						attributes={props.glyph === '⚙' ? dim() : undefined}
-					>
+					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
 						{(props.glyph ?? '✦') + ' '}
 					</text>
 				</Show>
@@ -89,7 +87,7 @@ export function SettledToolRow(props: {
 				    native handles. */}
 				<text>
 					<For each={props.segments.header}>
-						{(c) => (
+						{c => (
 							<span
 								style={{
 									fg: c.fg as never,
@@ -105,7 +103,7 @@ export function SettledToolRow(props: {
 			{/* BODY rows: full-width background when hovered (parity: the
 			    settings rows highlight the WHOLE row, not just the text). */}
 			<For each={props.segments.body}>
-				{(line) => (
+				{line => (
 					<box
 						flexDirection="row"
 						width={props.width}
@@ -113,7 +111,7 @@ export function SettledToolRow(props: {
 					>
 						<text>
 							<For each={line}>
-								{(c) => (
+								{c => (
 									<span
 										style={{
 											fg: c.fg as never,
