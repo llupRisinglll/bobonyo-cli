@@ -6,6 +6,7 @@ import {colors} from './theme';
 import {thinkingSeconds} from './state';
 import {
 	liveThinkingHeader,
+	liveThoughtOneLine,
 	settledThought,
 	wrapThoughtBody,
 } from './components/history';
@@ -53,6 +54,32 @@ describe('liveThinkingHeader (animated gear + dots BEFORE the timer)', () => {
 	test('timer formats real durations (1m 2s, not 62s)', () => {
 		expect(liveThinkingHeader(0, 62)).toContain('(1m 2s)');
 		expect(liveThinkingHeader(0, 3723)).toContain('(1h 2m 3s)');
+	});
+});
+
+describe('liveThoughtOneLine (single scrolling thinking line)', () => {
+	test('stays on ONE line: newlines collapse to spaces, never shown', () => {
+		const one = liveThoughtOneLine(
+			'first line\n\nsecond line\nthird line',
+			80,
+		);
+		expect(one).not.toContain('\n');
+		expect(one).toBe('first line second line third line');
+	});
+
+	test('keeps scrolling to the RIGHT: shows only the LATEST content that fits', () => {
+		const text = 'a'.repeat(200);
+		// width 40 → 36 chars after `  └ `, from the END (the newest part).
+		expect(liveThoughtOneLine(text, 40)).toBe('a'.repeat(36));
+		// The kept suffix is the newest part, not the head.
+		expect(liveThoughtOneLine('head-' + 'x'.repeat(50), 20)).not.toContain(
+			'head',
+		);
+	});
+
+	test('short or empty reasoning passes through (trimmed)', () => {
+		expect(liveThoughtOneLine('  done  ', 80)).toBe('done');
+		expect(liveThoughtOneLine('', 80)).toBe('');
 	});
 });
 

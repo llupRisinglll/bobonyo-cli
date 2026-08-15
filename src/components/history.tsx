@@ -1286,7 +1286,7 @@ export function History(props: {
 				<box
 					ref={element => {
 						liveThoughtRef = element as never;
-						liveThoughtLines = 3;
+						liveThoughtLines = 4;
 					}}
 					flexDirection="column"
 				>
@@ -1296,6 +1296,13 @@ export function History(props: {
 					</text>
 					<text fg={colors().secondary} attributes={dim()}>
 						{liveThoughtTail()}
+					</text>
+					<text fg={colors().secondary} attributes={dim()}>
+						{'  └ '}
+						{liveThoughtOneLine(
+							throttledReasoning(),
+							historyFillWidth(terminalDimensions().width ?? 80),
+						)}
 					</text>
 				</box>
 			</Show>
@@ -1378,6 +1385,20 @@ export function liveThinkingHeader(
 	elapsedSeconds: number,
 ): string {
 	return `${gearGlyph(frame)} Thinking ${workingDots(frame)} (${formatElapsed(elapsedSeconds)})`;
+}
+
+/**
+ * The dynamic ONE-LINE thinking ticker rendered below the live thought
+ * block: newlines are collapsed (never shown), and the text keeps scrolling
+ * to the RIGHT — only the LATEST content that fits the window width after
+ * the `  └ ` prefix is shown. Secondary color (parity: the tail). Pure,
+ * unit-tested.
+ */
+export function liveThoughtOneLine(text: string, width: number): string {
+	const max = Math.max(0, width - 4); // after `  └ `
+	const flat = text.replace(/\s*\n\s*/g, ' ').trim();
+	if (flat.length <= max) return flat;
+	return flat.slice(flat.length - max);
 }
 
 /**
