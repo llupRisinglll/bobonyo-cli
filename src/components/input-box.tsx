@@ -75,6 +75,23 @@ export function workingLabel(
 }
 
 /**
+ * Whether the LINE-mode thinking ticker row is visible. It shows ONLY while
+ * the model is ACTIVELY thinking (`thinkingActive`, true from the first
+ * reasoning delta until text streams or the stream ends) — never during tool
+ * execution or while idle, so a stale reasoning buffer can't leave a stuck
+ * line or an empty gap above the input. The App subtracts this row from the
+ * history-height cap so the input box never shifts down onto the status
+ * line. Pure, unit-tested.
+ */
+export function lineTickerVisible(
+	mode: 'hidden' | 'show' | 'line',
+	isBusy: boolean,
+	activelyThinking: boolean,
+): boolean {
+	return mode === 'line' && isBusy && activelyThinking;
+}
+
+/**
  * Whether an OpenTUI key event should count as the SUBMIT Enter.
  *
  * Real terminals deliver Enter as `\r` (`return`); herdr and some terminal
@@ -831,9 +848,11 @@ export function InputBox(props: {
 					</text>
 				</box>
 			</Show>
-			{/* Line-mode thinking ticker: shows ONLY while thinking, hidden
-			    immediately when thinking stops. */}
-			<Show when={thinkingMode() === 'line' && busy() && reasoning()}>
+			{/* Line-mode thinking ticker: shows ONLY while the model is
+			    ACTIVELY thinking (thinkingActive), hidden the moment thinking
+			    stops — never a stale line during tool runs, never an empty gap
+			    while idle. */}
+			<Show when={lineTickerVisible(thinkingMode(), busy(), thinkingActive())}>
 				<box height={1}>
 					<text fg={colors().secondary} attributes={dim()}>
 						{'  └ '}

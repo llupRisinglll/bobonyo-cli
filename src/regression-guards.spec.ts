@@ -1059,13 +1059,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('line mode: ticker renders in input-box, not in chat history', () => {
 		const input = read('./components/input-box.tsx');
-		// The ticker row is ALWAYS present when thinkingMode is 'line'
-		// (reserves 1 row to prevent input/statusline jump).
-		expect(input).toMatch(/when=\{thinkingMode\(\) === 'line' && busy\(\) && reasoning\(\)\}/);
+		// The ticker row is gated on the pure helper (line + busy +
+		// ACTIVELY thinking), never on the raw reasoning buffer — a stale
+		// buffer during tool runs must not leave a stuck line.
+		expect(input).toMatch(/lineTickerVisible\(thinkingMode\(\), busy\(\), thinkingActive\(\)\)/);
 		// The ticker shows the one-line reasoning via liveThoughtOneLine.
 		expect(input).toMatch(/liveThoughtOneLine/);
-		// The ticker only shows text while busy and reasoning is non-empty.
-		expect(input).toMatch(/busy\(\) && reasoning\(\)/);
 		const history = read('./components/history.tsx');
 		// history.tsx must NOT render the live thought for 'line' mode.
 		const liveThoughtGuards =
@@ -1075,6 +1074,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			expect(guard).toContain('show');
 			expect(guard).not.toContain('line');
 		}
+	});
+
+	test('line-mode ticker row is subtracted from the history-height cap', () => {
+		// The ticker renders INSIDE the InputBox column, so the App must
+		// subtract its row from historyHeight or the input box shifts down
+		// and overlaps the status line while thinking (the reported bug).
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/lineTickerVisible\(thinkingMode\(\), busy\(\), thinkingActive\(\)\)/,
+		);
+		const input = read('./components/input-box.tsx');
+		expect(input).toMatch(/export function lineTickerVisible/);
 	});
 
 	test('ANY provider with a discovery URL fetches its models', () => {

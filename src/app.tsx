@@ -103,6 +103,7 @@ import {
 	computeInputBoxHeight,
 	completionMessageRows,
 	completionPopupHeight,
+	lineTickerVisible,
 	mentionPopupHeight,
 	InputBox,
 } from './components/input-box';
@@ -195,6 +196,8 @@ import {
 	providerUsage,
 	reasoning,
 	retrySnapshot,
+	thinkingActive,
+	thinkingMode,
 	running,
 	setBusy,
 	setCancelling,
@@ -3581,6 +3584,9 @@ export function App() {
 					inputBoxRows() -
 					2 -
 					(running() ? 1 : 0) -
+					(lineTickerVisible(thinkingMode(), busy(), thinkingActive())
+						? 1
+						: 0) -
 					startupLoading().length -
 					completionMessageRows(
 						completionMessage(),

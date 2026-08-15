@@ -12,6 +12,7 @@ import {
 	tokenEndingAt,
 	tokenizeInputLine,
 	tokenStartingAt,
+	lineTickerVisible,
 	workingLabel,
 } from './components/input-box';
 import {
@@ -48,6 +49,22 @@ describe('workingLabel (thinking-mode indicator phase)', () => {
 	});
 });
 
+describe('lineTickerVisible (line-mode thinking ticker row)', () => {
+	test('shows ONLY in line mode while busy AND actively thinking', () => {
+		expect(lineTickerVisible('line', true, true)).toBe(true);
+		expect(lineTickerVisible('line', false, true)).toBe(false);
+		expect(lineTickerVisible('line', true, false)).toBe(false);
+		expect(lineTickerVisible('hidden', true, true)).toBe(false);
+		expect(lineTickerVisible('show', true, true)).toBe(false);
+		expect(lineTickerVisible('line', false, false)).toBe(false);
+	});
+	test('never lingers on a stale reasoning buffer during tool runs', () => {
+		// thinkingActive flips false when the stream ends (before tools
+		// execute), so the ticker must not render even if the reasoning
+		// buffer still holds text — a stuck thinking line was the bug.
+		expect(lineTickerVisible('line', true, false)).toBe(false);
+	});
+});
 describe('isSubmitKey (herdr Enter is a linefeed)', () => {
 	test('return and enter keys submit', () => {
 		expect(isSubmitKey({name: 'return'})).toBe(true);
