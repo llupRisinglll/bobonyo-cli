@@ -260,14 +260,14 @@ function formatFilePreview(
 	const oldStr = textArg(tool.args, 'old_string') || '';
 	const newStr =
 		textArg(tool.args, 'new_string') || stripResultPrefix(tool.output);
-	const oldLines = oldStr
-		.replace(/\n+$/, '')
-		.split('\n')
-		.filter(line => line !== '');
-	const newLines = newStr
-		.replace(/\n+$/, '')
-		.split('\n')
-		.filter(line => line !== '');
+	// Count the REAL lines, blank lines included: the diff renderer
+	// (lineDiff) keeps interior blank lines, so the summary must count them
+	// too — filtering empties here made the summary say N while the diff
+	// rendered N+1 rows (the phantom "extra line" when the model inserts a
+	// blank line). Trailing newlines are stripped so a trailing `\n` never
+	// invents a phantom final line.
+	const oldLines = oldStr.replace(/\n+$/, '').split('\n');
+	const newLines = newStr.replace(/\n+$/, '').split('\n');
 	const summary = ` ⎿ ${oldLines.length} line${oldLines.length === 1 ? '' : 's'} → ${newLines.length} line${newLines.length === 1 ? '' : 's'}`;
 	// Number the diff against the REAL file, not the snippet: the tool
 	// reports where the FIRST occurrence sat (`(at line N)`), so an edit at

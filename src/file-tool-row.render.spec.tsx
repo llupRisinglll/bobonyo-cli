@@ -169,4 +169,24 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		// And that column is PAST the 4-wide number gutter (not flush).
 		expect(colOf(add1, '// INDENTATION')).toBeGreaterThan(9);
 	});
+
+	test('a blank line added mid-edit renders ONE row, never a phantom extra', async () => {
+		// The reported bug: `new_string` with an interior blank line made
+		// the summary say `1 line → 2 lines` while the diff rendered 3 rows
+		// (the blank line) — the phantom extra. The summary must count the
+		// blank and the painted rows must match it exactly.
+		const frame = await renderDiff(
+			3,
+			'const a = 1;',
+			'const a = 1;\n\nconst b = 2;',
+		);
+		// 0 blank, 1 header, 2 summary, 3 ctx (line 3), 4 blank add (line 4),
+		// 5 add (line 5). No row 6 — never a phantom extra.
+		expect(textOf(frame, 2)).toContain(' ⎿ 1 line → 3 lines');
+		expect(textOf(frame, 3)).toContain('3   const a = 1;');
+		expect(textOf(frame, 4)).toMatch(/^ {5}4 \+ /);
+		expect(textOf(frame, 5)).toContain('5 + const b = 2;');
+		// The blank-add row paints the number + sigil (not empty).
+		expect(textOf(frame, 4).trim()).not.toBe('');
+	});
 });

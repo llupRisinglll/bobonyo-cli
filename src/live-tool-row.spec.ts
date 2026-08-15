@@ -371,5 +371,37 @@ describe('liveRowSegments', () => {
 			).toBe(1);
 			expect(replacementBaseLine('')).toBe(1);
 		});
+		test('a blank line added mid-edit counts ONE row, never a phantom extra', () => {
+			// The reported bug: `new_string` with an interior blank line made
+			// the summary filter the empty line (saying `1 line → 2 lines`)
+			// while the diff renderer kept it (rendering 3 rows) — the
+			// phantom "extra line". The summary must count blanks too.
+			const raw = formatToolEntry(
+				{
+					name: 'string_replace',
+					detail: 'src/foo.ts',
+					output:
+						'Replaced 1 occurrence in src/foo.ts (at line 3)\nconst a = 1;\n\nconst b = 2;',
+					args: {
+						path: 'src/foo.ts',
+						old_string: 'const a = 1;',
+						new_string: 'const a = 1;\n\nconst b = 2;',
+					},
+				},
+				true,
+				'done',
+				true,
+				true,
+				84,
+			);
+			expect(raw).toContain(' ⎿ 1 line → 3 lines');
+			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
+			// summary + 3 diff rows (ctx, blank add, add) — never 4.
+			expect(body.length).toBe(4);
+			// The blank add renders as a numbered `+` row (line 4), not an
+			// empty row; the real add lands at line 5.
+			expect(body[2]?.map(c => c.text).join('')).toMatch(/4 \+ /);
+			expect(body[3]?.map(c => c.text).join('')).toContain('5 + const b');
+		});
 	});
 });

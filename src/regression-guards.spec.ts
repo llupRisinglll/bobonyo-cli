@@ -919,6 +919,21 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// (`([-+]) (.*)`), so the code's leading tabs survive into `text` —
 		// a greedy `\s+` would swallow them and render added lines flush.
 		expect(highlight).toMatch(/\(\[\-\+\]\) \(\.\*\)/);
+		// LINE-COUNT CONSISTENCY: the summary must count blank lines exactly
+		// like the diff renderer does — filtering empties made the summary
+		// say N while the diff rendered N+1 rows (the phantom "extra line"
+		// when the model inserts a blank line).
+		expect(display).toMatch(
+			/const oldLines = oldStr\.replace\(\/\\n\+\$\/, ''\)\.split\('\\n'\);/,
+		);
+		expect(display).toMatch(
+			/const newLines = newStr\.replace\(\/\\n\+\$\/, ''\)\.split\('\\n'\);/,
+		);
+		const countBlock = display.slice(
+			display.indexOf('const oldLines = oldStr'),
+			display.indexOf('const summary'),
+		);
+		expect(countBlock).not.toMatch(/filter/);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
