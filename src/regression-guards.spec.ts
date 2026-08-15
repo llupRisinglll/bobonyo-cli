@@ -993,6 +993,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(display).toMatch(
 			/replacementBaseLine\(tool\.output\) \+ stripPrefix/,
 		);
+		// LEGACY NANOCODER ARGS: old sessions saved `old_str`/`new_str`
+		// (snake_case) instead of `old_string`/`new_string`. Resuming them
+		// showed `0 → N` (oldStr fell back to ''). The diff must accept
+		// BOTH key shapes, and the legacy `Successfully replaced content at
+		// lines N-M` result prefix must gate the SAME diff path as
+		// `Replaced …` (never fall through to the generic tail).
+		expect(display).toMatch(
+			/old_string'\).*\|\| textArg\(tool\.args, 'old_str'/,
+		);
+		expect(display).toMatch(
+			/new_string'\).*\|\|\s*textArg\(tool\.args, 'new_str'/,
+		);
+		expect(display).toMatch(/Successfully replaced content at line/);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
