@@ -905,6 +905,39 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/<Show when=\{historyTip\(\)\}>/);
 		expect(history).toMatch(/<box height=\{1\} \/>/);
 	});
+	test('compaction shows a TRANSIENT centered row, never a permanent history line', () => {
+		// The "Compacting context (LLM summary)…" status must NOT be a
+		// permanent chat-history info row (appendInfo): it renders as a
+		// centered row inside the transcript with a leading breakline,
+		// animated dots and the secondary color, and disappears the moment
+		// the summarization settles (success, error or empty summary).
+		const app = read('./app.tsx');
+		// The permanent info row is GONE; the signal wraps the summarization.
+		expect(app).not.toMatch(/appendInfo\('Compacting context \(LLM summary\)/);
+		const compact = app.slice(
+			app.indexOf('const compact = '),
+			app.indexOf('const retryLast'),
+		);
+		expect(compact).toMatch(/setCompacting\(true\)/);
+		expect(compact).toMatch(/setCompacting\(false\)/);
+		expect(compact).toMatch(/finally/);
+		expect(compact).toMatch(/summarizeContext\(ctx\)/);
+		// The completion notice stays a permanent info row (the RESULT of the
+		// compaction is chat content — only the in-progress status is transient).
+		expect(compact).toMatch(/Context compacted via LLM summary/);
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/<Show when=\{compacting\(\)\}>/);
+		expect(history).toMatch(/compactingLabel\(spinnerFrame\(\)\)/);
+		expect(history).toMatch(/justifyContent="center"/);
+		expect(history).toMatch(/<box height=\{1\} \/>/);
+		expect(history).toMatch(/colors\(\)\.secondary/);
+		// The animated dots come from the shared loading cadence helper, not a
+		// hard-coded "…" (a fixed ellipsis would double the animated tail).
+		expect(history).not.toMatch(/compactingLabel\([^)]*\)\s*\+\s*['"]…['"]/);
+		const state = read('./state.ts');
+		expect(state).toMatch(/compactingLabel/);
+		expect(state).toMatch(/loadingDots\(frame\)/);
+	});
 
 	test('the transcript scrollbox uses the opencode-style scroll speed', () => {
 		// opencode feels faster/smoother scrolling because its transcript

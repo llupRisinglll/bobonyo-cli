@@ -1,6 +1,7 @@
 import {describe, expect, test} from 'bun:test';
 import {
 	anyModalOpen,
+	compactingLabel,
 	glyphBlinkOn,
 	loadingDots,
 	setAgentsOpen,
@@ -78,5 +79,16 @@ describe('loadingDots', () => {
 		expect(loadingDots(4)).toBe('...');
 		expect(loadingDots(5)).toBe('...');
 		expect(loadingDots(6)).toBe('.');
+	});
+});
+
+describe('compactingLabel', () => {
+	test('base label with ANIMATED dots on the loading cadence', () => {
+		expect(compactingLabel(0)).toBe('Compacting context (LLM summary).');
+		expect(compactingLabel(2)).toBe('Compacting context (LLM summary)..');
+		expect(compactingLabel(4)).toBe('Compacting context (LLM summary)...');
+		// The fixed "…" must NOT be baked in: the dots animate 1→2→3, so a
+		// literal ellipsis would double the tail.
+		expect(compactingLabel(0)).not.toContain('…');
 	});
 });

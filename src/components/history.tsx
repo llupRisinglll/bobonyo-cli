@@ -42,6 +42,8 @@ import {
 	setDetailsTitle,
 	setDetailsContent,
 	anyModalOpen,
+	compacting,
+	compactingLabel,
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
@@ -1313,6 +1315,24 @@ export function History(props: {
 					<box flexDirection="row" justifyContent="center">
 						<text fg={colors().secondary} attributes={dim()}>
 							{historyTip()}
+						</text>
+					</box>
+				</box>
+			</Show>
+			{/* Compacting indicator: a TRANSIENT centered row at the bottom of
+			    the transcript (breakline above so it never glues to the last
+			    message, animated dots, secondary color — same shape as the
+			    idle-history tip). Shows ONLY while an LLM context compaction
+			    runs and disappears the moment it settles, so the compaction
+			    never pollutes the chat history with a permanent row. It
+			    lives INSIDE the scrollbox so it scrolls with the history and
+			    never shifts the input/status line. */}
+			<Show when={compacting()}>
+				<box flexDirection="column">
+					<box height={1} />
+					<box flexDirection="row" justifyContent="center">
+						<text fg={colors().secondary} attributes={dim()}>
+							{compactingLabel(spinnerFrame())}
 						</text>
 					</box>
 				</box>

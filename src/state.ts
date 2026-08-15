@@ -81,14 +81,15 @@ export const [reasoning, setReasoning] = createSignal('');
 export const [thinkingActive, setThinkingActive] = createSignal(false);
 /** Most recent provider usage snapshot (token accounting footer). */
 export const [lastUsage, setLastUsage] = createSignal<
-	{
-		prompt_tokens?: number;
-		completion_tokens?: number;
-		total_tokens?: number;
-		/** DeepSeek prompt-cache fields (kv_cache guide). */
-		promptCacheHitTokens?: number;
-		promptCacheMissTokens?: number;
-	} | undefined
+	| {
+			prompt_tokens?: number;
+			completion_tokens?: number;
+			total_tokens?: number;
+			/** DeepSeek prompt-cache fields (kv_cache guide). */
+			promptCacheHitTokens?: number;
+			promptCacheMissTokens?: number;
+	  }
+	| undefined
 >();
 /** Ctrl+R: expand/collapse the settled Thought preview. */
 export const [thoughtExpanded, setThoughtExpanded] = createSignal(false);
@@ -203,21 +204,25 @@ export const SPINNER_FRAMES = [
 	'⠏',
 ];
 /** Working/Thinking gear alternates ⚙ ↔ ✦ (parity: nanocoder's live region). */
-export const gearGlyph = (frame: number): string =>
-	frame % 8 < 4 ? '⚙' : '✦';
+export const gearGlyph = (frame: number): string => (frame % 8 < 4 ? '⚙' : '✦');
 /**
  * 500ms glyph blink cadence (parity: nanocoder's ToolGlyph toggles ✦ vs a
  * space). Running tool/reply glyphs render secondary and blink on this
  * cadence; the hidden frame keeps a space so the row width never shifts.
  */
-export const glyphBlinkOn = (frame: number): boolean =>
-	(frame >> 2) % 2 === 0;
+export const glyphBlinkOn = (frame: number): boolean => (frame >> 2) % 2 === 0;
 /** `Working` dots animate 1→2→3. */
 export const workingDots = (frame: number): string =>
 	'.'.repeat(((frame >> 2) % 3) + 1);
 /** Lazy-load dots animate 1→2→3 (every 200ms on the 100ms ticker). */
 export const loadingDots = (frame: number): string =>
 	'.'.repeat(((frame >> 1) % 3) + 1);
+/**
+ * Compacting indicator label: the base text plus ANIMATED dots (1→2→3 on
+ * the loading cadence). Pure so the dot math is unit-testable.
+ */
+export const compactingLabel = (frame: number): string =>
+	`Compacting context (LLM summary)${loadingDots(frame)}`;
 /**
  * Real-time elapsed timer (parity: the Working/Thinking headers): renders
  * `52s`, `1m 2s`, `1h 2m 3s`, never a bare seconds count past 60.
@@ -277,9 +282,9 @@ export const [resumeOpen, setResumeOpen] = createSignal(false);
 export const [settingsTab, setSettingsTab] = createSignal(0);
 export const [settingsIndex, setSettingsIndex] = createSignal(0);
 /** Live output for running tool rows, keyed by tool-call id. */
-export const [liveOutputs, setLiveOutputs] = createSignal<Record<string, string>>(
-	{},
-);
+export const [liveOutputs, setLiveOutputs] = createSignal<
+	Record<string, string>
+>({});
 /** Active provider endpoint (docs 05 E2): base URL, key, model, catalog. */
 export interface ActiveEndpoint {
 	id: string;
@@ -301,15 +306,17 @@ export interface ActiveEndpoint {
 	promptCacheKey?: boolean;
 	alwaysAllow?: string[];
 }
-export const [activeEndpoint, setActiveEndpoint] = createSignal<ActiveEndpoint>({
-	id: 'mock',
-	name: 'Mock',
-	baseUrl: process.env.MOCK_URL ?? 'http://127.0.0.1:4010',
-	apiKey: process.env.MOCK_API_KEY ?? '',
-	model: process.env.MOCK_MODEL ?? 'mock-model-1',
-	models: [process.env.MOCK_MODEL ?? 'mock-model-1'],
-	contextWindow: 128_000,
-});
+export const [activeEndpoint, setActiveEndpoint] = createSignal<ActiveEndpoint>(
+	{
+		id: 'mock',
+		name: 'Mock',
+		baseUrl: process.env.MOCK_URL ?? 'http://127.0.0.1:4010',
+		apiKey: process.env.MOCK_API_KEY ?? '',
+		model: process.env.MOCK_MODEL ?? 'mock-model-1',
+		models: [process.env.MOCK_MODEL ?? 'mock-model-1'],
+		contextWindow: 128_000,
+	},
+);
 /** Runtime settings (approval mode, tool profile, message cap). */
 export const [mode, setMode] = createSignal<Mode>('yolo');
 export const [toolProfile, setToolProfile] = createSignal<ToolProfile>('full');
@@ -404,6 +411,14 @@ export const [completionTone, setCompletionTone] = createSignal<
 	'default' | 'success'
 >('default');
 /**
+ * True while an LLM context compaction is running (a separate summarization
+ * request that may take a while). Renders a TRANSIENT centered row at the
+ * bottom of the transcript (breakline above, animated dots, secondary), so
+ * the compaction never pollutes the chat history with a permanent row; the
+ * row disappears the moment the compaction settles.
+ */
+export const [compacting, setCompacting] = createSignal(false);
+/**
  * Transient top-of-screen TOAST (parity: the reference "copied to clipboard"
  * toast). Used for setting changes (model/fallback/mode switches) so they
  * NEVER pollute the chat history, the toast auto-dismisses after ~2.5s.
@@ -426,7 +441,9 @@ export interface StartupLoad {
 	label: string;
 }
 /** Post-open lazy-load indicator rows, one per still-loading service. */
-export const [startupLoading, setStartupLoading] = createSignal<StartupLoad[]>([]);
+export const [startupLoading, setStartupLoading] = createSignal<StartupLoad[]>(
+	[],
+);
 /** MCP servers that finished connecting (for /status + indicators). */
 export const [mcpServers, setMcpServers] = createSignal<string[]>([]);
 /** Status-line footer visibility (Settings → Appearance → Status Line). */

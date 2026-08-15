@@ -206,6 +206,7 @@ import {
 	setModelWindows,
 	setCompletionTone,
 	setThinkingMode,
+	setCompacting,
 	setCavemanMode,
 	setResumeCwdMode,
 	resumeCwdMode,
@@ -2705,7 +2706,11 @@ export function App() {
 			appendInfo('Context is already compact (fewer than 7 messages).');
 			return;
 		}
-		appendInfo('Compacting context (LLM summary)…');
+		// TRANSIENT status: the "Compacting context (LLM summary)…" row is
+		// NOT a permanent chat-history info line — it renders as a centered,
+		// animated-dots row at the bottom of the transcript and disappears
+		// the moment the summarization settles (success, error or empty).
+		setCompacting(true);
 		let summary: string;
 		try {
 			summary = await summarizeContext(ctx);
@@ -2716,6 +2721,8 @@ export function App() {
 				}`,
 			);
 			return;
+		} finally {
+			setCompacting(false);
 		}
 		if (!summary) {
 			appendError('Compaction failed: the model returned an empty summary.');
