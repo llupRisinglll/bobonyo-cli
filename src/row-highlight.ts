@@ -456,8 +456,11 @@ export function tokenizeFileDiff(
 		// branch in the emit callback (they never consume a body entry).
 		if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) continue;
 		// Number-first gutter (parity: the reference DiffView):
-		// `   5 + function …` / `   5 - function …`.
-		const change = line.match(/^(\s*)(\d+\s+)([-+])\s+(.*)$/);
+		// `   5 + function …` / `   5 - function …`. The sigil takes EXACTLY
+		// one separator space, so the code's own leading indentation (tabs
+		// in real code) stays in `text` — a greedy `\s+` would swallow it
+		// and the added lines would render flush at column 0.
+		const change = line.match(/^(\s*)(\d+\s+)([-+]) (.*)$/);
 		if (change) {
 			body.push({
 				raw: line,
@@ -560,8 +563,8 @@ export function tokenizeFileDiff(
 		const used =
 			row.indent.length +
 			(row.sigil ?? '').length +
-			// The sigil emits WITH its trailing space (the parse regex
-			// consumed it into `\s+`); without it `+const` glues to the code.
+			// The sigil emits WITH its trailing space (the parse regex takes
+			// exactly one separator); without it `+const` glues to the code.
 			1 +
 			(row.number ?? '').length +
 			text.length;

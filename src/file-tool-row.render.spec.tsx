@@ -136,4 +136,37 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(remove).toContain('4 - b');
 		expect(remove).not.toMatch(/-b\b/);
 	});
+
+	test("ADDED lines keep the code's own indentation (tabs), never flush", async () => {
+		// The reported bug: editing tab-indented code, the ADD rows lost
+		// their leading tabs (the sigil regex swallowed them), so they
+		// rendered flush at the gutter while context rows kept theirs.
+		const oldStr = [
+			"\t\tconst display = read('./tool-display.ts');",
+			'\t\texpect(display).toMatch(/replacementBaseLine\\(tool\\.output\\)/);',
+			'\t});',
+		].join('\n');
+		const newStr = [
+			"\t\tconst display = read('./tool-display.ts');",
+			'\t\texpect(display).toMatch(/replacementBaseLine\\(tool\\.output\\)/);',
+			'\t\t// INDENTATION: the diff rows must NOT render flush at column 0 —',
+			"\t\texpect(display).toMatch(/const lead = '  ';/);",
+			'\t});',
+		].join('\n');
+		const frame = await renderDiff(1, oldStr, newStr);
+		// 0 blank, 1 header, 2 summary, 3-4 context, 5-6 ADDS, 7 context.
+		const add1 = textOf(frame, 5);
+		const add2 = textOf(frame, 6);
+		// The added lines render with the SAME leading indentation as the
+		// context rows (the test renderer expands tabs, so compare COLUMNS):
+		// the code after `+ ` starts exactly where the context code starts.
+		expect(colOf(add1, '// INDENTATION')).toBe(
+			colOf(textOf(frame, 3), 'const display'),
+		);
+		expect(colOf(add2, 'expect(display)')).toBe(
+			colOf(textOf(frame, 3), 'const display'),
+		);
+		// And that column is PAST the 4-wide number gutter (not flush).
+		expect(colOf(add1, '// INDENTATION')).toBeGreaterThan(9);
+	});
 });

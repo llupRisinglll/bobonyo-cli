@@ -910,9 +910,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(display).toMatch(/`\$\{lead\}\$\{String\(\(line\.newLineNo/);
 		// SIGIL SPACE: the tokenizer consumed the space after +/- into the
 		// parse regex; the renderer must re-emit it or `+const` glues to the
-		// code. The renderChange chunk must carry the trailing space.
+		// code. The renderChange chunk must carry the trailing space, and the
+		// parse regex must take EXACTLY ONE separator (a greedy `\s+` would
+		// swallow the code's leading tabs and render added lines flush).
 		const highlight = read('./row-highlight.ts');
 		expect(highlight).toMatch(/\$\{row\.sigil \?\? ''\} `/);
+		// The change-row parse regex takes EXACTLY ONE space after the sigil
+		// (`([-+]) (.*)`), so the code's leading tabs survive into `text` —
+		// a greedy `\s+` would swallow them and render added lines flush.
+		expect(highlight).toMatch(/\(\[\-\+\]\) \(\.\*\)/);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {

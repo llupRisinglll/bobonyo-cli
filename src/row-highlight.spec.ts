@@ -121,7 +121,13 @@ describe('tokenizeFileDiff', () => {
 
 	test('rows never exceed the renderable width (the old `-2` fill wrapped)', () => {
 		const width = historyFillWidth(110);
-		const chunks = tokenizeFileDiff(DIFF_TEXT, 'src/foo.ts', 'done', THEME, width);
+		const chunks = tokenizeFileDiff(
+			DIFF_TEXT,
+			'src/foo.ts',
+			'done',
+			THEME,
+			width,
+		);
 		const lines = perLine(chunks);
 		for (const line of lines.slice(2, 6)) {
 			const total = line.reduce((sum, c) => sum + c.text.length, 0);
@@ -135,7 +141,11 @@ describe('tokenizeFileDiff', () => {
 		const remove = lines[2] ?? [];
 		const wordBgs = remove
 			.map(c => bg(c))
-			.filter((value): value is string => value === `rgb(${Math.round(0x88)},${Math.round(0x33)},${Math.round(0x44)})`);
+			.filter(
+				(value): value is string =>
+					value ===
+					`rgb(${Math.round(0x88)},${Math.round(0x33)},${Math.round(0x44)})`,
+			);
 		expect(wordBgs.length).toBeGreaterThan(0);
 	});
 
@@ -156,7 +166,13 @@ describe('tokenizeFileDiff', () => {
 			'   2 -  * Legacy string utilities.',
 			'   8 - }',
 		].join('\n');
-		const chunks = tokenizeFileDiff(deleteOnly, 'scratch/mock-delete.ts', 'done', THEME, 80);
+		const chunks = tokenizeFileDiff(
+			deleteOnly,
+			'scratch/mock-delete.ts',
+			'done',
+			THEME,
+			80,
+		);
 		const lines = perLine(chunks);
 		const wordBg = `rgb(${Math.round(0x88)},${Math.round(0x33)},${Math.round(0x44)})`;
 		for (const line of lines.slice(2)) {
@@ -221,16 +237,13 @@ describe('tokenizeFileDiff', () => {
 			'   1 + const x = compute(c, b);',
 		].join('\n');
 		const chunks = tokenizeFileDiff(jsDiff, 'src/foo.ts', 'done', THEME, 80);
-		const lum = (v: RGBA): number =>
-			0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
+		const lum = (v: RGBA): number => 0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
 		for (const line of perLine(chunks).slice(2)) {
 			for (const c of line) {
 				if (!c.bg || !c.fg || c.text.trim() === '') continue;
 				// The readableOn guard keeps the fg at least 0.35 luminance
 				// away from the row/word background — never unreadable.
-				expect(Math.abs(lum(c.fg) - lum(c.bg))).toBeGreaterThanOrEqual(
-					0.35,
-				);
+				expect(Math.abs(lum(c.fg) - lum(c.bg))).toBeGreaterThanOrEqual(0.35);
 			}
 		}
 	});
@@ -260,12 +273,39 @@ describe('tokenizeFileDiff', () => {
 		// The word span on the word background must NOT keep the error fg…
 		expect(rgb(removeWord!)).not.toBe(error);
 		// …and it must still clear the contrast bar against its background.
-		const lum = (v: RGBA): number =>
-			0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
+		const lum = (v: RGBA): number => 0.2126 * v.r + 0.7152 * v.g + 0.0722 * v.b;
 		expect(removeWord!.bg).toBeDefined();
-		expect(Math.abs(lum(removeWord!.fg!) - lum(removeWord!.bg!))).toBeGreaterThanOrEqual(
-			0.35,
-		);
+		expect(
+			Math.abs(lum(removeWord!.fg!) - lum(removeWord!.bg!)),
+		).toBeGreaterThanOrEqual(0.35);
+	});
+
+	test("ADD rows keep the code's own leading tabs (never swallowed by the sigil)", () => {
+		// The reported bug: editing tab-indented code, the ADD rows lost
+		// their leading tabs (the greedy `[-+]\s+` ate them), so they
+		// rendered flush at the gutter while context rows kept theirs. The
+		// sigil must take EXACTLY one separator space and `text` must keep
+		// the code's indentation intact through the chunk stream.
+		const tabDiff = [
+			'✦ Edit src/foo.ts',
+			' ⎿ 3 lines → 5 lines',
+			'     1   \t\tconst display = read("./tool-display.ts");',
+			'     3 + \t\t// INDENTATION: comment here',
+			'     4 + \t\texpect(display).toMatch(/const lead/);',
+			'     3   \t});',
+		].join('\n');
+		const chunks = tokenizeFileDiff(tabDiff, 'src/foo.ts', 'done', THEME, 80);
+		const lines = perLine(chunks);
+		// The ADD rows' code text starts with the SAME `\t\t` as the context
+		// row — `+ \t\t//`, never `+ //`.
+		const add1 = lines[3] ?? [];
+		expect(join(add1)).toMatch(/^ {5}3 \+ \t\t\/\/ INDENTATION/);
+		const add2 = lines[4] ?? [];
+		expect(join(add2)).toMatch(/^ {5}4 \+ \t\texpect\(display\)/);
+		// The tabs survive as whitespace chunks (the syntax highlighter
+		// splits leading whitespace from the code) — never dropped.
+		expect(add1.some(c => c.text.includes('\t'))).toBe(true);
+		expect(add2.some(c => c.text.includes('\t'))).toBe(true);
 	});
 });
 
