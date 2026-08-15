@@ -989,6 +989,21 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		}
 	});
 
+	test('git commit / gh pr messages stay ONE line with no AI attribution', () => {
+		// The bash tool refuses violating commands before they run.
+		const tools = read('./tools.ts');
+		expect(tools).toMatch(/gitCommitMessagesViolation/);
+		expect(tools).toMatch(/ghPrMessagesViolation/);
+		expect(tools).toMatch(/REFUSED to run/);
+		// git_commit carries the rule in its model-facing description.
+		expect(tools).toMatch(/registerTool\('git_commit'/);
+		expect(tools).toMatch(/SINGLE line with exactly/);
+		// The default system prompt states the rule too.
+		const client = read('./client.ts');
+		expect(client).toMatch(/git commit`/);
+		expect(client).toMatch(/Co-authored-by:/);
+	});
+
 	test('ANY provider with a discovery URL fetches its models', () => {
 		// DeepSeek/Xiaomi have dedicated fetchers; every other preset
 		// (OpenAI, OpenRouter, Mistral, ...) carries a modelDiscoveryUrl and
