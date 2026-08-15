@@ -865,7 +865,6 @@ export function ModelModal(props: {
 									<box flexDirection="row" height={1}>
 										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
-											(
 											{parts?.user ?? ''}
 											{parts?.real ? (
 												<span
@@ -881,7 +880,6 @@ export function ModelModal(props: {
 											) : (
 												<></>
 											)}
-											)
 											{line.isCurrent ? ' (current)' : ''}
 										</text>
 									</box>

@@ -61,9 +61,9 @@ describe('model modal provider header + paste', () => {
 			const frame = setup.captureSpans();
 			// User-given name FIRST, real provider name secondary: the
 			// ` · real` segment is a separate span, so check it separately.
-			expect(frameHas(frame, '(codex')).toBe(true);
+			expect(frameHas(frame, 'codex')).toBe(true);
 			expect(frameHas(frame, '· Codex')).toBe(true);
-			expect(frameHas(frame, '(deepseek')).toBe(true);
+			expect(frameHas(frame, 'deepseek')).toBe(true);
 			expect(frameHas(frame, '· DeepSeek')).toBe(true);
 			// The model cells do NOT repeat the provider per model.
 			expect(frameHas(frame, 'gpt-5.4-mini(codex)')).toBe(false);
@@ -103,7 +103,7 @@ describe('model modal provider header + paste', () => {
 			// group header separately shows `(deepseek)`.
 			const frame = setup.captureSpans();
 			expect(frameHas(frame, 'deepseek▌')).toBe(true);
-			expect(frameHas(frame, '(deepseek')).toBe(true);
+			expect(frameHas(frame, 'deepseek')).toBe(true);
 			expect(frameHas(frame, '· DeepSeek')).toBe(true);
 		} finally {
 			setup.renderer.destroy();
