@@ -251,15 +251,23 @@ function formatFilePreview(
 			: numbered;
 		return `${headerFence}\n${codeFence}${footer}`;
 	}
-	// string_replace / diff_edit: old → new diff with line numbers.
-	if (!/^Replaced /.test(tool.output)) {
+	// string_replace / diff_edit: old → new diff with line numbers. The
+	// legacy nanocoder result prefix (`Successfully replaced content at
+	// lines N-M`) gates the same diff path as the current `Replaced …`.
+	if (
+		!/^Replaced /.test(tool.output) &&
+		!/^Successfully replaced content at line/.test(tool.output)
+	) {
 		const tail = formatOutputTail(tool.output, expanded, width);
 		const header = `✦ ${displayName} ${path}`;
 		return tail ? `${header}\n${tail}` : header;
 	}
-	const oldStr = textArg(tool.args, 'old_string') || '';
+	const oldStr =
+		textArg(tool.args, 'old_string') || textArg(tool.args, 'old_str') || '';
 	const newStr =
-		textArg(tool.args, 'new_string') || stripResultPrefix(tool.output);
+		textArg(tool.args, 'new_string') ||
+		textArg(tool.args, 'new_str') ||
+		stripResultPrefix(tool.output);
 	// Count the REAL lines, blank lines included: the diff renderer
 	// (lineDiff) keeps interior blank lines, so the summary must count them
 	// too — filtering empties here made the summary say N while the diff
@@ -293,14 +301,30 @@ function formatFilePreview(
 	}
 	const diffOld = oldLines.slice(prefix, oldLines.length - suffix);
 	const diffNew = newLines.slice(prefix, newLines.length - suffix);
-	const summary = ` ⎿ ${diffOld.length} line${diffOld.length === 1 ? '' : 's'} → ${diffNew.length} line${diffNew.length === 1 ? '' : 's'}`;
+	// DEGENERATE-STRIP GUARD: when old_string is a strict PREFIX (or suffix)
+	// of new_string — a block REPLACED by a longer block that starts with
+	// the same lines — prefix-stripping consumes the ENTIRE old block and
+	// the diff degenerates to `0 lines → N lines` with the replaced lines
+	// hidden (the model "replaced" them but the view said pure insertion).
+	// Fall back to the FULL old→new so the replacement renders as removes +
+	// adds, exactly like git/codex. Anchors are only redundant when a real
+	// change remains on BOTH sides.
+	let diffOldFinal = diffOld;
+	let diffNewFinal = diffNew;
+	let stripPrefix = prefix;
+	if (diffOld.length === 0 || diffNew.length === 0) {
+		diffOldFinal = oldLines;
+		diffNewFinal = newLines;
+		stripPrefix = 0;
+	}
+	const summary = ` ⎿ ${diffOldFinal.length} line${diffOldFinal.length === 1 ? '' : 's'} → ${diffNewFinal.length} line${diffNewFinal.length === 1 ? '' : 's'}`;
 	// Number the diff against the REAL file, not the snippet: the tool
 	// reports where the FIRST occurrence sat (`(at line N)`), and the
-	// stripped middle starts `prefix` lines into that occurrence.
+	// stripped middle starts `stripPrefix` lines into that occurrence.
 	const diff = lineDiffText(
-		diffOld.join('\n'),
-		diffNew.join('\n'),
-		replacementBaseLine(tool.output) + prefix,
+		diffOldFinal.join('\n'),
+		diffNewFinal.join('\n'),
+		replacementBaseLine(tool.output) + stripPrefix,
 	);
 	// Cap the diff preview like the Write preview: collapsed shows the first
 	// 50 lines with a `+N more lines` footer (expand via click / ctrl+o);

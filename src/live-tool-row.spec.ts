@@ -325,13 +325,14 @@ describe('liveRowSegments', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts (at line 42)\nconst a = 1;\nconst b = 2;',
 			);
-			// The unchanged `const a = 1;` is stripped as redundant context;
-			// the ADDED line lands at the REAL file line 43 — never the
-			// snippet-relative 1 / 2. Every row carries the fixed 2-space
-			// container lead and the sigil keeps its trailing space.
-			expect(raw).toContain(' ⎿ 0 lines → 1 line');
+			// old_string is a strict PREFIX of new_string (a block replaced
+			// by a longer block): the unchanged line renders as CONTEXT at
+			// the real file line 42 and the addition lands at 43 — never the
+			// snippet-relative 1 / 2, and never the degenerate `0 → 1`
+			// (which hid the replaced line).
+			expect(raw).toContain(' ⎿ 1 line → 2 lines');
+			expect(raw).toContain('    42   const a = 1;');
 			expect(raw).toContain('    43 + const b = 2;');
-			expect(raw).not.toContain('42   const a = 1;');
 			expect(raw).not.toMatch(/\n\s*1\s/);
 			expect(raw).not.toContain('+const');
 			expect(raw).not.toContain('-const');
@@ -340,14 +341,16 @@ describe('liveRowSegments', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts (at line 1)\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain(' ⎿ 0 lines → 1 line');
+			expect(raw).toContain(' ⎿ 1 line → 2 lines');
+			expect(raw).toContain('     1   const a = 1;');
 			expect(raw).toContain('     2 + const b = 2;');
 		});
 		test('legacy results without the marker keep snippet-relative numbers', () => {
 			const raw = tool(
 				'Replaced 1 occurrence in src/foo.ts\nconst a = 1;\nconst b = 2;',
 			);
-			expect(raw).toContain(' ⎿ 0 lines → 1 line');
+			expect(raw).toContain(' ⎿ 1 line → 2 lines');
+			expect(raw).toContain('     1   const a = 1;');
 			expect(raw).toContain('     2 + const b = 2;');
 		});
 		test('the diff body is INDENTED (2-space container lead on every row)', () => {
@@ -384,10 +387,10 @@ describe('liveRowSegments', () => {
 		});
 		test('a blank line added mid-edit counts ONE row, never a phantom extra', () => {
 			// The reported bug: `new_string` with an interior blank line made
-			// the summary filter the empty line (saying `1 line → 2 lines`)
-			// while the diff renderer kept it (rendering 3 rows) — the
-			// phantom "extra line". The summary must count blanks too, and
-			// the unchanged `const a = 1;` anchor is stripped as context.
+			// the summary filter the empty line while the diff kept it — the
+			// phantom "extra line". The summary must count blanks too; the
+			// unchanged `const a = 1;` renders as context (old is a strict
+			// prefix of new), the blank add and the real add follow.
 			const raw = formatToolEntry(
 				{
 					name: 'string_replace',
@@ -406,15 +409,15 @@ describe('liveRowSegments', () => {
 				true,
 				84,
 			);
-			// 0 removed, 2 added (blank + line) — exactly the diff rows.
-			expect(raw).toContain(' ⎿ 0 lines → 2 lines');
+			expect(raw).toContain(' ⎿ 1 line → 3 lines');
 			const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
-			// summary + 2 diff rows (blank add, add) — never 3.
-			expect(body.length).toBe(3);
+			// summary + ctx + blank add + add — exactly 4, never 5.
+			expect(body.length).toBe(4);
+			expect(body[1]?.map(c => c.text).join('')).toContain('3   const a = 1;');
 			// The blank add renders as a numbered `+` row (line 4), not an
 			// empty row; the real add lands at line 5.
-			expect(body[1]?.map(c => c.text).join('')).toMatch(/4 \+ /);
-			expect(body[2]?.map(c => c.text).join('')).toContain('5 + const b');
+			expect(body[2]?.map(c => c.text).join('')).toMatch(/4 \+ /);
+			expect(body[3]?.map(c => c.text).join('')).toContain('5 + const b');
 		});
 		test('redundant anchor context is stripped (no phantom extra rows)', () => {
 			// The reported bug: old_string/new_string both carried 4
@@ -470,5 +473,51 @@ describe('liveRowSegments', () => {
 			// summary + 3 removes + 4 adds = 8 rows — never 12.
 			expect(body.length).toBe(8);
 		});
+	});
+});
+
+describe('legacy nanocoder args (old_str/new_str snake_case)', () => {
+	// Old sessions saved tool args as `old_str`/`new_str` (nanocoder
+	// format) instead of `old_string`/`new_string`. Resuming them showed
+	// `0 lines → N lines` because oldStr fell back to '' — every replaced
+	// line rendered as a pure insertion. Both key shapes must diff.
+	const legacy = (oldStr: string, newStr: string) =>
+		formatToolEntry(
+			{
+				name: 'string_replace',
+				detail: 'src/legacy.ts',
+				output: `Successfully replaced content at lines 14-25 (now lines 14-26).\n${newStr}`,
+				args: {
+					path: 'src/legacy.ts',
+					old_str: oldStr,
+					new_str: newStr,
+				},
+			},
+			true,
+			'done',
+			true,
+			true,
+			84,
+		);
+	test('old_str/new_str produce a real diff, never 0 → N', () => {
+		const oldStr = ['export const a = 1;', 'export const b = 2;'].join('\n');
+		const newStr = [
+			'export const a = 1;',
+			'export const b = 2;',
+			'export const c = 3;',
+		].join('\n');
+		const raw = legacy(oldStr, newStr);
+		// old is a strict PREFIX of new → degenerate guard shows the full
+		// old→new (2 ctx + 1 add), never `0 → 1`.
+		expect(raw).toContain(' ⎿ 2 lines → 3 lines');
+		expect(raw).not.toContain('0 lines →');
+		const {body} = liveRowSegments(raw, 'filediff', 'done', colors(), 84);
+		// summary + 2 ctx + 1 add
+		expect(body.length).toBe(4);
+	});
+	test('legacy "Successfully replaced" prefix gates the diff path', () => {
+		const raw = legacy('const a = 1;', 'const a = 1;\nconst b = 2;');
+		expect(raw).toContain(' ⎿ 1 line → 2 lines');
+		expect(raw).not.toMatch(/└/);
 	});
 });

@@ -918,9 +918,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The offset math must actually move the rendered numbers: the
 		// marker line number minus 1 is added to every diff row.
 		expect(display).toMatch(/baseLine - 1/);
-		// The diff runs on the STRIPPED middle (diffOld/diffNew), numbered
-		// from the real file line of that middle.
-		expect(display).toMatch(/lineDiffText\(\s*diffOld\.join/);
+		// The diff runs on the STRIPPED middle (diffOldFinal/diffNewFinal,
+		// degenerate-guarded), numbered from the real file line of that
+		// middle.
+		expect(display).toMatch(/lineDiffText\(\s*diffOldFinal\.join/);
 		// INDENTATION: the diff rows must NOT render flush at column 0 —
 		// every row carries a fixed container lead (the 2-space `lead`
 		// baked into lineDiffText), so the numbered block nests under the
@@ -980,8 +981,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// middle so the rendered rows always match it.
 		expect(countBlock).toMatch(/const diffOld = oldLines\.slice\(prefix/);
 		expect(countBlock).toMatch(/const diffNew = newLines\.slice\(prefix/);
-		expect(display).toMatch(/` ⎿ \$\{diffOld\.length\} line/);
-		expect(display).toMatch(/replacementBaseLine\(tool\.output\) \+ prefix/);
+		// DEGENERATE-STRIP GUARD: a prefix-replacement (old block replaced
+		// by a longer block starting with the same lines) must NOT collapse
+		// to `0 → N` — the full old→new renders so the replaced lines show
+		// as context+removes+adds (git/codex parity).
+		expect(countBlock).toMatch(/diffOldFinal = oldLines;/);
+		expect(countBlock).toMatch(
+			/diffOld.length === 0 \|\| diffNew.length === 0/,
+		);
+		expect(display).toMatch(/` ⎿ \$\{diffOldFinal\.length\} line/);
+		expect(display).toMatch(
+			/replacementBaseLine\(tool\.output\) \+ stripPrefix/,
+		);
 	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
