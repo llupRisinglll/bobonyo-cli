@@ -158,6 +158,7 @@ import {
 	appendInfo,
 	appendMessage,
 	appendWarning,
+	capDisplayMessages,
 	showToast,
 	toast,
 	formatElapsed,
@@ -767,7 +768,11 @@ export function App() {
 			// everything up to the first await runs synchronously, so the
 			// transcript/context render immediately.
 			void (async () => {
-				setMessages(resumed.messages);
+				// LAZY BUFFER: a resumed session with a huge transcript is
+				// capped to the bounded display window (older messages are
+				// trimmed with a marker) so the render stays light even when
+				// a pre-compaction session file survived.
+				setMessages(capDisplayMessages(resumed.messages));
 				// Heal pre-fix sessions whose provider context lagged the
 				// transcript (interrupted turns never committed their user
 				// messages) — otherwise a resumed conversation looks empty
@@ -2740,10 +2745,19 @@ export function App() {
 			...userPrompts,
 			{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
 		];
-		setContext(compacted);
 		const reduction = Math.round(
 			((ctx.length - compacted.length) / ctx.length) * 100,
 		);
+		setContext(compacted);
+		// DISPLAY PARITY: the transcript mirrors the compacted provider
+		// context — the old wall of messages is replaced by the kept recent
+		// user prompts + the summary notice. This is what gets PERSISTED, so
+		// a later `/resume` shows the compacted conversation instead of the
+		// pre-compaction history (the "resume still shows the very old
+		// conversation" bug). Pure helper, unit-tested.
+		setMessages(compactedDisplayMessages(messages(), userPrompts.length));
+		// The summary NOTICE lands on top of the compacted transcript (it
+		// also renders the summary text, so the gist stays visible).
 		appendInfo(
 			`Context compacted via LLM summary (${reduction}% reduction, ` +
 				`${summary.split('\n').length} line summary).`,
@@ -4030,6 +4044,34 @@ export function collectCompactedUserMessages(
 		break;
 	}
 	return selected;
+}
+
+/**
+ * The DISPLAY transcript after a compaction: the old wall of messages is
+ * replaced by the NEWEST kept user prompt + its recent tail (the last
+ * exchange), with the compaction summary notice appended on top by the
+ * caller. This is what gets persisted, so a later /resume shows the
+ * COMPACTED conversation instead of the pre-compaction history. Pure,
+ * unit-tested.
+ */
+export function compactedDisplayMessages(
+	messages: ChatMessage[],
+	userPromptCount: number,
+): ChatMessage[] {
+	if (userPromptCount <= 0) return [];
+	// The newest kept user prompt is ALWAYS the last real user message in
+	// the transcript (compaction keeps newest-first), so the display cuts at
+	// that message: it + the last exchange (its replies/tools) stay visible;
+	// everything OLDER is covered by the summary and never resurfaces.
+	let cut = 0;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i]!;
+		if (message.role === 'user' && message.kind !== 'info') {
+			cut = i;
+			break;
+		}
+	}
+	return messages.slice(cut);
 }
 
 /**

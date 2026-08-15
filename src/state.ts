@@ -480,7 +480,36 @@ export const [retrySnapshot, setRetrySnapshot] = createSignal<{
 } | null>(null);
 
 export function appendMessage(message: ChatMessage): void {
-	setMessages(prev => [...prev, message]);
+	setMessages(prev => capDisplayMessages([...prev, message]));
+}
+/**
+ * Hard cap on the DISPLAY transcript (the "lazy buffer"): the UI only ever
+ * holds/renders a bounded window of messages, so a very long conversation
+ * cannot make the app heavy. Older messages beyond the cap are trimmed and
+ * replaced by a dim marker (compaction is the mechanism that preserves the
+ * gist as a summary). Pure, unit-tested.
+ */
+export const DISPLAY_MESSAGE_CAP = 300;
+/**
+ * Trim the transcript to the bounded display window. Never splits a tool
+ * result from its leading assistant call: a leading `tool` row is skipped
+ * (it would render orphaned). Returns the original array when under the
+ * cap. Pure, unit-tested.
+ */
+export function capDisplayMessages(messages: ChatMessage[]): ChatMessage[] {
+	if (messages.length <= DISPLAY_MESSAGE_CAP) return messages;
+	const sliced = messages.slice(-DISPLAY_MESSAGE_CAP);
+	let start = 0;
+	while (start < sliced.length && sliced[start]?.role === 'tool') start++;
+	const dropped = messages.length - sliced.length + start;
+	return [
+		{
+			role: 'assistant',
+			kind: 'info',
+			content: `… ${dropped} earlier message${dropped === 1 ? '' : 's'} trimmed (run /compact to summarize)`,
+		},
+		...sliced.slice(start),
+	];
 }
 
 export function appendAssistantMessage(

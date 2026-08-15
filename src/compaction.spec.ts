@@ -3,6 +3,7 @@ import {ProviderError} from './client';
 import {
 	SUMMARY_PREFIX,
 	collectCompactedUserMessages,
+	compactedDisplayMessages,
 	isCompactOverflowError,
 } from './app';
 import type {ChatMessageLike} from './client';
@@ -29,7 +30,10 @@ describe('collectCompactedUserMessages (codex build_compacted_history parity)', 
 
 	test('a tiny budget keeps only a truncated trace of the newest message', () => {
 		const long = 'x'.repeat(2000);
-		const selected = collectCompactedUserMessages([user('old'), user(long)], 50);
+		const selected = collectCompactedUserMessages(
+			[user('old'), user(long)],
+			50,
+		);
 		expect(selected.length).toBe(1);
 		expect(selected[0]!.content).toContain('… [truncated]');
 		expect(selected[0]!.content!.length).toBeLessThan(300);
@@ -45,9 +49,7 @@ describe('collectCompactedUserMessages (codex build_compacted_history parity)', 
 
 	test('no user messages returns an empty selection', () => {
 		expect(
-			collectCompactedUserMessages([
-				{role: 'assistant', content: 'hi'},
-			]),
+			collectCompactedUserMessages([{role: 'assistant', content: 'hi'}]),
 		).toEqual([]);
 	});
 
@@ -86,18 +88,65 @@ describe('collectCompactedUserMessages (codex build_compacted_history parity)', 
 
 describe('isCompactOverflowError (codex ContextWindowExceeded parity)', () => {
 	test('400 and 413 provider errors are recoverable', () => {
-		expect(isCompactOverflowError(new ProviderError(400, 'context length exceeded'))).toBe(
-			true,
-		);
-		expect(isCompactOverflowError(new ProviderError(413, 'payload too large'))).toBe(
-			true,
-		);
+		expect(
+			isCompactOverflowError(new ProviderError(400, 'context length exceeded')),
+		).toBe(true);
+		expect(
+			isCompactOverflowError(new ProviderError(413, 'payload too large')),
+		).toBe(true);
 	});
 
 	test('other statuses and non-provider errors fail compaction', () => {
-		expect(isCompactOverflowError(new ProviderError(429, 'rate limit'))).toBe(false);
-		expect(isCompactOverflowError(new ProviderError(500, 'server'))).toBe(false);
+		expect(isCompactOverflowError(new ProviderError(429, 'rate limit'))).toBe(
+			false,
+		);
+		expect(isCompactOverflowError(new ProviderError(500, 'server'))).toBe(
+			false,
+		);
 		expect(isCompactOverflowError(new Error('network down'))).toBe(false);
 		expect(isCompactOverflowError(undefined)).toBe(false);
+	});
+});
+
+describe('compactedDisplayMessages (display parity: resume shows the compacted view)', () => {
+	const userMsg = (content: string, extra: object = {}) => ({
+		role: 'user' as const,
+		content,
+		...extra,
+	});
+	const asstMsg = (content: string) => ({role: 'assistant' as const, content});
+	const infoMsg = (content: string) => ({
+		role: 'assistant' as const,
+		content,
+		kind: 'info' as const,
+	});
+	test('keeps the NEWEST kept user prompt + its tail (the old wall is gone)', () => {
+		const messages = [
+			userMsg('very old prompt'),
+			asstMsg('old reply'),
+			userMsg('recent prompt 1'),
+			asstMsg('reply 1'),
+			userMsg('recent prompt 2'),
+			asstMsg('reply 2'),
+		];
+		// The provider compaction kept the newest 2 user prompts; the
+		// display must keep from the NEWEST kept prompt onward (recent
+		// prompt 2 + its reply) — everything older is covered by the
+		// summary and never resurfaces.
+		const display = compactedDisplayMessages(messages, 2);
+		expect(display.map(m => m.content)).toEqual(['recent prompt 2', 'reply 2']);
+	});
+	test('a zero user-prompt count returns an empty display (summary-only)', () => {
+		expect(compactedDisplayMessages([userMsg('a'), asstMsg('b')], 0)).toEqual(
+			[],
+		);
+	});
+	test('info rows do not count as user prompts', () => {
+		const messages = [userMsg('old'), infoMsg('a notice'), userMsg('recent')];
+		// The notice is not a user prompt; keeping 1 prompt keeps `recent`
+		// (the newest kept prompt) + its tail.
+		expect(compactedDisplayMessages(messages, 1).map(m => m.content)).toEqual([
+			'recent',
+		]);
 	});
 });

@@ -92,3 +92,53 @@ describe('compactingLabel', () => {
 		expect(compactingLabel(0)).not.toContain('…');
 	});
 });
+
+describe('capDisplayMessages (lazy display buffer)', () => {
+	const msg = (role: 'user' | 'assistant' | 'tool', content: string) => ({
+		role,
+		content,
+	});
+	const {DISPLAY_MESSAGE_CAP, capDisplayMessages} = require('./state') as {
+		DISPLAY_MESSAGE_CAP: number;
+		capDisplayMessages: (m: unknown[]) => unknown[];
+	};
+	test('under the cap: unchanged (no marker row)', () => {
+		const small = [msg('user', 'a'), msg('assistant', 'b')];
+		expect(capDisplayMessages(small)).toBe(small);
+	});
+	test('over the cap: keeps the newest window + a trim marker at the head', () => {
+		const many = Array.from({length: DISPLAY_MESSAGE_CAP + 20}, (_, i) =>
+			msg(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
+		);
+		const capped = capDisplayMessages(many) as Array<{
+			role: string;
+			content: string;
+			kind?: string;
+		}>;
+		// Marker row at the head, then the bounded window.
+		expect(capped[0]!.kind).toBe('info');
+		expect(capped[0]!.content).toContain('earlier messages trimmed');
+		expect(capped.length).toBe(DISPLAY_MESSAGE_CAP + 1);
+		// The newest message survives; the oldest non-marker content is the
+		// newest window's head.
+		expect(capped[capped.length - 1]!.content).toBe(
+			`m${DISPLAY_MESSAGE_CAP + 19}`,
+		);
+	});
+	test('never splits a leading tool row (skips it with the trim)', () => {
+		const many = Array.from({length: DISPLAY_MESSAGE_CAP + 3}, (_, i) =>
+			msg(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
+		);
+		// The trimmed window is slice(-CAP) = indices 3..; force its HEAD
+		// (index 3) to be a tool so the skip logic is actually exercised.
+		many[3] = msg('tool', 'orphan result');
+		const capped = capDisplayMessages(many) as Array<{
+			role: string;
+			content: string;
+		}>;
+		// The leading tool row is skipped so it never renders orphaned, and
+		// the marker reports the extra dropped count.
+		expect(capped[1]!.role).not.toBe('tool');
+		expect(capped[0]!.content).toContain('4 earlier messages trimmed');
+	});
+});
