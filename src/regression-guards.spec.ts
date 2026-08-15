@@ -875,10 +875,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/const idle =/);
 		expect(history).toMatch(/!liveToolRows\(\)\.length/);
 		expect(history).toMatch(/!liveReplyText\(\)/);
-		// Hidden thinking mode means the live thought does NOT render, so the
-		// history is idle and the tip may take the stage.
+		// Only 'show' mode renders live thought; hidden/line leave the
+		// history idle so the tip may take the stage.
 		expect(history).toMatch(
-			/!\(thinkingMode\(\) !== 'hidden' && liveThoughtHeader\(\)\)/,
+			/!\(thinkingMode\(\) === 'show' && liveThoughtHeader\(\)\)/,
 		);
 		// Transient: breakline + centered row, inside the scrollbox.
 		expect(history).toMatch(/<Show when=\{historyTip\(\)\}>/);
@@ -1043,12 +1043,38 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const settings = read('./settings.ts');
 		expect(settings).toMatch(/ThinkingMode = 'hidden' \| 'show' \| 'line'/);
 		const history = read('./components/history.tsx');
-		expect(history).toMatch(/thinkingMode\(\) !== 'hidden'/);
-		expect(history).toMatch(/thinkingMode\(\) === 'line'/);
+		// Live thought block renders ONLY in 'show' mode.
+		expect(history).toMatch(/thinkingMode\(\) === 'show'/);
+		// Settled thought blocks render ONLY in 'show' mode.
+		expect(history).toMatch(/thinkingMode\(\) === 'show'\)/);
+		// historyTip idle check: only 'show' blocks the tip.
+		expect(history).toMatch(
+			/!\(thinkingMode\(\) === 'show' && liveThoughtHeader\(\)\)/,
+		);
 		const panel = read('./components/settings-panel.tsx');
 		expect(panel).toMatch(
 			/thinkingMode: \['hidden', 'show', 'line'\]/,
 		);
+	});
+
+	test('line mode: ticker renders in input-box, not in chat history', () => {
+		const input = read('./components/input-box.tsx');
+		// The ticker row is ALWAYS present when thinkingMode is 'line'
+		// (reserves 1 row to prevent input/statusline jump).
+		expect(input).toMatch(/when=\{thinkingMode\(\) === 'line'\}/);
+		// The ticker shows the one-line reasoning via liveThoughtOneLine.
+		expect(input).toMatch(/liveThoughtOneLine/);
+		// The ticker only shows text while busy and reasoning is non-empty.
+		expect(input).toMatch(/busy\(\) && reasoning\(\)/);
+		const history = read('./components/history.tsx');
+		// history.tsx must NOT render the live thought for 'line' mode.
+		const liveThoughtGuards =
+			history.match(/<Show when=\{thinkingMode\(\)[^}]*liveThoughtHeader/g) ??
+			[];
+		for (const guard of liveThoughtGuards) {
+			expect(guard).toContain('show');
+			expect(guard).not.toContain('line');
+		}
 	});
 
 	test('ANY provider with a discovery URL fetches its models', () => {

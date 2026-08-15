@@ -1,18 +1,18 @@
 /** @jsxImportSource @opentui/solid */
-import {readdirSync} from 'node:fs';
-import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
-import {createTextAttributes} from '@opentui/core';
-import {createMemo, createSignal, For, Show} from 'solid-js';
+import { readdirSync } from 'node:fs';
+import { useKeyboard, usePaste, useTerminalDimensions } from '@opentui/solid';
+import { createTextAttributes } from '@opentui/core';
+import { createMemo, createSignal, For, Show } from 'solid-js';
 import {
 	COMMAND_DESCRIPTIONS,
 	commandNames,
 	customCommandNames,
 } from '../commands';
-import {loadCustomCommands, loadSkills} from '../custom';
-import {insertMention, listProjectFiles, mentionToken} from '../mentions';
-import {expandTextPlaceholders, processPaste} from '../attachments';
-import {estimateTokens} from '../tokenize';
-import {wrapText, wrapTextDetailed} from '../text-wrap';
+import { loadCustomCommands, loadSkills } from '../custom';
+import { insertMention, listProjectFiles, mentionToken } from '../mentions';
+import { expandTextPlaceholders, processPaste } from '../attachments';
+import { estimateTokens } from '../tokenize';
+import { wrapText, wrapTextDetailed } from '../text-wrap';
 import {
 	activeEndpoint,
 	anyModalOpen,
@@ -53,10 +53,12 @@ import {
 	setPendingApproval,
 	setPendingPrompt,
 } from '../state';
-import {CHALK_GREY, colors} from '../theme';
-import {loadSettings, saveSettings} from '../settings';
-import {activeRowPalette} from '../row-highlight';
-import {isDeleteKey} from '../input-keys';
+import { CHALK_GREY, colors } from '../theme';
+import { loadSettings, saveSettings } from '../settings';
+import { activeRowPalette } from '../row-highlight';
+import { isDeleteKey } from '../input-keys';
+import { liveThoughtOneLine } from './history';
+import { historyFillWidth } from '../history-width';
 
 /**
  * Hide-thinking indicator label: "Thinking…" ONLY while the model is in the
@@ -66,7 +68,9 @@ export function workingLabel(
 	mode: 'hidden' | 'show' | 'line',
 	thinking: boolean,
 ): string {
-	return mode === 'hidden' && thinking ? 'Thinking' : 'Working';
+	return (mode === 'hidden' || mode === 'line') && thinking
+		? 'Thinking'
+		: 'Working';
 }
 
 /**
@@ -91,10 +95,7 @@ export function isSubmitKey(event: {
 		event.name === 'return' ||
 		event.name === 'enter' ||
 		// herdr sends Enter as a bare linefeed (`\n`), never `\r`.
-		(event.name === 'linefeed' &&
-			!event.shift &&
-			!event.ctrl &&
-			!event.meta)
+		(event.name === 'linefeed' && !event.shift && !event.ctrl && !event.meta)
 	);
 }
 
@@ -105,10 +106,7 @@ export function isSubmitKey(event: {
  * messages queue while busy, slash commands act immediately.
  */
 export function InputBox(props: {
-	onSubmit: (
-		value: string,
-		attachments?: Record<string, string>,
-	) => void;
+	onSubmit: (value: string, attachments?: Record<string, string>) => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const [draft, setDraft] = createSignal('');
@@ -176,7 +174,9 @@ export function InputBox(props: {
 	const moveCursorNextWord = (): void => {
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
-		setCursorPos(snapOutOfAtomicToken(value, moveToNextWord(value, c), 'right'));
+		setCursorPos(
+			snapOutOfAtomicToken(value, moveToNextWord(value, c), 'right'),
+		);
 	};
 	/**
 	 * Move the caret one VISUAL line up/down inside a multiline input
@@ -189,8 +189,7 @@ export function InputBox(props: {
 		const info = cursorInfo();
 		const lines = wrapped();
 		if (lines.length < 2) return false;
-		const target =
-			direction === 'up' ? info.line - 1 : info.line + 1;
+		const target = direction === 'up' ? info.line - 1 : info.line + 1;
 		if (target < 0 || target >= lines.length) return false;
 		setCursorPos(offsetForLine(lines, target, info.column));
 		return true;
@@ -203,12 +202,12 @@ export function InputBox(props: {
 	>({});
 	// Terminal paste: image paths → `[Image #N]`, long text → `[Text #N]`
 	// (parity: nanocoder attachments; the tokens keep the input compact).
-	usePaste((event: {bytes: Uint8Array}) => {
+	usePaste((event: { bytes: Uint8Array }) => {
 		// A modal owns the screen while open — paste must land in the
 		// modal's field, never leak into the chat box behind it.
 		if (anyModalOpen()) return;
 		const text = new TextDecoder().decode(event.bytes);
-		const {text: compact, attachments} = processPaste(
+		const { text: compact, attachments } = processPaste(
 			text,
 			pasteAttachments(),
 		);
@@ -224,7 +223,7 @@ export function InputBox(props: {
 	};
 
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
-	const typedChar = (event: {name: string; shift?: boolean}): string => {
+	const typedChar = (event: { name: string; shift?: boolean }): string => {
 		const char = event.name;
 		if (char.length !== 1) return '';
 		if (event.shift && /^[a-z]$/.test(char)) return char.toUpperCase();
@@ -247,9 +246,7 @@ export function InputBox(props: {
 			window > 0
 				? Math.min(
 						100,
-						Math.round(
-							(estimateTokens(text, model) / window) * 100,
-						),
+						Math.round((estimateTokens(text, model) / window) * 100),
 					)
 				: 0;
 		return {
@@ -285,9 +282,7 @@ export function InputBox(props: {
 				kind: 'command',
 				description:
 					COMMAND_DESCRIPTIONS[command] ??
-					(command.startsWith('mock:')
-						? 'Preview scenario'
-						: 'Run command'),
+					(command.startsWith('mock:') ? 'Preview scenario' : 'Run command'),
 				prefix: '',
 			});
 		}
@@ -308,18 +303,16 @@ export function InputBox(props: {
 			});
 		}
 		if (!name) {
-			return items
-				.slice(0, 50)
-				.map((item, index) => ({
-					...item,
-					active: selectedCompletion() === index,
-				}));
+			return items.slice(0, 50).map((item, index) => ({
+				...item,
+				active: selectedCompletion() === index,
+			}));
 		}
 		// F1: fuzzy scoring, prefix matches win, then substring, then
 		// character subsequence; ties stay in catalog order.
 		const query = name.toLowerCase();
 		// Typing `/qui…` suggests the canonical `/exit` (the alias).
-		if (/^qui/.test(query) && !items.some(item => item.name === 'exit')) {
+		if (/^qui/.test(query) && !items.some((item) => item.name === 'exit')) {
 			items.push({
 				name: 'exit',
 				kind: 'command',
@@ -327,27 +320,29 @@ export function InputBox(props: {
 				prefix: '',
 			});
 		}
-		return items
-			.map(item => ({
-				item,
-				// `/qui…` always surfaces the canonical `/exit` alias.
-				score:
-					/^qui/.test(query) && item.name === 'exit'
-						? 100
-						: fuzzyScore(query, item.name),
-			}))
-			.filter(entry => entry.score > 0)
-			.sort((a, b) => b.score - a.score)
-			// NO hard 6-item cap: ↑/↓ scroll through ALL matches through a
-			// rendered WINDOW (parity: the list scrolls through every match).
-			.slice(0, 50)
-			// Fold the selection into the array, the reconciler's <For> only
-			// re-renders when the `each` reference changes (mouse hover was
-			// stale for the same reason).
-			.map((entry, index) => ({
-				...entry.item,
-				active: selectedCompletion() === index,
-			}));
+		return (
+			items
+				.map((item) => ({
+					item,
+					// `/qui…` always surfaces the canonical `/exit` alias.
+					score:
+						/^qui/.test(query) && item.name === 'exit'
+							? 100
+							: fuzzyScore(query, item.name),
+				}))
+				.filter((entry) => entry.score > 0)
+				.sort((a, b) => b.score - a.score)
+				// NO hard 6-item cap: ↑/↓ scroll through ALL matches through a
+				// rendered WINDOW (parity: the list scrolls through every match).
+				.slice(0, 50)
+				// Fold the selection into the array, the reconciler's <For> only
+				// re-renders when the `each` reference changes (mouse hover was
+				// stale for the same reason).
+				.map((entry, index) => ({
+					...entry.item,
+					active: selectedCompletion() === index,
+				}))
+		);
 	});
 	// Rendered WINDOW of the completion list (6 rows), REVERSED so the
 	// SELECTED item sits at the BOTTOM (bottom-anchored palette, the opposite
@@ -361,12 +356,10 @@ export function InputBox(props: {
 			Math.max(0, all.length - 1),
 		);
 		const slice = all.slice(sel, sel + visible);
-		return [...slice]
-			.reverse()
-			.map((item, offset) => ({
-				...item,
-				index: sel + (slice.length - 1 - offset),
-			}));
+		return [...slice].reverse().map((item, offset) => ({
+			...item,
+			index: sel + (slice.length - 1 - offset),
+		}));
 	});
 	// `@` file-mention suggestions (parity: the reference mentions files).
 	const mentionFiles = createMemo(() => {
@@ -376,11 +369,11 @@ export function InputBox(props: {
 		const q = token.toLowerCase();
 		const scored = q
 			? all
-			.map(path => ({path, score: fuzzyScore(q, path)}))
-			.filter(entry => entry.score > 0)
-			.sort((a, b) => b.score - a.score)
-			.slice(0, 6)
-			: all.slice(0, 6).map(path => ({path, score: 0}));
+					.map((path) => ({ path, score: fuzzyScore(q, path) }))
+					.filter((entry) => entry.score > 0)
+					.sort((a, b) => b.score - a.score)
+					.slice(0, 6)
+			: all.slice(0, 6).map((path) => ({ path, score: 0 }));
 		// Fold the selection into the array, the reconciler's <For> only
 		// re-renders when the `each` reference changes.
 		return scored.map((entry, index) => ({
@@ -412,7 +405,7 @@ export function InputBox(props: {
 	const inputWidth = (): number =>
 		Math.max(10, (terminalDimensions().width ?? 80) - 12);
 	const wrapped = createMemo(() => wrapTextDetailed(input(), inputWidth()));
-	const inputLines = createMemo(() => wrapped().map(entry => entry.text));
+	const inputLines = createMemo(() => wrapped().map((entry) => entry.text));
 	// Caret position inside the WRAPPED rows (line + column), derived from
 	// the raw-string cursor, never inside an atomic token.
 	const cursorInfo = createMemo(() =>
@@ -425,7 +418,7 @@ export function InputBox(props: {
 			new Set<string>([
 				...commandNames(),
 				...customCommandNames(),
-				...loadSkills().map(skill => `skill:${skill.name}`),
+				...loadSkills().map((skill) => `skill:${skill.name}`),
 			]),
 	);
 	// Active suggestion-row palette (info tint + guaranteed-readable fg).
@@ -446,7 +439,7 @@ export function InputBox(props: {
 	const cursorVisible = createMemo(
 		() => cursorForced() || (spinnerFrame() >> 2) % 2 === 0,
 	);
-	useKeyboard(event => {
+	useKeyboard((event) => {
 		// Any key pauses the caret blink (visible while typing, debounced).
 		forceCursorVisible();
 		// Reset the fast-erase hold counter whenever a non-backspace key
@@ -527,11 +520,11 @@ export function InputBox(props: {
 		if (mentionMatches.length > 0 && !event.ctrl && !event.meta) {
 			event.preventDefault();
 			if (event.name === 'up') {
-				setMentionSelected(prev => Math.max(0, prev - 1));
+				setMentionSelected((prev) => Math.max(0, prev - 1));
 				return;
 			}
 			if (event.name === 'down') {
-				setMentionSelected(prev =>
+				setMentionSelected((prev) =>
 					Math.min(mentionMatches.length - 1, prev + 1),
 				);
 				return;
@@ -566,17 +559,16 @@ export function InputBox(props: {
 			if (event.name === 'up') {
 				// ↑ walks FORWARD through the list (bottom-anchored: the
 				// selected item is at the bottom, navigation goes up).
-				setSelectedCompletion(prev =>
-					Math.min(matches.length - 1, prev + 1),
-				);
+				setSelectedCompletion((prev) => Math.min(matches.length - 1, prev + 1));
 				return;
 			}
 			if (event.name === 'down') {
-				setSelectedCompletion(prev => Math.max(0, prev - 1));
+				setSelectedCompletion((prev) => Math.max(0, prev - 1));
 				return;
 			}
 			if (event.name === 'return') {
-				const item = matches[Math.min(selectedCompletion(), matches.length - 1)];
+				const item =
+					matches[Math.min(selectedCompletion(), matches.length - 1)];
 				if (item) {
 					// Skills run immediately (`/skill:<name>` → submit the
 					// skill body); commands complete or run like before.
@@ -727,10 +719,12 @@ export function InputBox(props: {
 				];
 				const current = mode();
 				const next =
-					ORDER[(ORDER.indexOf(current as (typeof ORDER)[number]) + 1) % ORDER.length] ??
-					'yolo';
+					ORDER[
+						(ORDER.indexOf(current as (typeof ORDER)[number]) + 1) %
+							ORDER.length
+					] ?? 'yolo';
 				setMode(next);
-				saveSettings({...loadSettings(), mode: next});
+				saveSettings({ ...loadSettings(), mode: next });
 				return;
 			}
 			const matches = completions();
@@ -747,14 +741,12 @@ export function InputBox(props: {
 			if (input().startsWith('!')) {
 				const current = input();
 				const token = current.split(/\s+/).pop() ?? '';
-				const entries = readdirSync(process.cwd()).filter(entry =>
+				const entries = readdirSync(process.cwd()).filter((entry) =>
 					entry.startsWith(token),
 				);
 				if (entries.length === 1) {
 					setInputAt(
-						current.slice(0, current.length - token.length) +
-							entries[0] +
-							' ',
+						current.slice(0, current.length - token.length) + entries[0] + ' ',
 					);
 				}
 			}
@@ -768,7 +760,9 @@ export function InputBox(props: {
 			if (queuedIndex >= 0 && queuedIndex < pendingQueue().length) {
 				const value = pendingQueue()[queuedIndex]?.value ?? '';
 				setInputAt(value);
-				setPendingQueue(prev => prev.filter((_, index) => index !== queuedIndex));
+				setPendingQueue((prev) =>
+					prev.filter((_, index) => index !== queuedIndex),
+				);
 				setSelectedQueued(-1);
 				return;
 			}
@@ -786,11 +780,11 @@ export function InputBox(props: {
 				queuedIndex < pendingQueue().length &&
 				input().length === 0
 			) {
-				setPendingQueue(prev => prev.filter((_, index) => index !== queuedIndex));
-				setSelectedQueued(prev =>
-					prev >= pendingQueue().length - 1
-						? pendingQueue().length - 2
-						: prev,
+				setPendingQueue((prev) =>
+					prev.filter((_, index) => index !== queuedIndex),
+				);
+				setSelectedQueued((prev) =>
+					prev >= pendingQueue().length - 1 ? pendingQueue().length - 2 : prev,
 				);
 				return;
 			}
@@ -817,8 +811,8 @@ export function InputBox(props: {
 		}
 	});
 
-	const bold = () => createTextAttributes({bold: true});
-	const dim = () => createTextAttributes({dim: true});
+	const bold = () => createTextAttributes({ bold: true });
+	const dim = () => createTextAttributes({ dim: true });
 	return (
 		<box flexDirection="column">
 			{/* Working indicator: FIXED above the input box (parity with
@@ -826,21 +820,30 @@ export function InputBox(props: {
 			<Show when={busy()}>
 				<box height={1}>
 					<text
-						fg={
-							retryingAttempt() > 0
-								? colors().warning
-								: colors().primary
-						}
+						fg={retryingAttempt() > 0 ? colors().warning : colors().primary}
 					>
 						{gearGlyph(spinnerFrame())}{' '}
 						{workingLabel(thinkingMode(), thinkingActive())}
-						{workingDots(spinnerFrame())} ·{' '}
-						({formatElapsed(turnElapsed())})
-						{retryingAttempt() > 0
-							? ` · retrying (${retryingAttempt()})`
-							: ''}{' '}
+						{workingDots(spinnerFrame())} · ({formatElapsed(turnElapsed())})
+						{retryingAttempt() > 0 ? ` · retrying (${retryingAttempt()})` : ''}{' '}
 						· Esc to cancel
 					</text>
+				</box>
+			</Show>
+			{/* Line-mode thinking ticker: always reserves 1 row so the input
+			    does not jump when thinking starts/stops. Shows the scrolling
+			    reasoning line while thinking, blank otherwise. */}
+			<Show when={thinkingMode() === 'line'}>
+				<box height={1}>
+					<Show when={busy() && reasoning()}>
+						<text fg={colors().secondary} attributes={dim()}>
+							{'  └ '}
+							{liveThoughtOneLine(
+								reasoning(),
+								historyFillWidth(terminalDimensions().width ?? 80),
+							)}
+						</text>
+					</Show>
 				</box>
 			</Show>
 			{/* Post-open lazy-load indicator: ONE ROW PER service, each with
@@ -853,16 +856,10 @@ export function InputBox(props: {
 						<box height={1} flexDirection="row">
 							{/* Width-stable glyph cell: the hidden blink
 							    frame keeps a space so nothing shifts. */}
-							<text
-								fg={colors().secondary}
-								attributes={dim()}
-							>
+							<text fg={colors().secondary} attributes={dim()}>
 								{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
 							</text>
-							<text
-								fg={colors().secondary}
-								attributes={dim()}
-							>
+							<text fg={colors().secondary} attributes={dim()}>
 								{item.label}
 								{loadingDots(spinnerFrame())}
 							</text>
@@ -903,10 +900,7 @@ export function InputBox(props: {
 			    (parity: nanocoder's queuedBlock, it must stay visible, not
 			    scroll away with the transcript). */}
 			<Show when={pendingQueue().length > 0}>
-				<box
-					flexDirection="column"
-					height={pendingQueue().length + 1}
-				>
+				<box flexDirection="column" height={pendingQueue().length + 1}>
 					<text fg={colors().secondary}>
 						Queued messages (↑/↓ select, Enter edit, Del remove):
 					</text>
@@ -920,13 +914,13 @@ export function InputBox(props: {
 								}
 								attributes={
 									selectedQueued() === index()
-										? createTextAttributes({bold: true})
+										? createTextAttributes({ bold: true })
 										: undefined
 								}
-								>
-									{selectedQueued() === index() ? '▸ ' : '  '}
-									(queued) {message.value}
-								</text>
+							>
+								{selectedQueued() === index() ? '▸ ' : '  '}
+								(queued) {message.value}
+							</text>
 						)}
 					</For>
 				</box>
@@ -945,34 +939,32 @@ export function InputBox(props: {
 						{(item, index) => {
 							const active = item.active;
 							return (
-							<box
-								flexDirection="row"
-								height={1}
-								backgroundColor={active ? activeRow().bg : undefined}
-								{...({
-									onMouseUp: () => {
-										const token = mentionToken(input());
-										if (token !== null) {
-											const at = input().lastIndexOf('@');
-											setInputAt(
-												insertMention(input(), item.path, token),
-												at + 1 + item.path.length + 1,
-											);
-										}
-										setMentionSelected(0);
-									},
-									onMouseMove: () => setMentionSelected(index()),
-								} as any)}
-							>
-								<text
-									fg={active ? activeRow().fg : colors().text}
-									attributes={active ? bold() : undefined}
+								<box
+									flexDirection="row"
+									height={1}
+									backgroundColor={active ? activeRow().bg : undefined}
+									{...({
+										onMouseUp: () => {
+											const token = mentionToken(input());
+											if (token !== null) {
+												const at = input().lastIndexOf('@');
+												setInputAt(
+													insertMention(input(), item.path, token),
+													at + 1 + item.path.length + 1,
+												);
+											}
+											setMentionSelected(0);
+										},
+										onMouseMove: () => setMentionSelected(index()),
+									} as any)}
 								>
-									{active ? '❯ ' : '  '}
-									@
-									{relativePath(item.path)}
-								</text>
-							</box>
+									<text
+										fg={active ? activeRow().fg : colors().text}
+										attributes={active ? bold() : undefined}
+									>
+										{active ? '❯ ' : '  '}@{relativePath(item.path)}
+									</text>
+								</box>
 							);
 						}}
 					</For>
@@ -985,76 +977,64 @@ export function InputBox(props: {
 			    only for the settings modal lists) with the
 			    `[Command]`/`[Skill]` tag BEFORE the description. */}
 			<Show when={completions().length > 0}>
-				<box
-					flexDirection="column"
-					height={completionWindow().length}
-				>
+				<box flexDirection="column" height={completionWindow().length}>
 					<For each={completionWindow()}>
 						{(item) => {
 							const active = item.active;
 							return (
-							// The WHOLE row is the hover/click target (parity:
-							// the settings rows, hover navigates, click picks).
-							<box
-								flexDirection="row"
-								height={1}
-								backgroundColor={active ? activeRow().bg : undefined}
-								{...({
-									onMouseUp: () => {
-										setSelectedCompletion(item.index);
-										if (item.kind === 'skill') {
-											submitExpanded(`/${item.name}`);
-										} else if (input() === `/${item.name}`) {
-											submitExpanded(input());
-										} else {
-											setInputAt(`/${item.name} `);
-										}
-										setSelectedCompletion(0);
-									},
-									onMouseMove: () =>
-										setSelectedCompletion(item.index),
-								} as any)}
-							>
-								<text
-									width={2}
-									fg={active ? activeRow().fg : colors().secondary}
-									attributes={active ? bold() : undefined}
+								// The WHOLE row is the hover/click target (parity:
+								// the settings rows, hover navigates, click picks).
+								<box
+									flexDirection="row"
+									height={1}
+									backgroundColor={active ? activeRow().bg : undefined}
+									{...({
+										onMouseUp: () => {
+											setSelectedCompletion(item.index);
+											if (item.kind === 'skill') {
+												submitExpanded(`/${item.name}`);
+											} else if (input() === `/${item.name}`) {
+												submitExpanded(input());
+											} else {
+												setInputAt(`/${item.name} `);
+											}
+											setSelectedCompletion(0);
+										},
+										onMouseMove: () => setSelectedCompletion(item.index),
+									} as any)}
 								>
-									{active ? '❯ ' : '  '}
-								</text>
-								<text
-									width={30}
-									fg={active ? activeRow().fg : colors().text}
-									attributes={active ? bold() : undefined}
-								>
-									/{item.name}
-								</text>
-								{item.prefix ? (
 									<text
-										width={item.prefix.length + 1}
-										fg={
-											active
-												? activeRow().fg
-												: colors().primary
-										}
+										width={2}
+										fg={active ? activeRow().fg : colors().secondary}
 										attributes={active ? bold() : undefined}
 									>
-										{item.prefix}
+										{active ? '❯ ' : '  '}
 									</text>
-								) : (
-									<></>
-								)}
-								<text
-									fg={
-										active
-											? activeRow().fg
-											: colors().secondary
-									}
-									attributes={active ? bold() : dim()}
-								>
-									{item.description}
-								</text>
-							</box>
+									<text
+										width={30}
+										fg={active ? activeRow().fg : colors().text}
+										attributes={active ? bold() : undefined}
+									>
+										/{item.name}
+									</text>
+									{item.prefix ? (
+										<text
+											width={item.prefix.length + 1}
+											fg={active ? activeRow().fg : colors().primary}
+											attributes={active ? bold() : undefined}
+										>
+											{item.prefix}
+										</text>
+									) : (
+										<></>
+									)}
+									<text
+										fg={active ? activeRow().fg : colors().secondary}
+										attributes={active ? bold() : dim()}
+									>
+										{item.description}
+									</text>
+								</box>
 							);
 						}}
 					</For>
@@ -1069,153 +1049,115 @@ export function InputBox(props: {
 					flexDirection="column"
 					height={boxHeight()}
 				>
-			<Show when={prompt()}>
-				<text fg={colors().primary} attributes={bold()}>
-					{prompt()?.question ?? ''}: {input()}▌
-				</text>
-				<box height={1} />
-				<text fg={colors().secondary}>Press Esc to cancel</text>
-			</Show>
-			<Show when={approval()}>
-				<text fg={colors().error} attributes={bold()}>
-					Approve ✦ {approval()?.name ?? ''}(
-						{approval()?.detail ?? ''}
-					)? (y/n)
-				</text>
-				<box height={1} />
-				<text fg={colors().secondary}>Press Esc to cancel</text>
-			</Show>
-			<Show when={!approval() && !prompt()}>
-				{/* Multi-line input: each WRAPPED line gets its own row (the
+					<Show when={prompt()}>
+						<text fg={colors().primary} attributes={bold()}>
+							{prompt()?.question ?? ''}: {input()}▌
+						</text>
+						<box height={1} />
+						<text fg={colors().secondary}>Press Esc to cancel</text>
+					</Show>
+					<Show when={approval()}>
+						<text fg={colors().error} attributes={bold()}>
+							Approve ✦ {approval()?.name ?? ''}({approval()?.detail ?? ''}
+							)? (y/n)
+						</text>
+						<box height={1} />
+						<text fg={colors().secondary}>Press Esc to cancel</text>
+					</Show>
+					<Show when={!approval() && !prompt()}>
+						{/* Multi-line input: each WRAPPED line gets its own row (the
 				    box grows with the text, no fixed single-row limit). */}
-				<For each={inputLines()}>
-					{(line, index) => (
-						<box flexDirection="row">
-							<text fg={colors().primary} attributes={bold()}>
-								{index() === 0 ? `${colors().promptChar ?? '❯'} ` : '  '}
-							</text>
-							{/* The caret line splits at the cursor column (prefix
+						<For each={inputLines()}>
+							{(line, index) => (
+								<box flexDirection="row">
+									<text fg={colors().primary} attributes={bold()}>
+										{index() === 0 ? `${colors().promptChar ?? '❯'} ` : '  '}
+									</text>
+									{/* The caret line splits at the cursor column (prefix
 							    + caret + suffix); other lines render whole.
 							    `<Show>` keeps the split REACTIVE, a plain
 							    `last` const captured by the For callback stays
 							    stale when the input grows, painting a second
 							    caret on the previous line (Shift+Enter bug). */}
-							<Show
-								when={index() === cursorInfo().line}
-								fallback={
-									<For
-										each={tokenizeInputLine(line, knownCommands())}
+									<Show
+										when={index() === cursorInfo().line}
+										fallback={
+											<For each={tokenizeInputLine(line, knownCommands())}>
+												{(segment) => (
+													<text
+														fg={
+															segment.token ? colors().primary : colors().text
+														}
+													>
+														{segment.text}
+													</text>
+												)}
+											</For>
+										}
 									>
-										{(segment) => (
-											<text
-												fg={
-													segment.token
-														? colors().primary
-														: colors().text
-												}
-											>
-												{segment.text}
-											</text>
-										)}
-									</For>
-								}
-							>
-								<For
-									each={tokenizeInputLine(
-										line.slice(
-											0,
-											caretIndexFor(
-												line,
-												cursorInfo().column,
-											),
-										),
-										knownCommands(),
-									)}
-								>
-									{(segment) => (
-										<text
-											fg={
-												segment.token
-													? colors().primary
-													: colors().text
-											}
+										<For
+											each={tokenizeInputLine(
+												line.slice(0, caretIndexFor(line, cursorInfo().column)),
+												knownCommands(),
+											)}
 										>
-											{segment.text}
-										</text>
-									)}
-								</For>
-								{/* BOX-BACKGROUND caret (parity: opencode): the
+											{(segment) => (
+												<text
+													fg={segment.token ? colors().primary : colors().text}
+												>
+													{segment.text}
+												</text>
+											)}
+										</For>
+										{/* BOX-BACKGROUND caret (parity: opencode): the
 								    cell under the cursor is ALWAYS rendered
 								    (the char at the cursor, or the LAST char at
 								    end-of-line, or a space on an empty line),
 								    highlighted when visible and PLAIN when
 								    hidden, so the line width NEVER changes and
 								    the text never shifts or adds a space. */}
-								<text
-									bg={
-										cursorVisible()
-											? activeRow().bg
-											: undefined
-									}
-									fg={
-										cursorVisible()
-											? activeRow().fg
-											: undefined
-									}
-								>
-									{cursorVisible()
-										? (line[
-												caretIndexFor(
-													line,
-													cursorInfo().column,
-												)
-											] ?? ' ')
-										: (line[
-												caretIndexFor(
-													line,
-													cursorInfo().column,
-												)
-											] ?? ' ')}
-								</text>
-								<For
-									each={tokenizeInputLine(
-										line.slice(
-											caretIndexFor(
-												line,
-												cursorInfo().column,
-											) + 1,
-										),
-										knownCommands(),
-									)}
-								>
-									{(segment) => (
 										<text
-											fg={
-												segment.token
-													? colors().primary
-													: colors().text
-											}
+											bg={cursorVisible() ? activeRow().bg : undefined}
+											fg={cursorVisible() ? activeRow().fg : undefined}
 										>
-											{segment.text}
+											{cursorVisible()
+												? (line[caretIndexFor(line, cursorInfo().column)] ??
+													' ')
+												: (line[caretIndexFor(line, cursorInfo().column)] ??
+													' ')}
 										</text>
-									)}
-								</For>
-							</Show>
-							<Show
-								when={
-									index() === inputLines().length - 1 &&
-									input().length === 0
-								}
-							>
-								<text fg={CHALK_GREY}>/ commands, ! bash, ↑/↓ history</text>
-							</Show>
-						</box>
-					)}
-				</For>
-				<Show when={cancelling() && !busy()}>
-					<text fg={colors().secondary}>Press Esc to cancel</text>
-				</Show>
-			</Show>
+										<For
+											each={tokenizeInputLine(
+												line.slice(
+													caretIndexFor(line, cursorInfo().column) + 1,
+												),
+												knownCommands(),
+											)}
+										>
+											{(segment) => (
+												<text
+													fg={segment.token ? colors().primary : colors().text}
+												>
+													{segment.text}
+												</text>
+											)}
+										</For>
+									</Show>
+									<Show
+										when={
+											index() === inputLines().length - 1 &&
+											input().length === 0
+										}
+									>
+										<text fg={CHALK_GREY}>/ commands, ! bash, ↑/↓ history</text>
+									</Show>
+								</box>
+							)}
+						</For>
+						<Show when={cancelling() && !busy()}>
+							<text fg={colors().secondary}>Press Esc to cancel</text>
+						</Show>
+					</Show>
 				</box>
 				{/* Two-tone corner overlay on the bottom border line: the model
 				    name is primary-bold, the effort badge + ctx stay secondary
@@ -1282,24 +1224,24 @@ export function completionMessageRows(
  * Command-completion popup height (borders + match rows), the popup renders
  * ABOVE the input box, so the App subtracts it from the history height.
  */
-export function completionPopupHeight(
-	inputText: string,
-	_width = 100,
-): number {
+export function completionPopupHeight(inputText: string, _width = 100): number {
 	if (!inputText.startsWith('/') || inputText.includes(' ')) return 0;
 	const name = inputText.slice(1);
 	const all: string[] = [
 		...commandNames(),
 		...customCommandNames(),
-		...loadSkills().map(skill => `skill:${skill.name}`),
+		...loadSkills().map((skill) => `skill:${skill.name}`),
 	];
-	const matches: Array<{command: string; score: number}> = name
+	const matches: Array<{ command: string; score: number }> = name
 		? all
-				.map(command => ({command, score: fuzzyScore(name.toLowerCase(), command)}))
-				.filter(entry => entry.score > 0)
+				.map((command) => ({
+					command,
+					score: fuzzyScore(name.toLowerCase(), command),
+				}))
+				.filter((entry) => entry.score > 0)
 				.sort((a, b) => b.score - a.score)
 				.slice(0, 50)
-		: all.slice(0, 6).map(command => ({command, score: 1}));
+		: all.slice(0, 6).map((command) => ({ command, score: 1 }));
 	// Borderless + windowed: one line per suggestion.
 	return matches.length > 0 ? Math.min(6, matches.length) : 0;
 }
@@ -1311,7 +1253,7 @@ export function mentionPopupHeight(inputText: string): number {
 	const all = listProjectFiles();
 	const q = token.toLowerCase();
 	const matches = q
-		? all.filter(path => fuzzyScore(q, path) > 0).slice(0, 6)
+		? all.filter((path) => fuzzyScore(q, path) > 0).slice(0, 6)
 		: all.slice(0, 6);
 	return matches.length > 0 ? matches.length + 2 : 0;
 }
@@ -1326,40 +1268,38 @@ export function mentionPopupHeight(inputText: string): number {
 export function tokenizeInputLine(
 	line: string,
 	known?: Set<string>,
-): Array<{text: string; token: boolean}> {
+): Array<{ text: string; token: boolean }> {
 	// An empty line has no parts: OpenTUI renders an EMPTY `<text>` as one
 	// real cell, so a `[{text:''}]` part paints a phantom space before the
 	// caret and pushes the block cursor one column forward on empty lines
 	// (the Shift+Enter continuation line regression).
 	if (line.length === 0) return [];
-	const parts: Array<{text: string; token: boolean}> = [];
+	const parts: Array<{ text: string; token: boolean }> = [];
 	// The component passes a frame-cached set; tests omit it (built on call).
 	const knownSet =
 		known ??
 		new Set<string>([
 			...commandNames(),
 			...customCommandNames(),
-			...loadSkills().map(skill => `skill:${skill.name}`),
+			...loadSkills().map((skill) => `skill:${skill.name}`),
 		]);
 	let cursor = 0;
-	for (const match of line.matchAll(
-		/\[(?:Image|Text) #\d+\]|\/[^\s]*/g,
-	)) {
+	for (const match of line.matchAll(/\[(?:Image|Text) #\d+\]|\/[^\s]*/g)) {
 		const at = match.index ?? 0;
 		if (at > cursor) {
-			parts.push({text: line.slice(cursor, at), token: false});
+			parts.push({ text: line.slice(cursor, at), token: false });
 		}
 		const token = match[0];
-		const isCommand =
-			token.startsWith('/') && knownSet.has(token.slice(1));
+		const isCommand = token.startsWith('/') && knownSet.has(token.slice(1));
 		parts.push({
 			text: token,
 			token: isCommand || /^\[(?:Image|Text) #\d+\]$/.test(token),
 		});
 		cursor = at + token.length;
 	}
-	if (cursor < line.length) parts.push({text: line.slice(cursor), token: false});
-	return parts.length > 0 ? parts : [{text: line, token: false}];
+	if (cursor < line.length)
+		parts.push({ text: line.slice(cursor), token: false });
+	return parts.length > 0 ? parts : [{ text: line, token: false }];
 }
 
 /**
@@ -1382,8 +1322,8 @@ export function caretIndexFor(line: string, column: number): number {
  */
 export function atomicTokens(
 	value: string,
-): Array<{start: number; end: number}> {
-	const tokens: Array<{start: number; end: number}> = [];
+): Array<{ start: number; end: number }> {
+	const tokens: Array<{ start: number; end: number }> = [];
 	for (const match of value.matchAll(/\[(?:Image|Text) #\d+\]/g)) {
 		tokens.push({
 			start: match.index ?? 0,
@@ -1462,7 +1402,7 @@ export function cursorPosition(
 	text: string,
 	cursor: number,
 	width: number,
-): {line: number; column: number} {
+): { line: number; column: number } {
 	return cursorPositionFromWrapped(wrapTextDetailed(text, width), cursor);
 }
 
@@ -1471,10 +1411,10 @@ export function cursorPosition(
  * ALREADY-wrapped layout, the hot path wraps once and reuses it here.
  */
 export function cursorPositionFromWrapped(
-	wrapped: Array<{text: string; start: number}>,
+	wrapped: Array<{ text: string; start: number }>,
 	cursor: number,
-): {line: number; column: number} {
-	if (wrapped.length === 0) return {line: 0, column: 0};
+): { line: number; column: number } {
+	if (wrapped.length === 0) return { line: 0, column: 0 };
 	const last = wrapped[wrapped.length - 1]!;
 	const total = last.start + last.text.length;
 	const target = Math.min(Math.max(0, cursor), total);
@@ -1490,10 +1430,7 @@ export function cursorPositionFromWrapped(
 		) {
 			return {
 				line: i,
-				column: Math.max(
-					0,
-					Math.min(target - entry.start, entry.text.length),
-				),
+				column: Math.max(0, Math.min(target - entry.start, entry.text.length)),
 			};
 		}
 	}
@@ -1508,7 +1445,7 @@ export function cursorPositionFromWrapped(
  * (column clamped to the line length), used by ↑/↓ vertical movement.
  */
 export function offsetForLine(
-	wrapped: Array<{text: string; start: number}>,
+	wrapped: Array<{ text: string; start: number }>,
 	line: number,
 	column: number,
 ): number {

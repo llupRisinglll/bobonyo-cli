@@ -11,8 +11,12 @@ import {
 	type TreeSitterClient,
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
-import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
+import {
+	useKeyboard,
+	useRenderer,
+	useTerminalDimensions,
+} from '@opentui/solid';
+import { createEffect, createMemo, createSignal, For, Show } from 'solid-js';
 import {
 	activeAgents,
 	activeEndpoint,
@@ -44,28 +48,25 @@ import {
 	anyModalOpen,
 	type ChatMessage,
 } from '../state';
-import {markdownSyntaxStyleFor} from '../syntax';
-import {displayToolName, isFileWriteTool, toolFamily} from '../tools';
+import { markdownSyntaxStyleFor } from '../syntax';
+import { displayToolName, isFileWriteTool, toolFamily } from '../tools';
 import {
 	fence,
 	formatOutputTail,
 	formatToolEntry,
 	rowLanguage,
 } from '../tool-display';
-import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
-import {
-	stableSettledBlocks,
-	type SettledBlock,
-} from '../settled-block-cache';
+import { liveRowSegments, type LiveRowSegments } from '../live-tool-row';
+import { stableSettledBlocks, type SettledBlock } from '../settled-block-cache';
 import {
 	disabledScroll,
 	resolveScrollAcceleration,
 } from '../scroll-acceleration';
-import {formatCount, formatDuration} from '../format';
-import {LiveToolRows} from './live-tool-rows';
-import {SettledToolRow} from './settled-tool-row';
-import {BashToolRow} from './bash-tool-row';
-import {FileToolRow} from './file-tool-row';
+import { formatCount, formatDuration } from '../format';
+import { LiveToolRows } from './live-tool-rows';
+import { SettledToolRow } from './settled-tool-row';
+import { BashToolRow } from './bash-tool-row';
+import { FileToolRow } from './file-tool-row';
 import {
 	tokenizeAgentRow,
 	tokenizeBanner,
@@ -83,10 +84,10 @@ import {
 	tokenizeUserMessage,
 	type RowStatus,
 } from '../row-highlight';
-import {colors} from '../theme';
-import {buildBannerBox, hasConversation} from '../banner';
-import {historyFillWidth} from '../history-width';
-import {wrapText} from '../text-wrap';
+import { colors } from '../theme';
+import { buildBannerBox, hasConversation } from '../banner';
+import { historyFillWidth } from '../history-width';
+import { wrapText } from '../text-wrap';
 
 const PREVIEW_LINES = 3;
 /**
@@ -119,7 +120,7 @@ const COMPONENT_ROW_LANGS = new Set([
  */
 export function hitTestBlock(
 	entry: {
-		ref: {screenY: number; height?: number} | null;
+		ref: { screenY: number; height?: number } | null;
 		start: number;
 		rows: number;
 	},
@@ -142,7 +143,7 @@ export function hitTestBlock(
  */
 const compactDetails = new Map<string, string>();
 
-type RenderToken = {type: string; text?: string; lang?: string};
+type RenderToken = { type: string; text?: string; lang?: string };
 
 /**
  * Welcome banner, a simple Codex/Claude-style box with the small mascot art
@@ -197,7 +198,7 @@ export function History(props: {
 	onContentHeight?: (height: number) => void;
 }) {
 	const renderer = useRenderer();
-	const dim = () => createTextAttributes({dim: true});
+	const dim = () => createTextAttributes({ dim: true });
 	// OpenTUI's built-in tree-sitter grammars (ts/js/md) highlight fenced
 	// code blocks, attach the client so ` ```typescript ` previews get real
 	// syntax colors instead of a hand-rolled tokenizer. In the COMPILED
@@ -208,7 +209,7 @@ export function History(props: {
 		treeSitter = getTreeSitterClient();
 	} catch {
 		treeSitter = {
-			highlightOnce: async () => ({highlights: []}),
+			highlightOnce: async () => ({ highlights: [] }),
 		} as unknown as TreeSitterClient;
 	}
 	const terminalDimensions = useTerminalDimensions();
@@ -219,8 +220,8 @@ export function History(props: {
 	let scrollRef: ScrollBoxRenderable | null = null;
 	let lineMap: Array<string | undefined> = [];
 	let renderText: string[] = [];
-	let blockRanges: Array<{key: string; start: number; end: number}> = [];
-	let currentBlock: {key: string; start: number} | null = null;
+	let blockRanges: Array<{ key: string; start: number; end: number }> = [];
+	let currentBlock: { key: string; start: number } | null = null;
 	const syntaxStyle = createMemo(() => markdownSyntaxStyleFor(colors()));
 	// Code preview CodeRenderable: built-in tree-sitter + line-number recolors.
 	const codePreview = (token: RenderToken, filetype: string): CodeRenderable =>
@@ -229,24 +230,24 @@ export function History(props: {
 			filetype,
 			syntaxStyle: syntaxStyle(),
 			treeSitterClient: treeSitter,
-			onChunks: chunks =>
-				chunks.map(chunk => {
+			onChunks: (chunks) =>
+				chunks.map((chunk) => {
 					// A chunk that is ONLY a line number (`  1 `) becomes
 					// secondary, it's the preview gutter, not a code number.
 					if (/^\s*\d+\s*$/.test(chunk.text)) {
-						return {...chunk, fg: RGBA.fromHex(colors().secondary)};
+						return { ...chunk, fg: RGBA.fromHex(colors().secondary) };
 					}
 					return chunk;
 				}),
 		});
 	const diffCodeBlockRenderer = createMarkdownCodeBlockRenderer({
-		diff: token =>
+		diff: (token) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text,
 				filetype: 'diff',
 				syntaxStyle: syntaxStyle(),
 			}),
-		banner: token =>
+		banner: (token) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text,
 				filetype: 'txt',
@@ -264,16 +265,14 @@ export function History(props: {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeToolRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeToolRow(token.text ?? '', status, colors()),
 			}),
 		bashrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeBashRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeBashRow(token.text ?? '', status, colors()),
 			}),
 		filerow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
@@ -307,32 +306,28 @@ export function History(props: {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeDiffRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeDiffRow(token.text ?? '', status, colors()),
 			}),
 		agentrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeAgentRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeAgentRow(token.text ?? '', status, colors()),
 			}),
 		grouprow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeToolRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeToolRow(token.text ?? '', status, colors()),
 			}),
 		thought: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeThought(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeThought(token.text ?? '', status, colors()),
 			}),
 		usermsg: (token) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
@@ -355,16 +350,14 @@ export function History(props: {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeCommandRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeCommandRow(token.text ?? '', status, colors()),
 			}),
 		taskrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeTaskRow(token.text ?? '', status, colors()),
+				onChunks: () => tokenizeTaskRow(token.text ?? '', status, colors()),
 			}),
 		// Error rows (`⚠ …`) render in the error color.
 		errorrow: (token, _status) =>
@@ -379,8 +372,7 @@ export function History(props: {
 				content: token.text ?? '',
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
-				onChunks: () =>
-					tokenizeWarningRow(token.text ?? '', colors()),
+				onChunks: () => tokenizeWarningRow(token.text ?? '', colors()),
 			}),
 		// `/status` block: custom fenced row so the `model[effort]` brackets
 		// survive, the markdown/tree-sitter pipeline parses a bare `[x]` as
@@ -395,9 +387,9 @@ export function History(props: {
 		// Real-language code previews: built-in tree-sitter highlights, with
 		// the leading LINE NUMBERS re-colored to secondary (they're parsed as
 		// `number` tokens otherwise and would render success-green).
-		typescript: token => codePreview(token, 'typescript'),
-		javascript: token => codePreview(token, 'javascript'),
-		markdown: token => codePreview(token, 'markdown'),
+		typescript: (token) => codePreview(token, 'typescript'),
+		javascript: (token) => codePreview(token, 'javascript'),
+		markdown: (token) => codePreview(token, 'markdown'),
 	};
 	// NOTE: OpenTUI 0.4.5 only applies `markup.heading` to TABLE headers;
 	// regular heading blocks render unstyled. A manual TextRenderable for
@@ -427,7 +419,7 @@ export function History(props: {
 	// handled natively by the scrollbox). Sticky-bottom re-engages on the
 	// next content append. While a modal (settings) is open the modal owns
 	// the keys, scrolling the history behind it would be a leak.
-	useKeyboard(event => {
+	useKeyboard((event) => {
 		if (anyModalOpen()) {
 			// FOOLPROOF MODAL ISOLATION: global key listeners run BEFORE the
 			// renderable handlers (the history scrollbox's native arrow-key
@@ -438,11 +430,11 @@ export function History(props: {
 			return false;
 		}
 		if (event.name === 'pageup') {
-			scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
+			scrollRef?.scrollBy({ x: 0, y: -1 }, 'viewport');
 			return true;
 		}
 		if (event.name === 'pagedown') {
-			scrollRef?.scrollBy({x: 0, y: 1}, 'viewport');
+			scrollRef?.scrollBy({ x: 0, y: 1 }, 'viewport');
 			return true;
 		}
 		return false;
@@ -454,7 +446,7 @@ export function History(props: {
 	// normalizes block constructs). Mouse mapping stays global via per-block
 	// row offsets.
 	const blockRefs: Array<{
-		ref: {screenY: number; height?: number} | null;
+		ref: { screenY: number; height?: number } | null;
 		start: number;
 		rows: number;
 		/** The stable block this entry maps to (carry-over refs across memo
@@ -464,8 +456,8 @@ export function History(props: {
 	/** Global rendered-row offset of the SETTLED content (live rows follow). */
 	let baseRowCount = 0;
 	/** The live streaming markdown node's ref (last block while running). */
-	let liveThoughtRef: {screenY: number} | null = null;
-	let liveReplyRef: {screenY: number} | null = null;
+	let liveThoughtRef: { screenY: number } | null = null;
+	let liveReplyRef: { screenY: number } | null = null;
 	/** Rendered line count of the live THOUGHT (the reply follows it). */
 	let liveThoughtLines = 0;
 	/**
@@ -516,11 +508,7 @@ export function History(props: {
 		// (e.g. `Session renamed to "x"`) carry a `kind` and must NOT hide
 		// the banner — only real conversation rows do.
 		if (!hasConversation(all) && !running()) {
-			pushBlock(
-				buildWelcomeBanner(
-					titleShape(),
-				),
-			);
+			pushBlock(buildWelcomeBanner(titleShape()));
 		}
 		for (let i = 0; i < all.length; i++) {
 			const message = all[i]!;
@@ -535,11 +523,7 @@ export function History(props: {
 					const key = `command-${i}`;
 					if (message.command.original) {
 						pushBlock(
-							fence(
-								'usermsg',
-								'done',
-								`❯ ${message.command.original}`,
-							),
+							fence('usermsg', 'done', `❯ ${message.command.original}`),
 						);
 					}
 					const rendered = renderCommandBlock(message.command, key);
@@ -585,7 +569,7 @@ export function History(props: {
 			} else if (message.error) {
 				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else {
-				if (message.reasoning && thinkingMode() !== 'hidden') {
+				if (message.reasoning && thinkingMode() === 'show') {
 					const thoughtKey = `thought-${i}`;
 					// Full reasoning text for the DETAILS modal (collapsed
 					// previews cap at PREVIEW_LINES=3; click opens the modal).
@@ -622,7 +606,7 @@ export function History(props: {
 		const blocks: SettledBlock[] = [];
 		for (const part of parts) {
 			if (part.kind === 'reply') {
-				blocks.push({kind: 'reply', parts: [part]});
+				blocks.push({ kind: 'reply', parts: [part] });
 				continue;
 			}
 			// The opener may carry the full-row-bg WIDTH marker
@@ -630,9 +614,10 @@ export function History(props: {
 			// block still classifies as a component TOOL row. Without this,
 			// the Edit/diff row falls back to markdown and its nested
 			// ` ```filediff ` fences render as leaked literal lines.
-			const fenceMatch = /^```+([^:\n]+):([^:\n]+)(?::[^:\n]*)?\n+([\s\S]*?)\n+```+$/.exec(
-				part.text,
-			);
+			const fenceMatch =
+				/^```+([^:\n]+):([^:\n]+)(?::[^:\n]*)?\n+([\s\S]*?)\n+```+$/.exec(
+					part.text,
+				);
 			if (fenceMatch && COMPONENT_ROW_LANGS.has(fenceMatch[1] ?? '')) {
 				const lang = fenceMatch[1] ?? '';
 				const status = (fenceMatch[2] ?? 'done') as RowStatus;
@@ -663,17 +648,17 @@ export function History(props: {
 			if (last?.kind === 'md' && !fileRowPart) {
 				last.parts.push(part);
 			} else {
-				blocks.push({kind: 'md', parts: [part]});
+				blocks.push({ kind: 'md', parts: [part] });
 			}
 		}
 
-		const docLines: Array<{text: string; key?: string}> = [];
+		const docLines: Array<{ text: string; key?: string }> = [];
 		// Rendered-row index: fence markers (` ```lang ` openers/closers) are
 		// consumed by the markdown parser and never render as rows, so the
 		// click/hover row → doc line mapping must skip them.
 		const renderIndex: number[] = [];
-		const ranges: Array<{key: string; start: number; end: number}> = [];
-		let block: {key: string; start: number} | null = null;
+		const ranges: Array<{ key: string; start: number; end: number }> = [];
+		let block: { key: string; start: number } | null = null;
 		// stableSettledBlocks reuses UNCHANGED block objects so Solid's For
 		// keeps their elements WITHOUT re-firing the ref callback. If we
 		// reset every ref to null here, those kept elements lose their
@@ -685,7 +670,7 @@ export function History(props: {
 		const stableBlocks = stableSettledBlocks(settledBlockCache, blocks);
 		const prevRefsByBlock = new Map<
 			SettledBlock,
-			{screenY: number; height?: number} | null
+			{ screenY: number; height?: number } | null
 		>();
 		for (const entry of blockRefs) {
 			if (entry.block) prevRefsByBlock.set(entry.block, entry.ref);
@@ -697,11 +682,10 @@ export function History(props: {
 			// between settled blocks), counted here so the mouse mapping
 			// stays aligned with the rendered rows.
 			if (group.kind === 'tool') {
-				docLines.push({text: '', key: group.part.key});
+				docLines.push({ text: '', key: group.part.key });
 				renderIndex.push(docLines.length - 1);
 			}
-			const partList =
-				group.kind === 'tool' ? [group.part] : group.parts;
+			const partList = group.kind === 'tool' ? [group.part] : group.parts;
 			partList.forEach((part, index) => {
 				// A block is EXPANDABLE only when it actually hides content (a
 				// `+N more lines` footer) or is currently expanded. TOOL
@@ -719,13 +703,13 @@ export function History(props: {
 				// when the each reference changes — that was the hover flicker).
 				const isFenced = part.text.trimStart().startsWith('```');
 				if (index > 0 && !isFenced) {
-					docLines.push({text: ''});
+					docLines.push({ text: '' });
 					renderIndex.push(docLines.length - 1);
 				}
-				if (part.key) block = {key: part.key, start: -1};
+				if (part.key) block = { key: part.key, start: -1 };
 				for (const line of part.text.split('\n')) {
 					const isFenceMarker = /^\s*`{3,}/.test(line);
-					docLines.push({text: line, key: part.key});
+					docLines.push({ text: line, key: part.key });
 					if (!isFenceMarker) {
 						if (block && block.start === -1) {
 							block.start = renderIndex.length;
@@ -763,16 +747,12 @@ export function History(props: {
 					// two extra rows (the border is part of the entry).
 					(group.kind === 'tool' && isBashBlock(group) ? 2 : 0) +
 					// The model brief (when present) is one rendered line.
-					(group.kind === 'tool' &&
-					group.brief &&
-					group.brief.trim()
-						? 1
-						: 0),
+					(group.kind === 'tool' && group.brief && group.brief.trim() ? 1 : 0),
 				block: stableBlocks[groupIndex],
 			});
 		});
-		lineMap = renderIndex.map(index => docLines[index]?.key);
-		renderText = renderIndex.map(index => docLines[index]?.text ?? '');
+		lineMap = renderIndex.map((index) => docLines[index]?.key);
+		renderText = renderIndex.map((index) => docLines[index]?.text ?? '');
 		blockRanges = ranges;
 		currentBlock = block;
 		baseRowCount = renderIndex.length;
@@ -848,17 +828,13 @@ export function History(props: {
 		> = [];
 		for (const message of messages()) {
 			if (message.role === 'tool' && message.running && message.tool) {
-				const streamed = message.toolId
-					? outputs[message.toolId]
-					: undefined;
+				const streamed = message.toolId ? outputs[message.toolId] : undefined;
 				const output =
-					streamed !== undefined
-						? streamed
-						: (message.tool.output ?? '');
+					streamed !== undefined ? streamed : (message.tool.output ?? '');
 				// Plain text (no fence, no blink swap): `✦ Name(detail)`
 				// header + `  └   ` body, exactly like the settled row.
 				const raw = formatToolEntry(
-					{...message.tool, output},
+					{ ...message.tool, output },
 					false,
 					'running',
 					true,
@@ -901,7 +877,7 @@ export function History(props: {
 			running() &&
 			!liveToolRows().length &&
 			!liveReplyText() &&
-			!(thinkingMode() !== 'hidden' && liveThoughtHeader());
+			!(thinkingMode() === 'show' && liveThoughtHeader());
 		if (!idle) return '';
 		const elapsed = turnElapsed();
 		if (elapsed < 10) return '';
@@ -950,7 +926,7 @@ export function History(props: {
 	let clickStartX = 0;
 	let clickStartY = 0;
 	let clickTimer: ReturnType<typeof setTimeout> | null = null;
-	let clickRange: {key: string; start: number; end: number} | null = null;
+	let clickRange: { key: string; start: number; end: number } | null = null;
 
 	const cancelPendingClick = () => {
 		if (clickTimer) {
@@ -970,8 +946,12 @@ export function History(props: {
 		// block and is NOT clickable. A tight ±1 window absorbs minor
 		// scrollbox drift without pre-emptively toggling blocks 2+ rows away.
 		const range = [row - 1, row, row + 1]
-			.map(r => blockRanges.find(candidate => r >= candidate.start && r <= candidate.end))
-			.find(candidate => candidate && candidate.key !== 'live');
+			.map((r) =>
+				blockRanges.find(
+					(candidate) => r >= candidate.start && r <= candidate.end,
+				),
+			)
+			.find((candidate) => candidate && candidate.key !== 'live');
 		if (range) {
 			// Record the press and WAIT for mouse-up (with a delay) before
 			// opening/toggling: if the pointer moves (drag/selection), the
@@ -1041,12 +1021,12 @@ export function History(props: {
 		// persistent background highlight.
 		const block =
 			[row - 1, row, row + 1]
-				.map(r =>
+				.map((r) =>
 					blockRanges.find(
-						candidate => r >= candidate.start && r <= candidate.end,
+						(candidate) => r >= candidate.start && r <= candidate.end,
 					),
 				)
-				.find(candidate => candidate && candidate.key !== 'live') ?? null;
+				.find((candidate) => candidate && candidate.key !== 'live') ?? null;
 		const key = block?.key ?? null;
 		if (key !== hoveredBlockRef) {
 			hoveredBlockRef = key;
@@ -1110,7 +1090,7 @@ export function History(props: {
 	return (
 		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
 		<scrollbox
-			ref={element => {
+			ref={(element) => {
 				scrollRef = element;
 			}}
 			// NO flex-grow: the parent sizes us to min(content, cap), so the
@@ -1131,9 +1111,7 @@ export function History(props: {
 			// A MODAL freezes the wheel entirely (zero multiplier) so the
 			// history never scrolls behind it.
 			scrollAcceleration={
-				anyModalOpen()
-					? disabledScroll
-					: resolveScrollAcceleration()
+				anyModalOpen() ? disabledScroll : resolveScrollAcceleration()
 			}
 			{...({
 				onMouseDown: handleMouseDown,
@@ -1161,7 +1139,11 @@ export function History(props: {
 					if (block.kind === 'tool') {
 						// Bash entries render as ONE bordered box (native
 						// OpenTUI border, so wrapped lines stay inside).
-						if (block.status !== undefined && block.glyph === '✦' && isBashBlock(block)) {
+						if (
+							block.status !== undefined &&
+							block.glyph === '✦' &&
+							isBashBlock(block)
+						) {
 							return (
 								<BashToolRow
 									onRef={setRef}
@@ -1169,9 +1151,7 @@ export function History(props: {
 									body={block.segments.body}
 									status={block.status}
 									glyph={block.glyph}
-									hovered={
-										block.part.key === hoveredBlock()
-									}
+									hovered={block.part.key === hoveredBlock()}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
 								/>
@@ -1180,10 +1160,7 @@ export function History(props: {
 						// File-write/edit rows (Write / Edit / diff previews):
 						// plain components with the leading breakline, so they
 						// never glue under the previous message.
-						if (
-							block.status !== undefined &&
-							isFileRowBlock(block)
-						) {
+						if (block.status !== undefined && isFileRowBlock(block)) {
 							return (
 								<FileToolRow
 									onRef={setRef}
@@ -1191,9 +1168,7 @@ export function History(props: {
 									body={block.segments.body}
 									status={block.status}
 									glyph={block.glyph}
-									hovered={
-										block.part.key === hoveredBlock()
-									}
+									hovered={block.part.key === hoveredBlock()}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
 								/>
@@ -1205,59 +1180,50 @@ export function History(props: {
 								segments={block.segments}
 								status={block.status}
 								glyph={block.glyph}
-								hovered={
-									block.part.key === hoveredBlock()
-								}
+								hovered={block.part.key === hoveredBlock()}
 								brief={block.brief}
 								batchBriefed={block.batchBriefed}
-								width={historyFillWidth(
-									terminalDimensions().width ?? 80,
-								)}
+								width={historyFillWidth(terminalDimensions().width ?? 80)}
 							/>
 						);
 					}
 					const contentFor = () =>
-						block.parts
-							.map(part => part.text)
-							.join('\n\n');
+						block.parts.map((part) => part.text).join('\n\n');
 					if (block.kind === 'reply') {
 						return (
-						<box flexDirection="column">
-							{/* Breakline before every response (parity: the
+							<box flexDirection="column">
+								{/* Breakline before every response (parity: the
 							    original's reply margin). */}
-							<box height={1} />
-							<box flexDirection="row">
-								<text
-									fg={colors().secondary}
-									attributes={dim()}
-								>
-									✦
-								</text>
-								{/* The content box carries its OWN left gap:
+								<box height={1} />
+								<box flexDirection="row">
+									<text fg={colors().secondary} attributes={dim()}>
+										✦
+									</text>
+									{/* The content box carries its OWN left gap:
 								    the glyph sits at column 1 (aligned with
 								    tool glyphs) and the text starts two cells
 								    later, so a reply NEVER renders glued to
 								    the glyph (`✦The`) and wrapped lines stay
 								    inside the container. */}
-								<box flexGrow={1} paddingLeft={2}>
-									<markdown
-										ref={setRef}
-										content={contentFor()}
-										streaming={false}
-										fg={colors().text}
-										syntaxStyle={syntaxStyle()}
-										internalBlockMode="top-level"
-										renderNode={renderNode}
-										treeSitterClient={treeSitter}
-										tableOptions={{
-											style: 'grid',
-											borders: true,
-											widthMode: 'content',
-										}}
-									/>
+									<box flexGrow={1} paddingLeft={2}>
+										<markdown
+											ref={setRef}
+											content={contentFor()}
+											streaming={false}
+											fg={colors().text}
+											syntaxStyle={syntaxStyle()}
+											internalBlockMode="top-level"
+											renderNode={renderNode}
+											treeSitterClient={treeSitter}
+											tableOptions={{
+												style: 'grid',
+												borders: true,
+												widthMode: 'content',
+											}}
+										/>
+									</box>
 								</box>
 							</box>
-						</box>
 						);
 					}
 					return (
@@ -1282,9 +1248,9 @@ export function History(props: {
 			{/* LIVE THOUGHT: PLAIN TEXT (no markdown re-parse) so the thinking
 			    block can never flicker while reasoning streams. The leading
 			    breakline matches the settled blank row before the block. */}
-			<Show when={thinkingMode() !== 'hidden' && liveThoughtHeader()}>
+			<Show when={thinkingMode() === 'show' && liveThoughtHeader()}>
 				<box
-					ref={element => {
+					ref={(element) => {
 						liveThoughtRef = element as never;
 						liveThoughtLines = 3;
 					}}
@@ -1294,27 +1260,9 @@ export function History(props: {
 					<text fg={colors().secondary} attributes={dim()}>
 						{liveThoughtHeader()}
 					</text>
-					{/* 'show' = the full wrapped tail; 'line' = ONE scrolling
-					    one-liner of the reasoning (hidden mode renders
-					    nothing at all). */}
-					<Show
-						when={thinkingMode() === 'line'}
-						fallback={
-							<text fg={colors().secondary} attributes={dim()}>
-								{liveThoughtTail()}
-							</text>
-						}
-					>
-						<text fg={colors().secondary} attributes={dim()}>
-							{'  └ '}
-							{liveThoughtOneLine(
-								throttledReasoning(),
-								historyFillWidth(
-									terminalDimensions().width ?? 80,
-								),
-							)}
-						</text>
-					</Show>
+					<text fg={colors().secondary} attributes={dim()}>
+						{liveThoughtTail()}
+					</text>
 				</box>
 			</Show>
 			{/* RUNNING tool rows (streaming output) — their own node so the
@@ -1333,15 +1281,12 @@ export function History(props: {
 				<box flexDirection="column">
 					<box height={1} />
 					<box flexDirection="row">
-						<text
-							fg={colors().secondary}
-							attributes={dim()}
-						>
+						<text fg={colors().secondary} attributes={dim()}>
 							✦
 						</text>
 						<box flexGrow={1} paddingLeft={2}>
 							<markdown
-								ref={element => {
+								ref={(element) => {
 									liveReplyRef = element as never;
 								}}
 								content={liveReplyText()}
@@ -1431,8 +1376,9 @@ export function wrapThoughtBody(text: string, width: number): string {
 	}
 	if (wrapped.length === 0) return '';
 	return wrapped
-		.map((piece, index) =>
-			(index === 0 ? THOUGHT_BODY_LEAD : THOUGHT_BODY_CONT) + piece,
+		.map(
+			(piece, index) =>
+				(index === 0 ? THOUGHT_BODY_LEAD : THOUGHT_BODY_CONT) + piece,
 		)
 		.join('\n');
 }
@@ -1496,10 +1442,7 @@ export function renderInfoRow(content: string, key: string): string {
 	}
 	if (script.length <= 2) return content;
 	const preview = script.slice(0, 2).join('\n');
-	return (
-		`${header}\n${preview}\n` +
-		`  … +${script.length - 2} more lines`
-	);
+	return `${header}\n${preview}\n` + `  … +${script.length - 2} more lines`;
 }
 
 /**
@@ -1626,7 +1569,7 @@ function groupToolRun(run: ChatMessage[]): ChatMessage[][] {
  * brief after the first tool message of a run.
  */
 export function toolRunBriefs(run: ChatMessage[]): Array<string | undefined> {
-	return groupToolRun(run).map(block => block[0]?.brief);
+	return groupToolRun(run).map((block) => block[0]?.brief);
 }
 
 /**
@@ -1638,11 +1581,12 @@ export function toolRunBriefs(run: ChatMessage[]): Array<string | undefined> {
 function renderToolRun(
 	run: ChatMessage[],
 	width: number,
-): Array<{text: string; blockKey?: string; brief?: string}> {
-	return groupToolRun(run).flatMap(block => {
+): Array<{ text: string; blockKey?: string; brief?: string }> {
+	return groupToolRun(run).flatMap((block) => {
 		const brief = block[0]?.brief;
 		if (block.length === 1) {
-			const key = block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+			const key =
+				block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
 			// Expanded details for the modal (collapsed output caps at 3
 			// lines; clicking the `+N` footer opens the full scrollable view).
 			if (block[0]!.tool) {
@@ -1661,7 +1605,9 @@ function renderToolRun(
 					),
 				);
 			}
-			return [{text: singleToolRow(block[0]!, key, width), blockKey: key, brief}];
+			return [
+				{ text: singleToolRow(block[0]!, key, width), blockKey: key, brief },
+			];
 		}
 		const key =
 			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
@@ -1670,10 +1616,10 @@ function renderToolRun(
 		compactDetails.set(
 			key,
 			block
-				.map(message =>
+				.map((message) =>
 					message.tool
 						? formatToolEntry(
-								{...message.tool, output: liveOutput(message)},
+								{ ...message.tool, output: liveOutput(message) },
 								true,
 								'done',
 								true,
@@ -1684,7 +1630,9 @@ function renderToolRun(
 				)
 				.join('\n\n'),
 		);
-		return [{text: compactToolBlock(block, key, width), blockKey: key, brief}];
+		return [
+			{ text: compactToolBlock(block, key, width), blockKey: key, brief },
+		];
 	});
 }
 
@@ -1718,14 +1666,12 @@ const USER_PREVIEW_LINES = 12;
 export function renderCommandBlock(
 	command: NonNullable<ChatMessage['command']>,
 	key: string,
-): {text: string; blockKey: string} {
+): { text: string; blockKey: string } {
 	const body = command.body.trim();
 	compactDetails.set(key, body);
 	const lines = body.split('\n');
 	const expanded = expandedBlocks()[key] ?? toolsExpanded();
-	const preview = expanded
-		? lines
-		: lines.slice(0, COMMAND_PREVIEW_LINES);
+	const preview = expanded ? lines : lines.slice(0, COMMAND_PREVIEW_LINES);
 	const bodyText = preview
 		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
 		.join('\n');
@@ -1747,21 +1693,26 @@ export function renderCommandBlock(
 export function renderUserBlock(
 	message: ChatMessage,
 	key: string,
-): {text: string; blockKey: string} {
+): { text: string; blockKey: string } {
 	const content = message.content;
 	const lines = content.replace(/\n+$/, '').split('\n');
 	compactDetails.set(key, content);
 	const keys = Object.keys(message.attachments ?? {}).join('');
 	const hidden = lines.length - USER_PREVIEW_LINES;
 	const preview = hidden > 0 ? lines.slice(0, USER_PREVIEW_LINES) : lines;
-	const text = preview.join('\n') + (hidden > 0 ? `\n     … +${hidden} more lines` : '');
+	const text =
+		preview.join('\n') + (hidden > 0 ? `\n     … +${hidden} more lines` : '');
 	return {
 		text: fence('usermsg', 'done', `❯ ${text}`, keys ? `a${keys}` : ''),
 		blockKey: key,
 	};
 }
 
-function singleToolRow(message: ChatMessage, key: string, width: number): string {
+function singleToolRow(
+	message: ChatMessage,
+	key: string,
+	width: number,
+): string {
 	if (!message.tool) return message.content;
 	if (message.tool.name === 'agent') return agentRow(message);
 	const status: RowStatus = message.running
@@ -1774,7 +1725,7 @@ function singleToolRow(message: ChatMessage, key: string, width: number): string
 	// settled memo every tick and re-render every block (the flicker loop).
 	const blinkOn = true;
 	const formatted = formatToolEntry(
-		{...message.tool, output: liveOutput(message)},
+		{ ...message.tool, output: liveOutput(message) },
 		expandedBlocks()[key] ?? toolsExpanded(),
 		status,
 		false,
@@ -1801,27 +1752,36 @@ function singleToolRow(message: ChatMessage, key: string, width: number): string
 function agentRow(message: ChatMessage): string {
 	const detail = message.tool?.detail ?? '';
 	const output = liveOutput(message);
-	const lines = output.replace(/\s+$/, '').split('\n').filter(line => line !== '');
+	const lines = output
+		.replace(/\s+$/, '')
+		.split('\n')
+		.filter((line) => line !== '');
 	const running = message.running === true;
 	const status = running ? 'running' : 'completed';
 	const first = lines[0] ?? '';
 	const hidden = lines.length - 1;
 	const stats = message.toolStats;
 	const statsText = [
-		stats?.toolCalls ? `${stats.toolCalls} tool ${stats.toolCalls === 1 ? 'call' : 'calls'}` : '',
+		stats?.toolCalls
+			? `${stats.toolCalls} tool ${stats.toolCalls === 1 ? 'call' : 'calls'}`
+			: '',
 		stats?.durationSec ? formatDuration(stats.durationSec) : '',
-	].filter(Boolean).join(' · ');
-	const footer = hidden > 0
-		? `\n     … +${hidden} more line${hidden === 1 ? '' : 's'}${statsText ? ` · ${statsText}` : ''}`
-		: statsText
-			? `\n     ${statsText}`
-			: '';
+	]
+		.filter(Boolean)
+		.join(' · ');
+	const footer =
+		hidden > 0
+			? `\n     … +${hidden} more line${hidden === 1 ? '' : 's'}${statsText ? ` · ${statsText}` : ''}`
+			: statsText
+				? `\n     ${statsText}`
+				: '';
 	const statusKind: RowStatus = running ? 'running' : 'done';
 	// Settled agent rows never blink (running agents stream live).
 	const blinkOn = true;
-	const header = running && !blinkOn
-		? `✦ Ran ${detail} ${status}`.replace(/^[✦⚙]/, ' ')
-		: `✦ Ran ${detail} ${status}`;
+	const header =
+		running && !blinkOn
+			? `✦ Ran ${detail} ${status}`.replace(/^[✦⚙]/, ' ')
+			: `✦ Ran ${detail} ${status}`;
 	return fence(
 		'agentrow',
 		statusKind,
@@ -1869,10 +1829,10 @@ function compactToolBlock(
 	const expanded = expandedBlocks()[key] ?? toolsExpanded();
 	if (expanded) {
 		const entries = calls
-			.map(message =>
+			.map((message) =>
 				message.tool
 					? formatToolEntry(
-							{...message.tool, output: liveOutput(message)},
+							{ ...message.tool, output: liveOutput(message) },
 							true,
 							'done',
 							true,
@@ -1885,7 +1845,7 @@ function compactToolBlock(
 		return fence('grouprow', 'done', `${header}\n\n${entries}`);
 	}
 
-	const lastWithTool = [...calls].reverse().find(message => message.tool);
+	const lastWithTool = [...calls].reverse().find((message) => message.tool);
 	const tail = lastWithTool
 		? formatOutputTail(liveOutput(lastWithTool), false, width)
 		: '';

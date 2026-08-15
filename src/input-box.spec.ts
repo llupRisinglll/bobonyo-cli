@@ -38,11 +38,12 @@ describe('wrapText', () => {
 });
 
 describe('workingLabel (thinking-mode indicator phase)', () => {
-	test('says Thinking only while reasoning AND thinking is hidden', () => {
+	test('says Thinking while reasoning AND thinking is hidden or line', () => {
 		expect(workingLabel('hidden', true)).toBe('Thinking');
 		expect(workingLabel('hidden', false)).toBe('Working');
 		expect(workingLabel('show', true)).toBe('Working');
-		expect(workingLabel('line', true)).toBe('Working');
+		expect(workingLabel('line', true)).toBe('Thinking');
+		expect(workingLabel('line', false)).toBe('Working');
 		expect(workingLabel('show', false)).toBe('Working');
 	});
 });
