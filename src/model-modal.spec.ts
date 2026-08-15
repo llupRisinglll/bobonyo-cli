@@ -27,6 +27,18 @@ describe('modelWithProvider (provider name in parentheses)', () => {
 		).toBe('gpt-5.6-luna (opencode-go)');
 	});
 
+	test('uses the REAL provider title when the connection matches a preset', () => {
+		expect(
+			modelWithProvider('deepseek-v4-flash', {
+				id: 'deepseek',
+				name: 'deepseek',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('deepseek-v4-flash (DeepSeek)');
+	});
+
 	test('falls back to the provider id when the display name is missing', () => {
 		expect(
 			modelWithProvider('mimo-v2.5', {

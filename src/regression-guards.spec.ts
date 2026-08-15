@@ -1004,6 +1004,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(client).toMatch(/Co-authored-by:/);
 	});
 
+	test('model modal header renders user + real name WITHOUT parentheses', () => {
+		// The category header must go through providerHeaderParts (user name
+		// first, real provider name as a secondary span) and must not wrap
+		// the names in `(...)` — both were user-requested changes.
+		const modal = read('./components/model-modal.tsx');
+		expect(modal).toMatch(/providerHeaderParts\(line\.provider\)/);
+		expect(modal).toMatch(/export function providerHeaderParts/);
+		expect(modal).toMatch(/parts\?\.real \? \(/);
+		// No literal `(` rendered directly before the header name.
+		const header = modal.slice(modal.indexOf("if (line.kind === 'provider')"));
+		expect(header).not.toMatch(/\{'  '\}\s*\(/);
+	});
+
 	test('ANY provider with a discovery URL fetches its models', () => {
 		// DeepSeek/Xiaomi have dedicated fetchers; every other preset
 		// (OpenAI, OpenRouter, Mistral, ...) carries a modelDiscoveryUrl and

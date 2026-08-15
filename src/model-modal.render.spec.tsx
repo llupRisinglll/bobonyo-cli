@@ -65,6 +65,10 @@ describe('model modal provider header + paste', () => {
 			expect(frameHas(frame, '· Codex')).toBe(true);
 			expect(frameHas(frame, 'deepseek')).toBe(true);
 			expect(frameHas(frame, '· DeepSeek')).toBe(true);
+			// The header must NOT wrap the names in parentheses (the
+			// `(deepseek · DeepSeek)` form was removed on request).
+			expect(frameHas(frame, '(deepseek')).toBe(false);
+			expect(frameHas(frame, '(codex')).toBe(false);
 			// The model cells do NOT repeat the provider per model.
 			expect(frameHas(frame, 'gpt-5.4-mini(codex)')).toBe(false);
 			expect(frameHas(frame, 'deepseek-v4-flash(deepseek)')).toBe(false);
