@@ -1,10 +1,5 @@
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
-import {
-	mkdirSync,
-	mkdtempSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadSettings, resumeCwdDecision} from './settings';
@@ -21,7 +16,8 @@ beforeEach(() => {
 
 afterEach(() => {
 	process.chdir(ORIGINAL_CWD);
-	if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+	if (ORIGINAL_CONFIG_DIR === undefined)
+		delete process.env.NANOCODER_CONFIG_DIR;
 	else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
 	rmSync(root, {recursive: true, force: true});
 });
@@ -32,14 +28,23 @@ describe('thinkingMode default (hidden / show / line)', () => {
 	});
 
 	test('existing settings file without the field: defaults to hidden', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({mode: 'normal'}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({mode: 'normal'}),
+		);
 		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 
 	test('migrates the legacy hideThinking flag: true → hidden, false → show', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({hideThinking: false}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({hideThinking: false}),
+		);
 		expect(loadSettings().thinkingMode).toBe('show');
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({hideThinking: true}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({hideThinking: true}),
+		);
 		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 
@@ -52,10 +57,23 @@ describe('thinkingMode default (hidden / show / line)', () => {
 	});
 
 	test('show and line are respected', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({thinkingMode: 'show'}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({thinkingMode: 'show'}),
+		);
 		expect(loadSettings().thinkingMode).toBe('show');
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({thinkingMode: 'line'}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({thinkingMode: 'line'}),
+		);
 		expect(loadSettings().thinkingMode).toBe('line');
+	});
+	test('an invalid saved mode falls back to hidden (never garbage)', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({thinkingMode: 'bogus'}),
+		);
+		expect(loadSettings().thinkingMode).toBe('hidden');
 	});
 });
 
@@ -65,12 +83,18 @@ describe('cavemanMode default', () => {
 	});
 
 	test('existing settings file without the field (pre-default files): defaults ON', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({mode: 'normal'}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({mode: 'normal'}),
+		);
 		expect(loadSettings().cavemanMode).toBe(true);
 	});
 
 	test('explicit off is respected', () => {
-		writeFileSync(join(root, 'settings.json'), JSON.stringify({cavemanMode: false}));
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({cavemanMode: false}),
+		);
 		expect(loadSettings().cavemanMode).toBe(false);
 	});
 });

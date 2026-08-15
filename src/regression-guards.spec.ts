@@ -1109,6 +1109,49 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(input).toMatch(/export function lineTickerVisible/);
 	});
 
+	test('/settings set thinkingMode validates the three modes and persists', () => {
+		// The slash-command handler must accept exactly hidden/show/line,
+		// reject anything else with a message, and persist the choice —
+		// a regression that drops the validation would accept garbage.
+		const app = read('./app.tsx');
+		const handler = app.slice(
+			app.indexOf("case 'thinkingMode':"),
+			app.indexOf("case 'cavemanMode':"),
+		);
+		expect(handler).toMatch(/\['hidden', 'show', 'line'\]\.includes/);
+		expect(handler).toMatch(/Invalid thinking mode/);
+		expect(handler).toMatch(
+			/setThinkingMode\(next as 'hidden' \| 'show' \| 'line'\)/,
+		);
+		expect(handler).toMatch(/saveSettings\(/);
+	});
+
+	test('startup applies the persisted thinkingMode (never a hardcoded default)', () => {
+		// The app must hydrate the signal from settings on boot — a
+		// regression that always uses the default would ignore the user's
+		// saved mode (e.g. 'line') after every restart.
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/setThinkingMode\(settings\.thinkingMode \?\? 'hidden'\)/,
+		);
+	});
+
+	test('Shift+Enter multiline routes through isNewlineInsert (all terminal shapes)', () => {
+		// The per-pane regression: herdr panes deliver Shift+Enter as a
+		// MODIFIED linefeed, other terminals as return+shift. The handler
+		// must route through the single pure helper — an inline check that
+		// excludes linefeed events silently drops Shift+Enter on some panes.
+		const input = read('./components/input-box.tsx');
+		expect(input).toMatch(/if \(isNewlineInsert\(event\)\) \{/);
+		expect(input).not.toMatch(/event\.name !== 'linefeed'/);
+		// The helper exists and covers the modified-linefeed shape.
+		expect(input).toMatch(/export function isNewlineInsert/);
+		expect(input).toMatch(/event\.name === 'linefeed'/);
+		expect(input).toMatch(
+			/return Boolean\(event\.shift \|\| event\.ctrl \|\| event\.meta\)/,
+		);
+	});
+
 	test('ANY provider with a discovery URL fetches its models', () => {
 		// DeepSeek/Xiaomi have dedicated fetchers; every other preset
 		// (OpenAI, OpenRouter, Mistral, ...) carries a modelDiscoveryUrl and

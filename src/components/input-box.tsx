@@ -116,6 +116,37 @@ export function isSubmitKey(event: {
 		(event.name === 'linefeed' && !event.shift && !event.ctrl && !event.meta)
 	);
 }
+/**
+ * Whether a key event should insert a literal newline (multiline input)
+ * instead of submitting. Every terminal/emulator shape is covered:
+ *  - herdr delivers Enter as a bare `linefeed`; a MODIFIED linefeed is
+ *    Shift+Enter / Ctrl+Enter / Meta+Enter — insert, never submit.
+ *  - real terminals deliver Shift+Enter / Ctrl+Enter as return+shift/ctrl.
+ *  - xterm bare-LF paste shapes (`\n` in sequence/raw) that are not the
+ *    herdr submit linefeed.
+ * Pure, unit-tested (the per-pane Shift+Enter regression).
+ */
+export function isNewlineInsert(event: {
+	name: string;
+	sequence?: string;
+	raw?: string;
+	shift?: boolean;
+	ctrl?: boolean;
+	meta?: boolean;
+}): boolean {
+	// readline Ctrl+J always inserts a newline.
+	if (event.ctrl && event.name === 'j') return true;
+	// herdr: Enter = linefeed; Shift/Ctrl/Meta + linefeed = newline.
+	if (event.name === 'linefeed') {
+		return Boolean(event.shift || event.ctrl || event.meta);
+	}
+	// Real terminals: Shift+Enter / Ctrl+Enter on return/enter = newline.
+	if (event.name === 'return' || event.name === 'enter') {
+		return Boolean(event.shift || event.ctrl);
+	}
+	// Bare-LF shapes that are not herdr's submit linefeed (paste chunks).
+	return event.sequence === '\n' || event.raw === '\n';
+}
 
 /**
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
@@ -512,18 +543,7 @@ export function InputBox(props: {
 		// CURSOR, handled BEFORE the suggestion popups so a popup never
 		// swallows the key (plain Enter still selects/completes/submits).
 		const isReturnKey = isSubmitKey(event);
-		// A bare `\n` from herdr's Enter is a SUBMIT (isSubmitKey above);
-		// only an unmodified LF that is NOT herdr's submit shape inserts a
-		// literal newline (paste chunks arrive through usePaste instead).
-		const isLiteralNewline =
-			(event.sequence === '\n' || event.raw === '\n') &&
-			!isReturnKey &&
-			event.name !== 'linefeed';
-		if (
-			(event.shift && isReturnKey) ||
-			(event.ctrl && event.name === 'j') ||
-			isLiteralNewline
-		) {
+		if (isNewlineInsert(event)) {
 			event.preventDefault();
 			insertAtCursor('\n');
 			setSelectedCompletion(0);

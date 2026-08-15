@@ -4,6 +4,7 @@ import {
 	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
+	isNewlineInsert,
 	isSubmitKey,
 	moveToNextWord,
 	moveToPrevWord,
@@ -90,6 +91,39 @@ describe('isSubmitKey (herdr Enter is a linefeed)', () => {
 	});
 });
 
+describe('isNewlineInsert (Shift+Enter multiline across terminal shapes)', () => {
+	test('herdr Shift+Enter: linefeed with shift inserts a newline', () => {
+		expect(isNewlineInsert({name: 'linefeed', shift: true, raw: '\n'})).toBe(
+			true,
+		);
+		expect(isNewlineInsert({name: 'linefeed', ctrl: true})).toBe(true);
+		expect(isNewlineInsert({name: 'linefeed', meta: true})).toBe(true);
+	});
+	test('herdr plain Enter (bare linefeed) still SUBMITS, never newline', () => {
+		expect(isNewlineInsert({name: 'linefeed', raw: '\n'})).toBe(false);
+	});
+	test('real-terminal Shift+Enter: return/enter with shift inserts', () => {
+		expect(isNewlineInsert({name: 'return', shift: true})).toBe(true);
+		expect(isNewlineInsert({name: 'enter', shift: true})).toBe(true);
+		expect(isNewlineInsert({name: 'return', ctrl: true})).toBe(true);
+	});
+	test('real-terminal plain Enter still submits', () => {
+		expect(isNewlineInsert({name: 'return'})).toBe(false);
+		expect(isNewlineInsert({name: 'enter'})).toBe(false);
+	});
+	test('Ctrl+J (readline newline) always inserts', () => {
+		expect(isNewlineInsert({name: 'j', ctrl: true})).toBe(true);
+	});
+	test('bare-LF paste shapes insert when not the herdr submit linefeed', () => {
+		expect(isNewlineInsert({name: 'x', sequence: '\n'})).toBe(true);
+		expect(isNewlineInsert({name: 'x', raw: '\n'})).toBe(true);
+	});
+	test('ordinary keys never insert a newline', () => {
+		expect(isNewlineInsert({name: 'a'})).toBe(false);
+		expect(isNewlineInsert({name: 'space'})).toBe(false);
+		expect(isNewlineInsert({name: 'return', shift: false})).toBe(false);
+	});
+});
 describe('computeInputBoxHeight', () => {
 	test('grows with the wrapped input lines (no single-row limit)', () => {
 		const wrapped = wrapText('x'.repeat(200), 40).length;
