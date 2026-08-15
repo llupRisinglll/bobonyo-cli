@@ -14,6 +14,7 @@ import {
 import {RGBA} from '@opentui/core';
 import {colors, type Colors} from './theme';
 import {historyFillWidth} from './history-width';
+import {formatToolEntry} from './tool-display';
 
 function themeRgb(hex: string): string {
 	const r = parseInt(hex.slice(1, 3), 16);
@@ -312,6 +313,67 @@ describe('tokenizeFileDiff', () => {
 		// And no chunk anywhere in the tokenized diff carries a tab.
 		const allText = chunks.map(c => c.text).join('');
 		expect(allText).not.toContain('\t');
+	});
+	test('long diff rows WRAP INSIDE the container, never overflow into a phantom line', () => {
+		// The intermittent "additional lines" bug: a diff line longer than
+		// the renderable width overflowed, and the TERMINAL wrapped the
+		// orphan tail onto its own row (visible in herdr, invisible to the
+		// clipped test renderer). Long rows must split into continuation
+		// pieces that stay ≤ the width, indent to the code column, and keep
+		// the row background — the painted rows then match the summary.
+		const longOld = [
+			'The legacy `CLAUDE.md` documents the **nanocoder fork workflow** (rc/fork',
+			'branches, `fork-flow.sh`, upstream PRs). It is nanocoder-only: bobonyo does',
+			'**not** follow it. bobonyo is a plain single-repo project on `main`, with no',
+			'upstream remote and no branch fleet.',
+		].join('\n');
+		const longNew = [
+			'This file replaces the old parent-level `CLAUDE.md` (which documented the',
+			'nanocoder fork workflow — rc/fork branches, `fork-flow.sh`, upstream PRs).',
+			'That file is gone and bobonyo does not follow it: bobonyo is a plain',
+			'single-repo project on `main`, with no upstream remote and no branch fleet.',
+		].join('\n');
+		const raw = formatToolEntry(
+			{
+				name: 'string_replace',
+				detail: 'AGENTS.md',
+				output: `Replaced 1 occurrence in AGENTS.md (at line 8)\n${longNew}`,
+				args: {path: 'AGENTS.md', old_string: longOld, new_string: longNew},
+			},
+			true,
+			'done',
+			true,
+			true,
+			84,
+		);
+		const inner = raw
+			.split('\n')
+			.filter(line => !/^\s*```/.test(line))
+			.join('\n');
+		const chunks = tokenizeFileDiff(inner, 'AGENTS.md', 'done', THEME, 84);
+		const lines = perLine(chunks);
+		// Every painted row stays inside the renderable width.
+		for (const line of lines) {
+			const total = line.reduce((sum, c) => sum + c.text.length, 0);
+			expect(total).toBeLessThanOrEqual(84);
+		}
+		// The 77-char `10 - **not**…` row splits: first piece at the code
+		// column, continuation re-indented to the SAME code column (9) and
+		// still carrying the row background (part of the same painted row).
+		const continuation = lines.find(line => {
+			const text = join(line);
+			// The continuation is the row that starts at the code column and
+			// carries ONLY the wrapped fragment (no number, no sigil).
+			return text.startsWith(' '.repeat(9)) && text.trim() === 'o';
+		});
+		expect(continuation).toBeDefined();
+		expect(bg(continuation!.find(c => c.text.trim() === 'o')!)).toBeTruthy();
+		// No BODY row is a bare orphan fragment at column 0 (the header row
+		// legitimately starts with its ✦ glyph — skip it).
+		for (const line of lines.slice(1)) {
+			const text = join(line);
+			if (text.trim()) expect(text.startsWith(' ')).toBe(true);
+		}
 	});
 });
 

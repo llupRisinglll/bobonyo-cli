@@ -548,41 +548,88 @@ export function tokenizeFileDiff(
 			kind === 'add' ? colors.diffAddedWord : colors.diffRemovedWord,
 		);
 		const text = row.text;
-		const parts: Array<{text: string; word: boolean}> = row.word
-			? [
-					{text: text.slice(0, row.word[0]), word: false},
-					{
-						text: text.slice(row.word[0], row.word[1]),
-						word: row.word[1] > row.word[0],
-					},
-					{text: text.slice(row.word[1]), word: false},
-				]
-			: [{text, word: false}];
-		const code: TextChunk[] = [];
-		for (const part of parts) {
-			if (!part.text) continue;
-			const chunks = language
-				? tokenizeCode(part.text, language, palette, defaultFg)
-				: [chunk(part.text, fg)];
-			const partBg = part.word ? wordBg : rowBg;
-			code.push(
-				...chunks.map(c => ({
-					...c,
-					// Readability guard: the syntax color (or the row fg)
-					// must stay readable on the row/word background.
-					fg: readableDiffFg(partBg, c.fg ?? fg, colors),
-					bg: partBg,
-				})),
-			);
+		// WRAP INSIDE THE CONTAINER: a diff line longer than the renderable
+		// width must split into continuation pieces (indented to the code
+		// column, row bg preserved) — leaving it to overflow makes the
+		// TERMINAL wrap the orphan tail onto a phantom row (the
+		// "additional lines" bug: unit tests never caught it because the
+		// test renderer clips, but in the real TUI long diff rows painted
+		// an extra line that vanished on resize). The continuation pieces
+		// are joined with an embedded newline + the code-column indent, so
+		// splitChunksByLine turns them into their own painted rows that
+		// still carry the row/word background.
+		const prefixLen =
+			row.indent.length +
+			(row.number ?? '').length +
+			// The sigil emits WITH its trailing space (the parse regex
+			// takes exactly one separator); without it `+const` glues to
+			// the code.
+			(row.sigil ? 2 : 0);
+		const maxText = width > 0 ? Math.max(1, width - prefixLen) : text.length;
+		// Split the row into width-budget PIECES; each piece keeps its own
+		// word-diff segments (pre/mid/post within the piece), so the darker
+		// word background only tints the changed middle, never the whole
+		// wrapped line.
+		const pieces: Array<Array<{text: string; word: boolean}>> = [];
+		for (let offset = 0; offset < text.length; offset += maxText) {
+			const piece = text.slice(offset, offset + maxText);
+			const pieceEnd = offset + piece.length;
+			const wordStart = row.word ? Math.max(offset, row.word[0]) : pieceEnd;
+			const wordEnd = row.word ? Math.min(pieceEnd, row.word[1]) : pieceEnd;
+			const segments: Array<{text: string; word: boolean}> = [];
+			if (wordEnd > wordStart) {
+				segments.push(
+					{text: piece.slice(0, wordStart - offset), word: false},
+					{text: piece.slice(wordStart - offset, wordEnd - offset), word: true},
+					{text: piece.slice(wordEnd - offset), word: false},
+				);
+			} else {
+				segments.push({text: piece, word: false});
+			}
+			pieces.push(segments.filter(segment => segment.text.length > 0));
 		}
+		if (pieces.length === 0) pieces.push([{text: '', word: false}]);
+		const code: TextChunk[] = [];
+		for (let i = 0; i < pieces.length; i++) {
+			for (const part of pieces[i]!) {
+				if (!part.text) continue;
+				const chunks = language
+					? tokenizeCode(part.text, language, palette, defaultFg)
+					: [chunk(part.text, fg)];
+				const partBg = part.word ? wordBg : rowBg;
+				if (i > 0 && part === pieces[i]![0]) {
+					// Continuation rows align their code with the parent's
+					// code column (indent + number + sigil) and inherit the
+					// row bg.
+					code.push({
+						...chunk(
+							`\n${' '.repeat(prefixLen)}`,
+							readableDiffFg(rowBg, defaultFg, colors),
+						),
+						bg: rowBg,
+					});
+				}
+				code.push(
+					...chunks.map(c => ({
+						...c,
+						// Readability guard: the syntax color (or the row fg)
+						// must stay readable on the row/word background.
+						fg: readableDiffFg(partBg, c.fg ?? fg, colors),
+						bg: partBg,
+					})),
+				);
+			}
+		}
+		const firstPieceLen = pieces[0]!.reduce(
+			(sum, segment) => sum + segment.text.length,
+			0,
+		);
 		const used =
 			row.indent.length +
 			(row.sigil ?? '').length +
-			// The sigil emits WITH its trailing space (the parse regex takes
-			// exactly one separator); without it `+const` glues to the code.
 			1 +
 			(row.number ?? '').length +
-			text.length;
+			firstPieceLen;
 		return fill(
 			[
 				{
@@ -610,6 +657,33 @@ export function tokenizeFileDiff(
 		);
 	};
 	let bodyCursor = 0;
+	// Context rows wrap the same way: a numbered unchanged line longer than
+	// the renderable width splits with the code column re-indented, so no
+	// row can overflow and wrap in the terminal.
+	const contextChunks = (
+		indent: string,
+		number: string,
+		text: string,
+	): TextChunk[] => {
+		const prefixLen = indent.length + number.length;
+		const maxText = width > 0 ? Math.max(1, width - prefixLen) : text.length;
+		const out: TextChunk[] = [
+			chunk(indent, defaultFg),
+			chunk(number, palette.fg.secondary),
+		];
+		for (let offset = 0; offset < text.length; offset += maxText) {
+			const piece = text.slice(offset, offset + maxText);
+			if (offset > 0) {
+				out.push(chunk(`\n${' '.repeat(prefixLen)}`, defaultFg));
+			}
+			out.push(
+				...(language
+					? tokenizeCode(piece, language, palette, defaultFg)
+					: [chunk(piece, defaultFg)]),
+			);
+		}
+		return out;
+	};
 	const fill = (chunks: TextChunk[], used: number): TextChunk[] => {
 		if (width <= 0) return chunks;
 		const padding = Math.max(0, width - used);
@@ -647,13 +721,7 @@ export function tokenizeFileDiff(
 				bodyCursor++;
 				if (row.kind === 'context') {
 					if (row.number !== undefined && row.text) {
-						return [
-							chunk(row.indent, defaultFg),
-							chunk(row.number, palette.fg.secondary),
-							...(language
-								? tokenizeCode(row.text, language, palette, defaultFg)
-								: [chunk(row.text, defaultFg)]),
-						];
+						return contextChunks(row.indent, row.number, row.text);
 					}
 					// Summary / opaque row.
 					return [chunk(line, palette.fg.secondary, dim())];
@@ -662,13 +730,11 @@ export function tokenizeFileDiff(
 			}
 			const context = line.match(/^(\s*)(\d+\s+)(.*)$/);
 			if (context) {
-				return [
-					chunk(context[1] ?? '', defaultFg),
-					chunk(context[2] ?? '', palette.fg.secondary),
-					...(language
-						? tokenizeCode(context[3] ?? '', language, palette, defaultFg)
-						: [chunk(context[3] ?? '', defaultFg)]),
-				];
+				return contextChunks(
+					context[1] ?? '',
+					context[2] ?? '',
+					context[3] ?? '',
+				);
 			}
 			return fill([chunk(line, palette.fg.secondary, dim())], line.length);
 		},

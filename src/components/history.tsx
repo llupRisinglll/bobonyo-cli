@@ -84,7 +84,7 @@ import {
 } from '../row-highlight';
 import {colors} from '../theme';
 import {buildBannerBox, hasConversation} from '../banner';
-import {historyFillWidth} from '../history-width';
+import {historyFillWidth, toolRowFillWidth} from '../history-width';
 import {wrapText} from '../text-wrap';
 
 const PREVIEW_LINES = 3;
@@ -628,12 +628,16 @@ export function History(props: {
 					batchBriefed: part.brief === ' ',
 					// Same tokenizer path the LIVE rows use: identical colors,
 					// spacing and syntax highlighting while running and done.
+					// Briefed rows (FileToolRow) render a 2-wide indent box per
+					// body row, so their fill budget shrinks by 2 — otherwise
+					// the padded row overflows the renderable and the TERMINAL
+					// wraps a phantom line after every diff row.
 					segments: liveRowSegments(
 						(fenceMatch[3] ?? '').replace(/^\n/, ''),
 						lang,
 						status,
 						colors(),
-						fillWidth,
+						toolRowFillWidth(terminalDimensions().width ?? 80, part.brief),
 					),
 				});
 				continue;
@@ -849,7 +853,10 @@ export function History(props: {
 						rowLanguage(message.tool.name),
 						'running',
 						colors(),
-						historyFillWidth(terminalDimensions().width ?? 80),
+						// Briefed file rows carry a 2-wide indent box per body
+						// row — shrink the fill so they never overflow the
+						// renderable (the phantom wrapped line per diff row).
+						toolRowFillWidth(terminalDimensions().width ?? 80, message.brief),
 					),
 				});
 			}

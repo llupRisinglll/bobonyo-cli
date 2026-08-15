@@ -282,4 +282,62 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		// Exactly ONE leading breakline: header at row 1, not row 2.
 		expect(liveRows[0]).toContain('✦ Edit src/foo.ts');
 	});
+
+	test('long diff rows never overflow: the terminal wrap phantom is gone', async () => {
+		// The intermittent "additional lines" bug, render-level: a diff row
+		// LONGER than the renderable width used to overflow, and the real
+		// terminal (herdr) wrapped the orphan tail onto its OWN row — a
+		// phantom "extra line" that vanished on resize and never appeared in
+		// the clipped test renderer. Long rows must wrap INSIDE the
+		// container: the continuation paints at the code column (9) with the
+		// row background, and NO row may exceed the renderable width.
+		const oldStr = [
+			'The legacy `CLAUDE.md` documents the **nanocoder fork workflow** (rc/fork',
+			'branches, `fork-flow.sh`, upstream PRs). It is nanocoder-only: bobonyo does',
+			'**not** follow it. bobonyo is a plain single-repo project on `main`, with no',
+			'upstream remote and no branch fleet.',
+		].join('\n');
+		const newStr = [
+			'This file replaces the old parent-level `CLAUDE.md` (which documented the',
+			'nanocoder fork workflow — rc/fork branches, `fork-flow.sh`, upstream PRs).',
+			'That file is gone and bobonyo does not follow it: bobonyo is a plain',
+			'single-repo project on `main`, with no upstream remote and no branch fleet.',
+		].join('\n');
+		const seg = diffSegments(8, oldStr, newStr);
+		const setup = await testRender(
+			() => (
+				<FileToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={false}
+				/>
+			),
+			{width: 84, height: 30},
+		);
+		await setup.flush();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const frame = setup.captureSpans();
+		const rows = frame.lines.map(line => line.spans.map(s => s.text).join(''));
+		// No painted row exceeds the renderable width (an overflow would
+		// wrap in the real terminal and paint a phantom row).
+		for (const row of rows) {
+			expect(row.length).toBeLessThanOrEqual(84);
+		}
+		// The wrapped fragment paints INSIDE the container at the code
+		// column, never as a bare orphan at column 0.
+		const orphan = rows.find(row => row.trim() === 'no');
+		expect(orphan).toBeUndefined();
+		const continuation = rows.find(
+			row => row.startsWith(' '.repeat(9)) && row.trim() === 'o',
+		);
+		expect(continuation).toBeDefined();
+		// The continuation row carries the row background (same as the diff
+		// rows), so it reads as part of the wrapped line.
+		const contY = rows.indexOf(continuation!);
+		expect(
+			frame.lines[contY]?.spans.some(s => (s.bg as never) !== undefined),
+		).toBe(true);
+	});
 });

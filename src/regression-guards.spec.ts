@@ -1007,6 +1007,30 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(display).toMatch(/Successfully replaced content at line/);
 	});
+	test('edit diff rows WRAP INSIDE the container (long lines never overflow)', () => {
+		// The intermittent "additional lines" bug: a diff row LONGER than
+		// the renderable width overflowed, and the real terminal (herdr)
+		// wrapped the orphan tail onto its OWN phantom row — invisible to
+		// the clipped test renderer, so it shipped "fixed" twice. The
+		// renderer must split long rows at the width budget (code-column
+		// continuation, row bg preserved) so nothing ever exceeds the
+		// renderable width and the terminal never wraps a row.
+		const highlight = read('./row-highlight.ts');
+		const diffFn = highlight.slice(
+			highlight.indexOf('export function tokenizeFileDiff'),
+			highlight.indexOf('export function tokenizeFileDiff') + 6000,
+		);
+		// The width-budget split: rows longer than `width - prefix` split
+		// into continuation pieces (never overflow).
+		expect(diffFn).toMatch(
+			/maxText = width > 0 \? Math\.max\(1, width - prefixLen\)/,
+		);
+		// Continuations re-indent to the code column and carry the row bg
+		// (the embedded newline is a template escape, not a string).
+		expect(diffFn).toMatch(/`\\n\$\{' '\.repeat\(prefixLen\)\}`/);
+		// The continuation chunk inherits the row background.
+		expect(diffFn).toMatch(/bg: rowBg/);
+	});
 
 	test('the rotating tip lives in the IDLE history, centered, with a breakline', () => {
 		// The tip must NOT ride the Working indicator line anymore; it
@@ -1363,6 +1387,34 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(refresh).toMatch(
 			/provider\.modelDiscoveryUrl\s*\n\s*\?\s*discoverModels\(provider\)/,
+		);
+	});
+	test('briefed file rows shrink the fill width by the brief indent', () => {
+		// The "blank line between diff rows" regression: FileToolRow prepends
+		// a 2-wide indent box to EVERY body row of a briefed file/diff entry,
+		// ON TOP of the tokenizer's width-filled padding. A briefed row then
+		// measures `fillWidth + 2` while the renderable is only `fillWidth` —
+		// the TERMINAL wraps the 2-cell overflow onto a phantom line after
+		// every diff row. Invisible to the OpenTUI test renderer (it clips
+		// instead of wrapping), so the guard lives at the width-math level:
+		// both the settled and the LIVE file-row tokenizer calls must route
+		// through toolRowFillWidth(terminalWidth, brief), never raw
+		// historyFillWidth.
+		const width = read('./history-width.ts');
+		expect(width).toMatch(/export function toolRowFillWidth/);
+		expect(width).toMatch(/brief !== undefined && brief !== ''/);
+		expect(width).toMatch(/Math\.max\(1, fill - 2\)/);
+		const history = read('./components/history.tsx');
+		// Settled component-tool rows (filerow/filediff render as
+		// FileToolRow) must use the brief-aware width.
+		expect(history).toMatch(/liveRowSegments\(/);
+		expect(history).toMatch(
+			/toolRowFillWidth\(terminalDimensions\(\)\.width \?\? 80, part\.brief\)/,
+		);
+		// Running tool rows stream through the same component — the live
+		// segments must use the brief-aware width too.
+		expect(history).toMatch(
+			/toolRowFillWidth\(\s*terminalDimensions\(\)\.width \?\? 80,\s*message\.brief\)/,
 		);
 	});
 });
