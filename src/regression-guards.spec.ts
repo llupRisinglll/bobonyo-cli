@@ -1005,16 +1005,36 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('model modal header renders user + real name WITHOUT parentheses', () => {
-		// The category header must go through providerHeaderParts (user name
-		// first, real provider name as a secondary span) and must not wrap
-		// the names in `(...)` — both were user-requested changes.
+		// The category header renders the REAL provider title plus the
+		// user-given connection names (`OpenCode Go - brian, mika`) and must
+		// not wrap the names in `(...)`.
 		const modal = read('./components/model-modal.tsx');
-		expect(modal).toMatch(/providerHeaderParts\(line\.provider\)/);
+		expect(modal).toMatch(/providerDisplayName\(line\.provider\)/);
 		expect(modal).toMatch(/export function providerHeaderParts/);
-		expect(modal).toMatch(/parts\?\.real \? \(/);
+		expect(modal).toMatch(/\{title\}/);
+		expect(modal).toMatch(/\{names\}/);
 		// No literal `(` rendered directly before the header name.
 		const header = modal.slice(modal.indexOf("if (line.kind === 'provider')"));
 		expect(header).not.toMatch(/\{'  '\}\s*\(/);
+	});
+
+	test('switching models/accounts never clears the conversation context (cache head)', () => {
+		// `selectModel` must ONLY swap the active endpoint: the context and
+		// the provider cache head stay untouched, so a same-provider account
+		// swap (brian → mika) does not intentionally resend/rebuild
+		// everything and lose the cache rate.
+		const app = read('./app.tsx');
+		const start = app.indexOf('const selectModel = ');
+		const end = app.indexOf('const listProvidersInfo', start);
+		const select = app.slice(start, end === -1 ? undefined : end);
+		expect(select).toMatch(/setActiveEndpoint/);
+		expect(select).not.toMatch(/clearMessages/);
+		expect(select).not.toMatch(/setContext\(\[\]\)/);
+		// The model modal drives the account switch via the connection
+		// picker and marks same-provider swaps to skip the resend confirm.
+		const modal = read('./components/model-modal.tsx');
+		expect(modal).toMatch(/Select provider/);
+		expect(modal).toMatch(/accountSwitch/);
 	});
 
 	test('ANY provider with a discovery URL fetches its models', () => {

@@ -12,6 +12,10 @@ import {builtinCavemanSkill, loadSkills} from './custom';
 import {readCodexAuth} from './codex-auth';
 import {loadSettings} from './settings';
 import {
+	formatOpenCodeLimitMessage,
+	parseOpenCodeLimitError,
+} from './opencode-limit';
+import {
 	resolveSystemPrompt,
 	type SystemPromptStyle,
 } from './system-prompt';
@@ -176,10 +180,21 @@ export function buildSystemParts(toolProfile?: string): {
 
 export class ProviderError extends Error {
 	status: number;
-	constructor(status: number, message: string) {
+	/** Raw provider response body (e.g. opencode-go GoUsageLimitError). */
+	body?: string;
+	/** Raw provider response headers (e.g. `retry-after`). */
+	headers?: Headers;
+	constructor(
+		status: number,
+		message: string,
+		body?: string,
+		headers?: Headers,
+	) {
 		super(message);
 		this.name = 'ProviderError';
 		this.status = status;
+		this.body = body;
+		this.headers = headers;
 	}
 }
 
@@ -477,6 +492,15 @@ async function streamOnceWithRetries(
 			setRetryingAttempt(0);
 			return result;
 		} catch (error) {
+			// opencode-go subscription limits (GoUsageLimitError /
+			// FreeUsageLimitError) do NOT retry — they reset in hours/days,
+			// not seconds. Surface the limit message immediately.
+			if (
+				error instanceof ProviderError &&
+				parseOpenCodeLimitError(error.body, error.headers)
+			) {
+				throw error;
+			}
 			if (
 				error instanceof ProviderError &&
 				error.status === 429 &&
@@ -558,17 +582,7 @@ async function streamOnce(
 	});
 
 	if (!response.ok) {
-		let message = '';
-		try {
-			const body = (await response.json()) as {error?: {message?: string}};
-			message = body.error?.message ?? '';
-		} catch {
-			// keep the status
-		}
-		throw new ProviderError(
-			response.status,
-			classifyHttpError(response.status, message),
-		);
+		throw await providerHttpError(response);
 	}
 
 	if (!response.body) {
@@ -959,17 +973,7 @@ async function anthropicStreamOnce(
 	});
 
 	if (!response.ok) {
-		let message = '';
-		try {
-			const body = (await response.json()) as {error?: {message?: string}};
-			message = body.error?.message ?? '';
-		} catch {
-			// keep the status
-		}
-		throw new ProviderError(
-			response.status,
-			classifyHttpError(response.status, message),
-		);
+		throw await providerHttpError(response);
 	}
 	if (!response.body) {
 		return {text: '', reasoning: '', toolCalls: [], finishReason: 'stop'};
@@ -1239,19 +1243,7 @@ async function responsesStreamOnce(
 	});
 
 	if (!response.ok) {
-		let message = '';
-		try {
-			const body = (await response.json()) as {
-				error?: {message?: string};
-			};
-			message = body.error?.message ?? '';
-		} catch {
-			// keep the status
-		}
-		throw new ProviderError(
-			response.status,
-			classifyHttpError(response.status, message),
-		);
+		throw await providerHttpError(response);
 	}
 	if (!response.body) {
 		return {text: '', reasoning: '', toolCalls: [], finishReason: 'stop'};
@@ -1727,4 +1719,34 @@ function classifyHttpError(status: number, message: string): string {
 		default:
 			return `Request failed (${status}): ${message || 'unknown'}`;
 	}
+}
+
+/**
+ * Build the ProviderError for a failed HTTP response. The raw body + headers
+ * ride along so opencode-go limit errors (GoUsageLimitError metadata,
+ * `retry-after`) can be surfaced with opencode parity — the message itself
+ * is the limit message when one is detected.
+ */
+async function providerHttpError(response: Response): Promise<ProviderError> {
+	let message = '';
+	let bodyText = '';
+	try {
+		bodyText = await response.text();
+		const body = JSON.parse(bodyText) as {error?: {message?: string}};
+		message = body.error?.message ?? '';
+	} catch {
+		// keep the status; the raw text is still captured for limit parsing
+	}
+	const limit = parseOpenCodeLimitError(bodyText, response.headers);
+	if (limit) {
+		message = formatOpenCodeLimitMessage(limit);
+	} else {
+		message = classifyHttpError(response.status, message);
+	}
+	return new ProviderError(
+		response.status,
+		message,
+		bodyText,
+		response.headers,
+	);
 }

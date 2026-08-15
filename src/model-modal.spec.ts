@@ -1,11 +1,14 @@
 import {describe, expect, test} from 'bun:test';
 import {
 	connectProviderShortcut,
+	groupProviders,
 	initialModelRowIndex,
 	modelWithProvider,
 	nextModelCursor,
 	providerDisplayName,
+	providerGroupKey,
 	providerHeaderParts,
+	sameProviderGroup,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
@@ -36,7 +39,7 @@ describe('modelWithProvider (provider name in parentheses)', () => {
 				models: [],
 				modelEfforts: {},
 			}),
-		).toBe('deepseek-v4-flash (DeepSeek)');
+		).toBe('deepseek-v4-flash (deepseek · DeepSeek)');
 	});
 
 	test('falls back to the provider id when the display name is missing', () => {
@@ -133,6 +136,88 @@ describe('providerHeaderParts (user name first, real name secondary)', () => {
 				modelEfforts: {},
 			}),
 		).toEqual({user: 'my-gateway', real: undefined});
+	});
+});
+
+describe('groupProviders (ONE list per real provider)', () => {
+	const go = (name: string, models: string[]) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models,
+		modelEfforts: {},
+	});
+
+	test('merges multiple connections of the same provider into ONE group', () => {
+		const groups = groupProviders([
+			go('brian', ['minimax-m3', 'kimi-k3']),
+			go('mika', ['kimi-k3', 'glm-5.2']),
+		]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0]!.title).toBe('OpenCode Go');
+		expect(groups[0]!.connections.map(connection => connection.id)).toEqual(
+			['brian', 'mika'],
+		);
+		// Models are the UNION, order preserved, no duplicates.
+		expect(groups[0]!.models).toEqual(['minimax-m3', 'kimi-k3', 'glm-5.2']);
+	});
+
+	test('custom / non-preset providers keep their own group', () => {
+		const groups = groupProviders([
+			{
+				id: 'my-gateway',
+				name: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: ['m1'],
+				modelEfforts: {},
+			},
+			go('brian', ['m2']),
+		]);
+		expect(groups).toHaveLength(2);
+		expect(groups.map(group => group.providerId).sort()).toEqual([
+			'my-gateway',
+			'opencode-go',
+		]);
+	});
+
+	test('providerGroupKey resolves the preset id (or the raw id)', () => {
+		expect(providerGroupKey(go('brian', []))).toBe('opencode-go');
+		expect(
+			providerGroupKey({
+				id: 'x',
+				name: 'x',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('x');
+	});
+});
+
+describe('sameProviderGroup (account-swap detection)', () => {
+	const go = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models: [],
+		modelEfforts: {},
+	});
+
+	test('two connections of the same real provider are the same group', () => {
+		expect(sameProviderGroup(go('brian'), go('mika'))).toBe(true);
+	});
+
+	test('different providers (or undefined) are NOT the same group', () => {
+		expect(
+			sameProviderGroup(go('brian'), {
+				id: 'deepseek',
+				name: 'deepseek',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe(false);
+		expect(sameProviderGroup(undefined, go('mika'))).toBe(false);
 	});
 });
 

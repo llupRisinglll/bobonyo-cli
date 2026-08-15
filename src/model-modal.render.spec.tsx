@@ -59,14 +59,14 @@ describe('model modal provider header + paste', () => {
 		try {
 			await setup.flush();
 			const frame = setup.captureSpans();
-			// User-given name FIRST, real provider name secondary: the
-			// ` · real` segment is a separate span, so check it separately.
-			expect(frameHas(frame, 'codex')).toBe(true);
-			expect(frameHas(frame, '· Codex')).toBe(true);
-			expect(frameHas(frame, 'deepseek')).toBe(true);
-			expect(frameHas(frame, '· DeepSeek')).toBe(true);
-			// The header must NOT wrap the names in parentheses (the
-			// `(deepseek · DeepSeek)` form was removed on request).
+			// ONE group per provider: `{real title} - {connection names}`
+			// (the ` - names` segment is its own secondary span).
+			expect(frameHas(frame, 'Codex')).toBe(true);
+			expect(frameHas(frame, '- codex')).toBe(true);
+			expect(frameHas(frame, '(current)')).toBe(true);
+			expect(frameHas(frame, 'DeepSeek')).toBe(true);
+			expect(frameHas(frame, '- deepseek')).toBe(true);
+			// The header must NOT wrap the names in parentheses.
 			expect(frameHas(frame, '(deepseek')).toBe(false);
 			expect(frameHas(frame, '(codex')).toBe(false);
 			// The model cells do NOT repeat the provider per model.
@@ -107,8 +107,149 @@ describe('model modal provider header + paste', () => {
 			// group header separately shows `(deepseek)`.
 			const frame = setup.captureSpans();
 			expect(frameHas(frame, 'deepseek▌')).toBe(true);
-			expect(frameHas(frame, 'deepseek')).toBe(true);
-			expect(frameHas(frame, '· DeepSeek')).toBe(true);
+			expect(frameHas(frame, 'DeepSeek')).toBe(true);
+			expect(frameHas(frame, '- deepseek')).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+});
+
+describe('model modal multiple accounts (ONE group per provider)', () => {
+	const go = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models: ['minimax-m3'],
+		modelEfforts: {},
+	});
+
+	test('two connections merge into ONE header, and picking a model asks which account to use', async () => {
+		let selected: string | undefined;
+		const setup = await testRender(
+			() => (
+				<ModelModal
+					providers={[go('brian'), go('mika')]}
+					currentProvider="brian"
+					currentModel="minimax-m3"
+					onSelect={(providerId) => {
+						selected = providerId;
+					}}
+					onConnectProvider={() => {}}
+					onClose={() => {}}
+					hasMessages={false}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await setup.flush();
+
+			// ONE group: `OpenCode Go - brian, mika` (both names listed).
+			let frame = setup.captureSpans();
+			expect(frameHas(frame, 'OpenCode Go')).toBe(true);
+			expect(frameHas(frame, '- brian, mika')).toBe(true);
+
+			// Selecting the model opens the ACCOUNT PICKER.
+			mockInput.pressEnter();
+			await setup.flush();
+			frame = setup.captureSpans();
+			expect(frameHas(frame, 'Select provider')).toBe(true);
+			expect(frameHas(frame, 'brian')).toBe(true);
+			expect(frameHas(frame, 'mika')).toBe(true);
+
+			// Pick the second account (mika) → effort step → select.
+			mockInput.pressArrow('down');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'Select effort')).toBe(true);
+
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(selected).toBe('mika');
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test('an account swap within the SAME provider skips the resend confirm (context + cache head stay intact)', async () => {
+		let selected: string | undefined;
+		const setup = await testRender(
+			() => (
+				<ModelModal
+					providers={[go('brian'), go('mika')]}
+					currentProvider="brian"
+					currentModel="minimax-m3"
+					onSelect={(providerId) => {
+						selected = providerId;
+					}}
+					onConnectProvider={() => {}}
+					onClose={() => {}}
+					hasMessages={true}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await setup.flush();
+			mockInput.pressEnter(); // model → connection picker
+			await setup.flush();
+			mockInput.pressArrow('down'); // mika
+			await setup.flush();
+			mockInput.pressEnter(); // pick mika → effort step
+			await setup.flush();
+			mockInput.pressEnter(); // default effort
+			await setup.flush();
+			expect(selected).toBe('mika');
+			// No "Switch model" confirm was shown.
+			expect(frameHas(setup.captureSpans(), 'Switch model')).toBe(false);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test('switching to a DIFFERENT provider still confirms the resend', async () => {
+		const setup = await testRender(
+			() => (
+				<ModelModal
+					providers={[
+						go('brian'),
+						{
+							id: 'deepseek',
+							name: 'deepseek',
+							baseUrl: 'https://api.deepseek.com',
+							models: ['deepseek-v4-flash'],
+							modelEfforts: {},
+						},
+					]}
+					currentProvider="brian"
+					currentModel="minimax-m3"
+					onSelect={() => {}}
+					onConnectProvider={() => {}}
+					onClose={() => {}}
+					hasMessages={true}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await setup.flush();
+			// Navigate to the deepseek model cell: ↓ moves within the group
+			// (one model), then ↓ to the next group's first cell.
+			mockInput.pressArrow('down');
+			await setup.flush();
+			mockInput.pressArrow('down');
+			await setup.flush();
+			mockInput.pressEnter(); // select deepseek model → effort step
+			await setup.flush();
+			mockInput.pressEnter(); // default effort → CONFIRM (different provider)
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'Switch model')).toBe(true);
+			expect(frameHas(setup.captureSpans(), '(y) continue')).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}

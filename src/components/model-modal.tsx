@@ -42,7 +42,12 @@ export function modelWithProvider(
 	model: string,
 	provider?: ModelProvider,
 ): string {
-	const label = provider ? providerDisplayName(provider) : undefined;
+	const parts = provider ? providerHeaderParts(provider) : undefined;
+	const label = parts
+		? parts.real
+			? `${parts.user} · ${parts.real}`
+			: parts.user
+		: undefined;
 	return label && model ? `${model} (${label})` : model;
 }
 
@@ -72,6 +77,59 @@ export function providerHeaderParts(provider: ModelProvider): {
 	const user = provider.name || provider.id;
 	const real = providerDisplayName(provider);
 	return {user, real: real && real !== user ? real : undefined};
+}
+
+/** REAL provider identity used to merge multiple connections (preset id). */
+export function providerGroupKey(provider: ModelProvider): string {
+	const preset = provider.baseUrl
+		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
+		: undefined;
+	return preset?.id ?? provider.id;
+}
+
+/**
+ * ONE group per REAL provider: connections that resolve to the same preset
+ * (e.g. two opencode-go accounts named `brian` and `mika`) merge into a
+ * single list whose models are the union. Custom providers keep their own
+ * group. Pure, unit-tested.
+ */
+export function groupProviders(providers: ModelProvider[]): ProviderGroup[] {
+	const byKey = new Map<string, ProviderGroup>();
+	for (const provider of providers) {
+		const key = providerGroupKey(provider);
+		let group = byKey.get(key);
+		if (!group) {
+			group = {
+				providerId: key,
+				title: providerDisplayName(provider),
+				connections: [],
+				models: [],
+			};
+			byKey.set(key, group);
+		}
+		group.connections.push(provider);
+		for (const model of provider.models) {
+			if (!group.models.includes(model)) group.models.push(model);
+		}
+	}
+	return [...byKey.values()];
+}
+
+/** One provider group = all connections under one REAL provider. */
+export interface ProviderGroup {
+	providerId: string;
+	title: string;
+	connections: ModelProvider[];
+	models: string[];
+}
+
+/** Whether two connections belong to the SAME real provider. */
+export function sameProviderGroup(
+	a: ModelProvider | undefined,
+	b: ModelProvider | undefined,
+): boolean {
+	if (!a || !b) return false;
+	return providerGroupKey(a) === providerGroupKey(b);
 }
 
 type Row =
@@ -195,7 +253,8 @@ export function nextModelCursor(
 }
 
 interface ModelCell {
-	provider: ModelProvider;
+	/** All connections under the cell's provider group (account picker). */
+	connections: ModelProvider[];
 	model: string;
 	isCurrent: boolean;
 	/** Effort folded INTO the cell: the OpenTUI reconciler's <For> only
@@ -221,6 +280,8 @@ function formatContextLength(contextLength: number): string {
 interface DisplayLine {
 	kind: 'inherit' | 'provider' | 'grid' | 'spacer' | 'empty';
 	provider?: ModelProvider;
+	/** All connections under the provider group (header name list). */
+	connections?: ModelProvider[];
 	isCurrent?: boolean;
 	/** One grid ROW of cells (padding cells are null). */
 	cells?: Array<ModelCell | null>;
@@ -313,34 +374,49 @@ export function ModelModal(props: {
 	const modelColumns = () => (cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1);
 	const cellWidth = () => Math.floor((cardWidth() - 4) / modelColumns());
 
-	/** Filtered provider groups in display order (current provider first). */
+	/** Filtered provider groups in display order (current provider first):
+	 *  ONE group per REAL provider, all user connections merged inside. */
 	const groups = (): Array<{
-		provider: ModelProvider;
+		group: ProviderGroup;
 		isCurrent: boolean;
 		models: string[];
 	}> => {
-		const sorted = [...props.providers].sort((a, b) => {
-			const aCurrent = a.id === props.currentProvider ? 0 : 1;
-			const bCurrent = b.id === props.currentProvider ? 0 : 1;
+		const sorted = groupProviders(props.providers).sort((a, b) => {
+			const aCurrent = a.connections.some(
+				connection => connection.id === props.currentProvider,
+			)
+				? 0
+				: 1;
+			const bCurrent = b.connections.some(
+				connection => connection.id === props.currentProvider,
+			)
+				? 0
+				: 1;
 			return aCurrent !== bCurrent
 				? aCurrent - bCurrent
-				: (a.name ?? a.id).localeCompare(b.name ?? b.id);
+				: a.title.localeCompare(b.title);
 		});
 		const out: Array<{
-			provider: ModelProvider;
+			group: ProviderGroup;
 			isCurrent: boolean;
 			models: string[];
 		}> = [];
-		for (const provider of sorted) {
-			const isCurrent = provider.id === props.currentProvider;
-			const nameMatches = matches(provider.name ?? provider.id);
-			const visibleModels = provider.models.filter(
+		for (const group of sorted) {
+			const isCurrent = group.connections.some(
+				connection => connection.id === props.currentProvider,
+			);
+			const nameMatches =
+				matches(group.title) ||
+				group.connections.some(connection =>
+					matches(connection.name ?? connection.id),
+				);
+			const visibleModels = group.models.filter(
 				model => nameMatches || matches(model),
 			);
 			if (query().trim() && !nameMatches && visibleModels.length === 0) {
 				continue;
 			}
-			out.push({provider, isCurrent, models: visibleModels});
+			out.push({group, isCurrent, models: visibleModels});
 		}
 		return out;
 	};
@@ -360,7 +436,8 @@ export function ModelModal(props: {
 			if (lines.length > 0) lines.push({kind: 'spacer'});
 			lines.push({
 				kind: 'provider',
-				provider: group.provider,
+				provider: group.group.connections[0],
+				connections: group.group.connections,
 				isCurrent: group.isCurrent,
 			});
 			const gridRows = Math.ceil(group.models.length / cols);
@@ -370,20 +447,22 @@ export function ModelModal(props: {
 					const i = r * cols + c;
 					if (i < group.models.length) {
 						cells.push({
-							provider: group.provider,
+							connections: group.group.connections,
 							model: group.models[i]!,
 							isCurrent:
 								group.isCurrent &&
 								group.models[i] === props.currentModel,
 							shownEffort: effectiveEffort(
-								group.provider,
+								group.group.connections[0]!,
 								group.models[i]!,
 							),
 							contextSize: (() => {
 								const window =
-									group.provider.modelContextWindows?.[
+									group.group.connections[0]!
+										.modelContextWindows?.[
 										group.models[i]!
-									] ?? group.provider.contextWindow;
+									] ??
+									group.group.connections[0]!.contextWindow;
 								return window
 									? formatContextLength(window)
 									: undefined;
@@ -433,7 +512,15 @@ export function ModelModal(props: {
 	const [effortStep, setEffortStep] = createSignal<{
 		providerId: string;
 		model: string;
+		/** Chosen via the account picker on a DIFFERENT connection. */
+		accountSwitch?: boolean;
 	} | null>(null);
+	/** Account picker: the model is chosen, pick WHICH connection to use. */
+	const [connectionStep, setConnectionStep] = createSignal<{
+		model: string;
+		connections: ModelProvider[];
+	} | null>(null);
+	const [connectionIndex, setConnectionIndex] = createSignal(0);
 	const [effortIndex, setEffortIndex] = createSignal(0);
 	const EFFORT_OPTIONS: Array<{id: string; label: string}> = [
 		{id: 'default', label: 'Default'},
@@ -465,12 +552,18 @@ export function ModelModal(props: {
 		);
 	};
 
-	const selectCell = (cell: ModelCell): void => {
+	/** Jump to the effort step for a specific connection + model. */
+	const startEffort = (
+		provider: ModelProvider,
+		model: string,
+		accountSwitch?: boolean,
+	): void => {
 		setEffortStep({
-			providerId: cell.provider.id,
-			model: cell.model,
+			providerId: provider.id,
+			model,
+			accountSwitch,
 		});
-		const currentEffort = effectiveEffort(cell.provider, cell.model);
+		const currentEffort = effectiveEffort(provider, model);
 		setEffortIndex(
 			currentEffort
 				? Math.max(
@@ -479,6 +572,17 @@ export function ModelModal(props: {
 					)
 				: 0,
 		);
+	};
+
+	const selectCell = (cell: ModelCell): void => {
+		// A provider group with MULTIPLE accounts asks which connection to
+		// use for the selected model BEFORE the effort step.
+		if (cell.connections.length > 1) {
+			setConnectionStep({model: cell.model, connections: cell.connections});
+			setConnectionIndex(0);
+			return;
+		}
+		startEffort(cell.connections[0]!, cell.model);
 	};
 
 	// The display LINE holding the cursor (for the scroll window).
@@ -532,9 +636,33 @@ export function ModelModal(props: {
 
 	useKeyboard(event => {
 		if (event.name === 'escape') {
-			if (effortStep()) setEffortStep(null);
+			if (connectionStep()) setConnectionStep(null);
+			else if (effortStep()) setEffortStep(null);
 			else if (confirming()) setConfirming(null);
 			else props.onClose();
+			return true;
+		}
+		if (connectionStep()) {
+			const connections = connectionStep()!.connections;
+			if (event.name === 'up' || event.name === 'down') {
+				setConnectionIndex(prev => {
+					const next = event.name === 'down' ? prev + 1 : prev - 1;
+					return Math.max(0, Math.min(connections.length - 1, next));
+				});
+				return true;
+			}
+			if (event.name === 'return') {
+				const step = connectionStep()!;
+				const chosen = connections[connectionIndex()]!;
+				setConnectionStep(null);
+				// Same provider, DIFFERENT account = an account swap: the
+				// conversation context and cache head stay untouched (the
+				// next turn sends normally), so no "will RESEND" confirm.
+				const current = providerForId(props.currentProvider);
+				const sameGroup = sameProviderGroup(chosen, current);
+				const sameConnection = current?.id === chosen.id;
+				startEffort(chosen, step.model, sameGroup && !sameConnection);
+			}
 			return true;
 		}
 		if (effortStep()) {
@@ -561,7 +689,11 @@ export function ModelModal(props: {
 				setEffortStep(null);
 				// Mid-conversation model switches RESEND the whole history,
 				// confirm first (parity: the reference warns about usage).
-				if (props.hasMessages) setConfirming(target);
+				// An ACCOUNT swap within the same provider skips it: the
+				// context + cache head are preserved, the next turn just
+				// uses the other subscription.
+				if (props.hasMessages && !step.accountSwitch)
+					setConfirming(target);
 				else props.onSelect(target.providerId, target.model, target.effort);
 			}
 			return true;
@@ -593,7 +725,9 @@ export function ModelModal(props: {
 		if (event.name === 'e' && focus() === 'list') {
 			const cell = currentCell();
 			if (cell) {
-				const current = effectiveEffort(cell.provider, cell.model) ?? 'medium';
+				const representative = cell.connections[0]!;
+				const current =
+					effectiveEffort(representative, cell.model) ?? 'medium';
 				const base = EFFORT_LEVELS.indexOf(
 					current as (typeof EFFORT_LEVELS)[number],
 				);
@@ -603,7 +737,7 @@ export function ModelModal(props: {
 					'medium';
 				setEffortOverrides(prev => ({
 					...prev,
-					[effortKey(cell.provider.id, cell.model)]: next,
+					[effortKey(representative.id, cell.model)]: next,
 				}));
 			}
 			return true;
@@ -686,49 +820,166 @@ export function ModelModal(props: {
 				paddingY={2}
 			>
 				<Show
-					when={effortStep() === null && confirming() === null}
+					when={
+						effortStep() === null &&
+						confirming() === null &&
+						connectionStep() === null
+					}
 					fallback={
 						<Show
-							when={effortStep() !== null}
+							when={connectionStep() !== null}
 							fallback={
-								<box flexDirection="column">
-									<text fg={colors().primary} attributes={bold()}>
-										Switch model
-									</text>
-									<box height={1} />
-									<text fg={colors().warning}>
-										Switching to "
-										{modelWithProvider(
-											confirming()?.model ?? '',
-											providerForId(confirming()?.providerId),
-										)}
-										" will RESEND the entire conversation to the new
-										model and take additional usage.
-									</text>
-									<box height={1} />
-									<text fg={colors().secondary} attributes={dim()}>
-										(y) continue · (n) cancel
-									</text>
-								</box>
+								<Show
+									when={effortStep() !== null}
+									fallback={
+										<box flexDirection="column">
+											<text
+												fg={colors().primary}
+												attributes={bold()}
+											>
+												Switch model
+											</text>
+											<box height={1} />
+											<text fg={colors().warning}>
+												Switching to "
+												{modelWithProvider(
+													confirming()?.model ?? '',
+													providerForId(
+														confirming()?.providerId,
+													),
+												)}
+												" will RESEND the entire
+												conversation to the new model
+												and take additional usage.
+											</text>
+											<box height={1} />
+											<text
+												fg={colors().secondary}
+												attributes={dim()}
+											>
+												(y) continue · (n) cancel
+											</text>
+										</box>
+									}
+								>
+									{/* opencode-style effort step: choose
+									    Default or a reasoning tier for THIS
+									    model before switching. */}
+									<box flexDirection="column">
+										<text
+											fg={colors().primary}
+											attributes={bold()}
+										>
+											Select effort
+										</text>
+										<box height={1} />
+										<text fg={colors().text}>
+											{modelWithProvider(
+												effortStep()?.model ?? '',
+												providerForId(
+													effortStep()?.providerId,
+												),
+											)}
+										</text>
+										<box height={1} />
+										<For each={EFFORT_OPTIONS}>
+											{(option, i) => {
+												const active =
+													i() === effortIndex();
+												return (
+													<box
+														flexDirection="row"
+														height={1}
+														backgroundColor={
+															active
+																? activeRow().bg
+																: undefined
+														}
+														{...({
+															onMouseMove: () =>
+																setEffortIndex(i()),
+															onMouseUp: () => {
+																const step =
+																	effortStep();
+																if (!step) return;
+																setEffortStep(null);
+																const target = {
+																	providerId:
+																		step.providerId,
+																	model: step.model,
+																	effort:
+																		option.id ===
+																		'default'
+																			? undefined
+																			: option.id,
+																};
+																if (
+																	props.hasMessages &&
+																	!step.accountSwitch
+																) {
+																	setConfirming(
+																		target,
+																	);
+																} else {
+																	props.onSelect(
+																		target.providerId,
+																		target.model,
+																		target.effort,
+																	);
+																}
+															},
+														} as any)}
+													>
+														<text
+															fg={
+																active
+																	? activeRow().fg
+																	: colors().text
+															}
+															attributes={
+																active
+																	? bold()
+																	: undefined
+															}
+														>
+															{active ? '❯ ' : '  '}
+															{option.id === 'default'
+																? effortDefaultLabel()
+																: option.label}
+														</text>
+													</box>
+												);
+											}}
+										</For>
+										<box height={1} />
+										<text
+											fg={colors().secondary}
+											attributes={dim()}
+										>
+											↑/↓ select · Enter choose · Esc back
+											{props.hasMessages
+												? ' · will resend the conversation'
+												: ''}
+										</text>
+									</box>
+								</Show>
 							}
 						>
-							{/* opencode-style effort step: choose Default or a
-							    reasoning tier for THIS model before switching. */}
+							{/* ACCOUNT PICKER: the model is chosen, pick which
+							    connection (e.g. brian vs mika) to use. */}
 							<box flexDirection="column">
 								<text fg={colors().primary} attributes={bold()}>
-									Select effort
+									Select provider
 								</text>
 								<box height={1} />
 								<text fg={colors().text}>
-									{modelWithProvider(
-										effortStep()?.model ?? '',
-										providerForId(effortStep()?.providerId),
-									)}
+									{connectionStep()?.model ?? ''}
 								</text>
 								<box height={1} />
-								<For each={EFFORT_OPTIONS}>
-									{(option, i) => {
-										const active = i() === effortIndex();
+								<For each={connectionStep()?.connections ?? []}>
+									{(connection, i) => {
+										const active =
+											i() === connectionIndex();
 										return (
 											<box
 												flexDirection="row"
@@ -737,28 +988,33 @@ export function ModelModal(props: {
 													active ? activeRow().bg : undefined
 												}
 												{...({
-													onMouseMove: () => setEffortIndex(i()),
+													onMouseMove: () =>
+														setConnectionIndex(i()),
 													onMouseUp: () => {
-														const step = effortStep();
+														const step =
+															connectionStep();
 														if (!step) return;
-														setEffortStep(null);
-														const target = {
-															providerId: step.providerId,
-															model: step.model,
-															effort:
-																option.id === 'default'
-																	? undefined
-																	: option.id,
-														};
-														if (props.hasMessages) {
-															setConfirming(target);
-														} else {
-															props.onSelect(
-																target.providerId,
-																target.model,
-																target.effort,
+														const chosen =
+															step.connections[
+																i()
+															]!;
+														setConnectionStep(null);
+														const current =
+															providerForId(
+																props.currentProvider,
 															);
-														}
+														const sameGroup =
+															sameProviderGroup(
+																chosen,
+																current,
+															);
+														startEffort(
+															chosen,
+															step.model,
+															sameGroup &&
+																current?.id !==
+																	chosen.id,
+														);
 													},
 												} as any)}
 											>
@@ -768,12 +1024,20 @@ export function ModelModal(props: {
 															? activeRow().fg
 															: colors().text
 													}
-													attributes={active ? bold() : undefined}
+													attributes={
+														active ? bold() : undefined
+													}
 												>
 													{active ? '❯ ' : '  '}
-													{option.id === 'default'
-														? effortDefaultLabel()
-														: option.label}
+													{connection.name ||
+														connection.id}
+												</text>
+												<box flexGrow={1} />
+												<text
+													fg={colors().secondary}
+													attributes={dim()}
+												>
+													{connection.baseUrl ?? ''}
 												</text>
 											</box>
 										);
@@ -782,9 +1046,6 @@ export function ModelModal(props: {
 								<box height={1} />
 								<text fg={colors().secondary} attributes={dim()}>
 									↑/↓ select · Enter choose · Esc back
-									{props.hasMessages
-										? ' · will resend the conversation'
-										: ''}
 								</text>
 							</box>
 						</Show>
@@ -858,30 +1119,43 @@ export function ModelModal(props: {
 								);
 							}
 							if (line.kind === 'provider') {
-								const parts = line.provider
-									? providerHeaderParts(line.provider)
-									: null;
+								const names = (line.connections ?? [])
+									.map(
+										connection =>
+											connection.name || connection.id,
+									)
+									.join(', ');
+								const title = line.provider
+									? providerDisplayName(line.provider)
+									: '';
 								return (
 									<box flexDirection="row" height={1}>
 										<text fg={colors().primary} attributes={bold()}>
 											{'  '}
-											{parts?.user ?? ''}
-											{parts?.real ? (
-												<span
-													style={{
-														fg: colors()
-															.secondary as never,
-														attributes: dim(),
-													}}
-												>
-													{' · '}
-													{parts.real}
-												</span>
-											) : (
-												<></>
-											)}
-											{line.isCurrent ? ' (current)' : ''}
+											{title}
 										</text>
+										{names ? (
+											<text
+												fg={colors().secondary}
+												attributes={dim()}
+											>
+												{' - '}
+												{names}
+											</text>
+										) : (
+											<></>
+										)}
+										{line.isCurrent ? (
+											<text
+												fg={colors().secondary}
+												attributes={dim()}
+											>
+												{' '}
+												(current)
+											</text>
+										) : (
+											<></>
+										)}
 									</box>
 								);
 							}
