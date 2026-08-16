@@ -2,11 +2,19 @@ import '@opentui/solid/preload';
 import {describe, expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
 import {RGBA, type CapturedFrame, type CapturedLine} from '@opentui/core';
+import {For, Show} from 'solid-js';
 import type {TestRendererSetup} from '@opentui/core/testing';
 import {InputBox} from './components/input-box';
-import {input, setInput, setModelOpen, setSpinnerFrame} from './state';
+import {
+	input,
+	setInput,
+	setModelOpen,
+	setPendingQueue,
+	setSpinnerFrame,
+} from './state';
 import {colors} from './theme';
 import {activeRowPalette} from './row-highlight';
+import {createTextAttributes} from '@opentui/core';
 
 /**
  * RENDER-LEVEL regression guard for the Shift+Enter caret (this bug
@@ -36,10 +44,7 @@ function caretRgba(themeColors = colors()): RGBA {
 }
 
 /** Every span painted with the active-row background (the caret block). */
-function caretSpans(
-	frame: CapturedFrame,
-	themeColors = colors(),
-): CaretHit[] {
+function caretSpans(frame: CapturedFrame, themeColors = colors()): CaretHit[] {
 	const palette = activeRowPalette(themeColors);
 	const hits: CaretHit[] = [];
 	frame.lines.forEach((line, y) => {
@@ -216,10 +221,10 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 	test('hidden blink phase keeps the caret CELL and the hint column (no line shift, square never disappears)', async () => {
 		setInput('');
 		setSpinnerFrame(0);
-		const setup = await testRender(
-			() => <InputBox onSubmit={() => {}} />,
-			{width: 80, height: 24},
-		);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+		});
 		try {
 			await setup.flush();
 
@@ -258,10 +263,11 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 	test('paste is ignored while a modal is open (chat box is inert)', async () => {
 		setInput('');
 		setModelOpen(true);
-		const setup = await testRender(
-			() => <InputBox onSubmit={() => {}} />,
-			{width: 80, height: 24, kittyKeyboard: true},
-		);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+			kittyKeyboard: true,
+		});
 		try {
 			await setup.flush();
 			// Bracketed paste must NOT reach the chat input behind the modal.
@@ -270,6 +276,52 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			expect(input()).toBe('');
 		} finally {
 			setModelOpen(false);
+			setup.renderer.destroy();
+		}
+	});
+	test('queued messages: header and rows render on SEPARATE lines (no overlap)', async () => {
+		// The reported bug: the queue block used bare <text> nodes inside a
+		// fixed-height column — the header (`Queued messages (…)`) and the
+		// first queued message painted THE SAME ROW, mangling both (the
+		// message overwrote the header). Mounts the REAL InputBox with a real
+		// queued message: the header must paint on its OWN row and the
+		// message on the NEXT, with `(queued)` + the value spaced apart.
+		setInput('');
+		setPendingQueue([
+			{
+				value:
+					'feel free to also research this because some people might have encountered a problem when they are some TUI inside the herdr',
+			},
+		]);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 120,
+			height: 12,
+		});
+		try {
+			await setup.flush();
+			const frame = setup.captureSpans();
+			const rows = frame.lines.map(line =>
+				line.spans
+					.map(span => span.text)
+					.join('')
+					.trimEnd(),
+			);
+			// Header row and message row are DISTINCT — the message never
+			// overwrites the header (the old single-mangled-line bug).
+			const headerRow = rows.findIndex(row =>
+				row.includes('Queued messages (↑/↓ select, Enter edit, Del remove):'),
+			);
+			expect(headerRow).toBeGreaterThanOrEqual(0);
+			expect(rows[headerRow]).not.toContain('(queued)');
+			const msgRow = rows.findIndex(row =>
+				row.includes('feel free to also research'),
+			);
+			expect(msgRow).toBeGreaterThan(headerRow);
+			// Tag + value are spaced: `(queued) feel` never `(queued)feel`.
+			expect(rows[msgRow]).toContain('(queued) feel free');
+			expect(rows[msgRow]).not.toContain('(queued)feel');
+		} finally {
+			setPendingQueue([]);
 			setup.renderer.destroy();
 		}
 	});

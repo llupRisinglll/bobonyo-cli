@@ -932,30 +932,56 @@ export function InputBox(props: {
 			</Show>
 			{/* Queued messages: a persistent block ABOVE the input while busy
 			    (parity: nanocoder's queuedBlock, it must stay visible, not
-			    scroll away with the transcript). */}
+			    scroll away with the transcript). Every row is a FIXED-height
+			    box — bare <text> nodes inside a fixed-height column overlap
+			    (the header and the first message painted the same row).
+			    Colors: header secondary, rows default text with a secondary
+			    `(queued)` tag; ONLY the selected row gets the active-row
+			    highlight (info bg + bold), so the block never floods the
+			    screen with primary. */}
 			<Show when={pendingQueue().length > 0}>
 				<box flexDirection="column" height={pendingQueue().length + 1}>
-					<text fg={colors().secondary}>
-						Queued messages (↑/↓ select, Enter edit, Del remove):
-					</text>
+					<box height={1} flexDirection="row">
+						<text fg={colors().secondary} attributes={dim()}>
+							Queued messages (↑/↓ select, Enter edit, Del remove):
+						</text>
+					</box>
 					<For each={pendingQueue()}>
-						{(message, index) => (
-							<text
-								fg={
-									selectedQueued() === index()
-										? colors().info
-										: colors().primary
-								}
-								attributes={
-									selectedQueued() === index()
-										? createTextAttributes({bold: true})
-										: undefined
-								}
-							>
-								{selectedQueued() === index() ? '▸ ' : '  '}
-								(queued) {message.value}
-							</text>
-						)}
+						{(message, index) => {
+							const active = selectedQueued() === index();
+							return (
+								<box
+									flexDirection="row"
+									height={1}
+									backgroundColor={active ? activeRow().bg : undefined}
+									{...({
+										onMouseMove: () => setSelectedQueued(index()),
+										onMouseUp: () => {
+											setSelectedQueued(index());
+										},
+									} as any)}
+								>
+									<text
+										width={11}
+										fg={active ? activeRow().fg : colors().secondary}
+										attributes={active ? bold() : undefined}
+									>
+										{active ? '▸ ' : '  '}
+										{'(queued)'}
+									</text>
+									{/* Fixed-width tag cell (11 = `▸ (queued)`): the
+									    renderer TRIMS a text node's trailing space,
+									    so `(queued) ` + value glued into
+									    `(queued)feel`; a lone ' ' node and an empty
+									    width-1 box both vanish. The width reserves
+									    the cell (completion-row pattern), the next
+									    node starts after it. */}
+									<text fg={active ? activeRow().fg : colors().text}>
+										{message.value}
+									</text>
+								</box>
+							);
+						}}
 					</For>
 				</box>
 			</Show>
