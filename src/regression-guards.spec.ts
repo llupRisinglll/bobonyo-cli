@@ -1520,3 +1520,27 @@ describe('regression guards (COMPLETED attention popup)', () => {
 		);
 	});
 });
+
+describe('regression guards (interrupted-turn tool ghost)', () => {
+	test('every turn END settles any still-running tool rows (no ghost resurface)', () => {
+		const app = read('./app.tsx');
+		// The turn's finally block must settle running tool rows with their
+		// streamed output. A turn can end mid-tool (Esc interrupt / watchdog
+		// / provider error) and runBash keeps streaming into liveOutputs —
+		// without this, the leftover `running:true` message becomes a GHOST
+		// that resurfaces in the live region during the NEXT turn, stacked
+		// next to the new turn's identical command ("same bash twice").
+		const finallyBlock = app.slice(
+			app.indexOf('} finally {'),
+			app.indexOf('const recordUsage'),
+		);
+		expect(finallyBlock).toMatch(
+			/settleRunningToolRows\(prev, liveOutputs\(\)\)/,
+		);
+		expect(finallyBlock).toMatch(/setRunning\(false\)/);
+		// The helper lives in state and un-flags EVERY running message.
+		const state = read('./state.ts');
+		expect(state).toMatch(/export function settleRunningToolRows/);
+		expect(state).toMatch(/if \(!message\.running\) return message;/);
+	});
+});

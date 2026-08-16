@@ -526,6 +526,36 @@ export function appendAssistantMessage(
 	appendMessage({role: 'assistant', content, ...extra});
 }
 
+/**
+ * Settle every still-`running` tool message: a turn can end with a tool row
+ * left `running:true` (Esc interrupt / watchdog / provider error mid-tool —
+ * runBash keeps streaming output into liveOutputs after the turn dies).
+ * Left alone it becomes a GHOST: invisible while idle (the settled memo
+ * skips running rows and the live region is empty), then it RESURFACES in
+ * the live region during the NEXT turn — stacked next to the new turn's
+ * identical command, the "same bash printed twice while running" artifact.
+ * Each ghost is settled with whatever output streamed so the transcript is
+ * honest and nothing resurfaces. Pure, unit-tested.
+ */
+export function settleRunningToolRows(
+	messages: ChatMessage[],
+	liveOutputs: Record<string, string>,
+): ChatMessage[] {
+	return messages.map(message => {
+		if (!message.running) return message;
+		if (!message.tool) return {...message, running: false};
+		const streamed = message.toolId ? liveOutputs[message.toolId] : undefined;
+		return {
+			...message,
+			running: false,
+			tool: {
+				...message.tool,
+				output: streamed !== undefined ? streamed : message.tool.output,
+			},
+		};
+	});
+}
+
 export function appendInfo(content: string): void {
 	appendMessage({role: 'assistant', content, kind: 'info'});
 }

@@ -4,6 +4,7 @@ import {
 	compactingLabel,
 	glyphBlinkOn,
 	loadingDots,
+	settleRunningToolRows,
 	setAgentsOpen,
 	setCommandsOpen,
 	setConnectOpen,
@@ -140,5 +141,56 @@ describe('capDisplayMessages (lazy display buffer)', () => {
 		// the marker reports the extra dropped count.
 		expect(capped[1]!.role).not.toBe('tool');
 		expect(capped[0]!.content).toContain('4 earlier messages trimmed');
+	});
+});
+
+describe('settleRunningToolRows (interrupted-turn ghost settle)', () => {
+	const tool = (id: string, output = '') => ({
+		role: 'tool' as const,
+		content: `✦ Bash(${id})`,
+		running: true,
+		toolId: id,
+		tool: {name: 'execute_bash', detail: id, output},
+	});
+
+	test('a running tool message is settled with its STREAMED output', () => {
+		const messages = [
+			{role: 'user' as const, content: 'run'},
+			tool('call_1'),
+			{role: 'assistant' as const, content: 'done'},
+		];
+		const settled = settleRunningToolRows(messages, {call_1: 'line 1\nline 2'});
+		expect(settled[1]!.running).toBe(false);
+		expect(settled[1]!.tool!.output).toBe('line 1\nline 2');
+		// Other messages are untouched (identity preserved).
+		expect(settled[0]).toBe(messages[0]);
+		expect(settled[2]).toBe(messages[2]);
+	});
+
+	test('settled rows and non-tool rows pass through untouched', () => {
+		const done = {...tool('call_1'), running: false};
+		const messages = [done, {role: 'assistant' as const, content: 'x'}];
+		expect(settleRunningToolRows(messages, {})).toEqual(messages);
+	});
+
+	test('a running tool WITHOUT streamed output keeps its committed output', () => {
+		const messages = [tool('call_1', 'partial')];
+		const settled = settleRunningToolRows(messages, {});
+		expect(settled[0]!.running).toBe(false);
+		expect(settled[0]!.tool!.output).toBe('partial');
+	});
+
+	test('a running tool with NO toolId keeps its committed output', () => {
+		const m = {...tool('x'), toolId: undefined};
+		const settled = settleRunningToolRows([m], {});
+		expect(settled[0]!.running).toBe(false);
+		expect(settled[0]!.tool!.output).toBe('');
+	});
+
+	test('a running message WITHOUT a tool payload is only un-flagged', () => {
+		const m = {role: 'tool' as const, content: '✦ x', running: true};
+		const settled = settleRunningToolRows([m], {});
+		expect(settled[0]!.running).toBe(false);
+		expect(settled[0]).toEqual({role: 'tool', content: '✦ x', running: false});
 	});
 });

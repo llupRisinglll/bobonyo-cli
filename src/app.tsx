@@ -203,6 +203,7 @@ import {
 	thinkingActive,
 	thinkingMode,
 	running,
+	settleRunningToolRows,
 	setBusy,
 	setCancelling,
 	setActiveEndpoint,
@@ -2636,6 +2637,17 @@ export function App() {
 		} finally {
 			clearInterval(turnTimer);
 			if (watchdogTimer) clearTimeout(watchdogTimer);
+			// SETTLE ANY STILL-RUNNING TOOL ROWS. A turn can end with a tool
+			// message still `running:true` — Esc interrupt / watchdog /
+			// provider error mid-tool (runBash keeps streaming output into
+			// liveOutputs after the turn dies). Left alone it becomes a
+			// GHOST: invisible while idle (the settled memo skips running
+			// rows, the live region is empty), then it RESURFACES in the
+			// live region during the NEXT turn — stacked next to the new
+			// turn's identical command, the "same bash printed twice while
+			// running" the user saw. Settle them with whatever output
+			// streamed so the transcript is honest and no ghost survives.
+			setMessages(prev => settleRunningToolRows(prev, liveOutputs()));
 			setCancelling(false);
 			setRunning(false);
 			setBusy(false);
