@@ -1457,3 +1457,48 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/md=\{briefMarkdown\}/);
 	});
 });
+
+describe('regression guards (COMPLETED attention popup)', () => {
+	test('the popup is armed exactly at the two "Worked for" completion sites', () => {
+		const app = read('./app.tsx');
+		// The text-turn and tool-only-turn completions both arm the idle
+		// window right after the completion message is set.
+		const arms = app.match(/completionPopupController\.arm\(\)/g);
+		expect(arms?.length).toBe(2);
+	});
+
+	test('every completion POPUP lifecycle site is wired (arm/cancel/activity)', () => {
+		const app = read('./app.tsx');
+		// New turn, /clear, /undo and /resume all cancel the popup (a stale
+		// attention modal must never survive a conversation swap).
+		const cancels = app.match(/completionPopupController\.cancel\(\)/g);
+		expect(cancels?.length).toBe(4);
+		// ANY key is user activity (dismisses a visible popup / restarts the
+		// idle window) and the ROOT box tracks mouse move/down globally —
+		// "move the mouse to dismiss" works over the whole screen.
+		const activities = app.match(/completionPopupController\.activity\(\)/g);
+		expect(activities?.length).toBeGreaterThanOrEqual(3);
+		expect(app).toMatch(
+			/onMouseMove: \(\) => completionPopupController\.activity\(\)/,
+		);
+		expect(app).toMatch(
+			/onMouseDown: \(\) => completionPopupController\.activity\(\)/,
+		);
+	});
+
+	test('the popup component dismisses on mouse AND key without claiming keys', () => {
+		const src = read('./components/completion-popup.tsx');
+		expect(src).toContain('✓ COMPLETED');
+		expect(src).toMatch(/onMouseMove: \(\) => props\.onDismiss\(\)/);
+		expect(src).toMatch(/onMouseDown: \(\) => props\.onDismiss\(\)/);
+		expect(src).toMatch(/onMouseUp: \(\) => props\.onDismiss\(\)/);
+		expect(src).toMatch(/onMouseScroll: \(\) => props\.onDismiss\(\)/);
+		// The key dismiss must NOT claim the key: no preventDefault /
+		// stopPropagation inside the useKeyboard callback, so the next prompt
+		// can be typed immediately.
+		expect(src).not.toMatch(/preventDefault|stopPropagation/);
+		expect(src).toMatch(
+			/useKeyboard\(\(\) => \{[\s\S]*?props\.onDismiss\(\);[\s\S]*?\}\);/,
+		);
+	});
+});

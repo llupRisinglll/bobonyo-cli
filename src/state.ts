@@ -411,6 +411,13 @@ export const [completionTone, setCompletionTone] = createSignal<
 	'default' | 'success'
 >('default');
 /**
+ * COMPLETED attention modal: a centered success card shown AFTER a task
+ * finishes while the user is idle (no mouse movement for the idle window).
+ * Any mouse move / click / key dismisses it. The controller lives in
+ * completion-popup.ts (unit-tested); this signal drives the render.
+ */
+export const [completionPopup, setCompletionPopup] = createSignal(false);
+/**
  * True while an LLM context compaction is running (a separate summarization
  * request that may take a while). Renders a TRANSIENT centered row at the
  * bottom of the transcript (breakline above, animated dots, secondary), so

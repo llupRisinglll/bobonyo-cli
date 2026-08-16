@@ -149,6 +149,11 @@ import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
 
 const VERSION = '0.1.0';
+import {CompletionPopup} from './components/completion-popup';
+import {
+	COMPLETION_POPUP_IDLE_MS,
+	createCompletionPopupController,
+} from './completion-popup';
 import {
 	addPR,
 	activeAgents,
@@ -169,6 +174,8 @@ import {
 	contextPercent,
 	completionMessage,
 	completionTone,
+	completionPopup,
+	setCompletionPopup,
 	commandsOpen,
 	setCommandsOpen,
 	connectOpen,
@@ -369,6 +376,16 @@ export function App() {
 	let abortRef: AbortController | null = null;
 	let exitConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 	let resumeNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+	// COMPLETED attention modal: a finished task arms an idle window; the
+	// popup shows only when the user has NOT moved the mouse (or pressed a
+	// key) for the whole window, and the FIRST activity dismisses it.
+	// (createCompletionPopupController is pure + unit-tested.)
+	const completionPopupController = createCompletionPopupController(
+		{setTimeout, clearTimeout},
+		COMPLETION_POPUP_IDLE_MS,
+		() => setCompletionPopup(true),
+		() => setCompletionPopup(false),
+	);
 	let currentSession: SessionData | null = null;
 	let interruptedRef = false;
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
@@ -731,6 +748,8 @@ export function App() {
 		abortRef?.abort();
 		setInput('');
 		setCompletionMessage('');
+		// /clear starts a fresh conversation: stop the COMPLETED popup.
+		completionPopupController.cancel();
 		setTasks([]);
 		setSettingsOpen(false);
 		setStatusOpen(false);
@@ -1057,6 +1076,11 @@ export function App() {
 	};
 
 	useKeyboard(event => {
+		// COMPLETED popup: ANY key counts as user activity — dismisses a
+		// visible popup, or restarts the idle window while armed. Never
+		// claims the key (no preventDefault/stopPropagation), so typing the
+		// next prompt works immediately.
+		completionPopupController.activity();
 		// Ctrl+P opens the settings modal from anywhere (parity: the reference
 		// command-palette shortcut).
 		if (event.ctrl && event.name === 'p') {
@@ -1882,6 +1906,8 @@ export function App() {
 		setStreaming('');
 		setCompletionMessage('');
 		setCompletionTone('default');
+		// A new turn starts: stop the COMPLETED popup (armed or visible).
+		completionPopupController.cancel();
 		setReasoning('');
 		setRunning(true);
 		setTurnElapsed(0);
@@ -2115,6 +2141,9 @@ export function App() {
 									: '') +
 								(cacheLabel ? ` · ${cacheLabel}` : ''),
 						);
+						// COMPLETED attention modal: a finished task arms the
+						// idle window (shows only after a full idle period).
+						completionPopupController.arm();
 						capturePRs(result.text);
 						// Keep the LOCAL history (what the provider saw) in
 						// sync, the post-loop `setContext(history)` below is
@@ -2553,6 +2582,9 @@ export function App() {
 					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
 						(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
 				);
+				// COMPLETED attention modal (tool-only turn path): arm the
+				// idle window exactly like the text-turn completion.
+				completionPopupController.arm();
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -2795,6 +2827,8 @@ export function App() {
 			appendInfo('Nothing to undo yet.');
 			return;
 		}
+		// Undo starts a new exchange: stop the COMPLETED popup.
+		completionPopupController.cancel();
 		setMessages(keptMessages);
 		setContext(keptContext);
 		// openclaude-rewind parity: restore the files the undone exchange
@@ -2831,6 +2865,8 @@ export function App() {
 			appendInfo('Cannot resume while a turn is running.');
 			return;
 		}
+		// Resuming swaps the conversation: stop the COMPLETED popup.
+		completionPopupController.cancel();
 		if (!ref) {
 			setResumeOpen(true);
 			return;
@@ -3552,6 +3588,14 @@ export function App() {
 			flexShrink={1}
 			height="100%"
 			paddingX={1}
+			{...({
+				// COMPLETED popup idle detection: EVERY mouse move/click
+				// anywhere in the app bubbles to the root — dismisses a
+				// visible popup (the user came back) or restarts the idle
+				// window while a completion is armed.
+				onMouseMove: () => completionPopupController.activity(),
+				onMouseDown: () => completionPopupController.activity(),
+			} as any)}
 		>
 			<History
 				height={historyHeight()}
@@ -3777,6 +3821,16 @@ export function App() {
 						setEffortOpen(false);
 					}}
 					onClose={() => setEffortOpen(false)}
+				/>
+			</Show>
+			{/* COMPLETED attention modal: a centered success card shown AFTER
+			    a task finishes while the user is idle. The FIRST mouse move
+			    (or key / click) dismisses it — any activity routes through
+			    the controller. */}
+			<Show when={completionPopup()}>
+				<CompletionPopup
+					message={completionMessage()}
+					onDismiss={() => completionPopupController.activity()}
 				/>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference
