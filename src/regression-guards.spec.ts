@@ -1497,6 +1497,16 @@ describe('regression guards (COMPLETED attention popup)', () => {
 			/<text fg=\{colors\(\)\.primary\} attributes=\{bold\(\)\}>/,
 		);
 		expect(src).not.toMatch(/colors\(\)\.success/);
+		// The card centers its content (title + message) — the message is
+		// the payload of an attention grab.
+		expect(src).toMatch(/alignItems="center"/);
+		// ONE combined dismiss hint covers BOTH paths (any key OR mouse
+		// movement); the separate per-path hints and any ESC mention are
+		// redundant and banned.
+		expect(src).toMatch(/move the mouse or press any key to dismiss/);
+		expect(src).not.toMatch(/press any key to continue/);
+		expect(src).not.toMatch(/move the mouse to dismiss/);
+		expect(src).not.toMatch(/[Ee]sc\b/);
 		expect(src).toMatch(/onMouseMove: \(\) => props\.onDismiss\(\)/);
 		expect(src).toMatch(/onMouseDown: \(\) => props\.onDismiss\(\)/);
 		expect(src).toMatch(/onMouseUp: \(\) => props\.onDismiss\(\)/);

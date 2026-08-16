@@ -33,8 +33,15 @@ describe('CompletionPopup (COMPLETED attention modal)', () => {
 		const frame = setup.captureSpans();
 		expect(frameHas(frame, 'COMPLETED')).toBe(true);
 		expect(frameHas(frame, 'Worked for a snappy 16s.')).toBe(true);
-		// The dismiss hint tells the user how to get back.
-		expect(frameHas(frame, 'move the mouse to dismiss')).toBe(true);
+		// ONE combined dismiss hint covers BOTH dismissal paths (any key OR
+		// mouse movement) — no separate ESC/key line is needed.
+		expect(frameHas(frame, 'move the mouse or press any key to dismiss')).toBe(
+			true,
+		);
+		// The redundant per-path hints are GONE.
+		expect(frameHas(frame, 'move the mouse to dismiss')).toBe(false);
+		expect(frameHas(frame, 'press any key to continue')).toBe(false);
+		expect(frameHas(frame, 'Esc')).toBe(false);
 		setup.renderer.destroy();
 	});
 

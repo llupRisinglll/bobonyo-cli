@@ -63,21 +63,21 @@ export function CompletionPopup(props: {
 				paddingX={2}
 				paddingY={1}
 				flexDirection="column"
+				alignItems="center"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						✓ COMPLETED
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						move the mouse to dismiss
-					</text>
-				</box>
+				<text fg={colors().primary} attributes={bold()}>
+					✓ COMPLETED
+				</text>
 				<box height={1} />
+				{/* The completion line ("✦ Worked for …") sits CENTERED — the
+				    card is an attention grab, the message is the payload. */}
 				<text fg={colors().text}>{props.message}</text>
 				<box flexGrow={1} />
+				{/* ONE combined dismiss hint: it already says both dismissal
+				    paths (any key OR mouse movement), so no separate ESC/key
+				    line is needed. */}
 				<text fg={colors().secondary} attributes={dim()}>
-					press any key to continue
+					move the mouse or press any key to dismiss
 				</text>
 			</box>
 		</box>
