@@ -35,11 +35,7 @@ describe('model modal provider header + paste', () => {
 			() => (
 				<ModelModal
 					providers={[
-						provider(
-							'codex',
-							['gpt-5.4-mini'],
-							'https://api.openai.com/v1',
-						),
+						provider('codex', ['gpt-5.4-mini'], 'https://api.openai.com/v1'),
 						provider(
 							'deepseek',
 							['deepseek-v4-flash'],
@@ -132,7 +128,7 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 					providers={[go('brian'), go('mika')]}
 					currentProvider="brian"
 					currentModel="minimax-m3"
-					onSelect={(providerId) => {
+					onSelect={providerId => {
 						selected = providerId;
 					}}
 					onConnectProvider={() => {}}
@@ -146,18 +142,25 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 			const {mockInput} = setup;
 			await setup.flush();
 
-			// ONE group: `OpenCode Go - brian, mika` (both names listed).
+			// ONE group: `OpenCode - Go (Subscription)` — the merged header
+			// names the TIER, not the raw account ids.
 			let frame = setup.captureSpans();
-			expect(frameHas(frame, 'OpenCode Go')).toBe(true);
-			expect(frameHas(frame, '- brian, mika')).toBe(true);
+			expect(frameHas(frame, 'OpenCode')).toBe(true);
+			expect(frameHas(frame, '- Go (Subscription)')).toBe(true);
 
-			// Selecting the model opens the ACCOUNT PICKER.
+			// Selecting the model opens the ACCOUNT PICKER (the Zen-vs-Go
+			// choice; renamed accounts ride the detail line).
 			mockInput.pressEnter();
 			await setup.flush();
 			frame = setup.captureSpans();
 			expect(frameHas(frame, 'Select provider')).toBe(true);
-			expect(frameHas(frame, 'brian')).toBe(true);
-			expect(frameHas(frame, 'mika')).toBe(true);
+			expect(frameHas(frame, 'OpenCode Go (Subscription)')).toBe(true);
+			expect(frameHas(frame, 'brian · https://opencode.ai/zen/go/v1')).toBe(
+				true,
+			);
+			expect(frameHas(frame, 'mika · https://opencode.ai/zen/go/v1')).toBe(
+				true,
+			);
 
 			// Pick the second account (mika) → effort step → select.
 			mockInput.pressArrow('down');
@@ -182,7 +185,7 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 					providers={[go('brian'), go('mika')]}
 					currentProvider="brian"
 					currentModel="minimax-m3"
-					onSelect={(providerId) => {
+					onSelect={providerId => {
 						selected = providerId;
 					}}
 					onConnectProvider={() => {}}

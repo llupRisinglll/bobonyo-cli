@@ -1213,8 +1213,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('model modal header renders user + real name WITHOUT parentheses', () => {
 		// The category header renders the REAL provider title plus the
-		// user-given connection names (`OpenCode Go - brian, mika`) and must
-		// not wrap the names in `(...)`.
+		// user-given connection names (`DeepSeek - deepseek`, or the TIER
+		// list for the merged OpenCode group) and must not wrap the names
+		// in `(...)`.
 		const modal = read('./components/model-modal.tsx');
 		expect(modal).toMatch(/providerDisplayName\(line\.provider\)/);
 		expect(modal).toMatch(/export function providerHeaderParts/);

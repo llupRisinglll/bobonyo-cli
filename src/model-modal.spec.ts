@@ -1,10 +1,12 @@
 import {describe, expect, test} from 'bun:test';
 import {
 	connectProviderShortcut,
+	connectionPickerRow,
 	groupProviders,
 	initialModelRowIndex,
 	modelWithProvider,
 	nextModelCursor,
+	openCodeTierLabel,
 	providerDisplayName,
 	providerGroupKey,
 	providerHeaderParts,
@@ -152,7 +154,7 @@ describe('groupProviders (ONE list per real provider)', () => {
 			go('mika', ['kimi-k3', 'glm-5.2']),
 		]);
 		expect(groups).toHaveLength(1);
-		expect(groups[0]!.title).toBe('OpenCode Go');
+		expect(groups[0]!.title).toBe('OpenCode');
 		expect(groups[0]!.connections.map(connection => connection.id)).toEqual([
 			'brian',
 			'mika',
@@ -193,6 +195,7 @@ describe('groupProviders (ONE list per real provider)', () => {
 		]);
 		// ONE merged group — not two duplicate-looking OpenCode lists.
 		expect(groups).toHaveLength(1);
+		expect(groups[0]!.title).toBe('OpenCode');
 		expect(groups[0]!.connections.map(connection => connection.id)).toEqual([
 			'brian',
 			'mika',
@@ -222,6 +225,60 @@ describe('groupProviders (ONE list per real provider)', () => {
 	});
 });
 
+describe('openCodeTierLabel / connectionPickerRow (Zen vs Go tier picker)', () => {
+	const zen = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/v1',
+		models: [],
+		modelEfforts: {},
+	});
+	const go = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models: [],
+		modelEfforts: {},
+	});
+	test('labels the tiers Zen (API usage) / Go (Subscription)', () => {
+		expect(openCodeTierLabel(zen('opencode-zen'))).toBe('Zen (API usage)');
+		expect(openCodeTierLabel(go('brian'))).toBe('Go (Subscription)');
+	});
+	test('non-OpenCode providers fall back to the user name', () => {
+		expect(
+			openCodeTierLabel({
+				id: 'x',
+				name: 'x',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('x');
+	});
+	test('the picker row names the tier; a renamed account rides the detail line', () => {
+		expect(connectionPickerRow(go('brian'))).toEqual({
+			label: 'OpenCode Go (Subscription)',
+			detail: 'brian · https://opencode.ai/zen/go/v1',
+		});
+		expect(connectionPickerRow(zen('opencode-zen'))).toEqual({
+			label: 'OpenCode Zen (API usage)',
+			detail: 'https://opencode.ai/zen/v1',
+		});
+	});
+	test('non-OpenCode picker rows keep the user-given name + endpoint', () => {
+		expect(
+			connectionPickerRow({
+				id: 'my-gateway',
+				name: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toEqual({
+			label: 'my-gateway',
+			detail: 'https://my-gateway.example/v1',
+		});
+	});
+});
 describe('sameProviderGroup (account-swap detection)', () => {
 	const go = (name: string) => ({
 		id: name,

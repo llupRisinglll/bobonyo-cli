@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
+import {For} from 'solid-js';
 import {colors} from '../theme';
 
 /**
@@ -28,8 +29,21 @@ export function CompletionPopup(props: {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const cardWidth = () => Math.min(56, Math.max(44, dims().width - 8));
-	const cardHeight = 8;
-	const cardY = () => Math.max(2, Math.floor((dims().height - cardHeight) / 2));
+	/**
+	 * The completion line can carry ` · `-joined stat segments (tokens,
+	 * cache rate). Each segment becomes its OWN line so a long message never
+	 * wraps mid-segment and crowds the dismiss hint; the card grows to fit
+	 * title + hint + every segment with a gap between each.
+	 */
+	const messageParts = () =>
+		props.message
+			.split(' · ')
+			.map(part => part.trim())
+			.filter(Boolean);
+	const cardHeight = () =>
+		Math.min(dims().height - 2, Math.max(8, messageParts().length * 2 + 5));
+	const cardY = () =>
+		Math.max(2, Math.floor((dims().height - cardHeight()) / 2));
 	useKeyboard(() => {
 		// Any key dismisses the attention modal — the key is NOT claimed
 		// (no preventDefault/stopPropagation), so it continues to the input.
@@ -56,7 +70,7 @@ export function CompletionPopup(props: {
 		>
 			<box
 				width={cardWidth()}
-				height={cardHeight}
+				height={cardHeight()}
 				backgroundColor={colors().base}
 				borderStyle="rounded"
 				borderColor={colors().primary}
@@ -69,9 +83,18 @@ export function CompletionPopup(props: {
 					✓ COMPLETED
 				</text>
 				<box height={1} />
-				{/* The completion line ("✦ Worked for …") sits CENTERED — the
-				    card is an attention grab, the message is the payload. */}
-				<text fg={colors().text}>{props.message}</text>
+				{/* The completion line ("✦ Worked for …") sits CENTERED, ONE
+				    segment per line (each followed by a gap) — a long message
+				    with token/cache stats stays readable and never crowds the
+				    dismiss hint. */}
+				<For each={messageParts()}>
+					{part => (
+						<box flexDirection="column" alignItems="center">
+							<text fg={colors().text}>{part}</text>
+							<box height={1} />
+						</box>
+					)}
+				</For>
 				<box flexGrow={1} />
 				{/* ONE combined dismiss hint: it already says both dismissal
 				    paths (any key OR mouse movement), so no separate ESC/key

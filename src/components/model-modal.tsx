@@ -75,6 +75,48 @@ export function providerHeaderParts(provider: ModelProvider): {
 	return {user, real: real && real !== user ? real : undefined};
 }
 
+/**
+ * Tier label for an OpenCode connection inside the merged "OpenCode" group:
+ * Zen (API usage) vs Go (Subscription) — the two share one opencode.ai
+ * account/API key, so the group header and the account picker must tell the
+ * tiers apart. Non-OpenCode connections fall back to their user-given name.
+ * Pure, unit-tested.
+ */
+export function openCodeTierLabel(provider: ModelProvider): string {
+	const preset = provider.baseUrl
+		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
+		: undefined;
+	if (preset?.id === 'opencode-zen') return 'Zen (API usage)';
+	if (preset?.id === 'opencode-go') return 'Go (Subscription)';
+	return provider.name || provider.id;
+}
+
+/**
+ * Account-picker row for one connection: the label names the TIER for
+ * OpenCode (the Zen/Go choice is the whole point of the picker — the
+ * account name rides on the detail line when it differs from the default),
+ * other providers show the user-given name with the endpoint as before.
+ * Pure, unit-tested.
+ */
+export function connectionPickerRow(provider: ModelProvider): {
+	label: string;
+	detail: string;
+} {
+	const preset = provider.baseUrl
+		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
+		: undefined;
+	if (preset?.id === 'opencode-zen' || preset?.id === 'opencode-go') {
+		const account = provider.name || provider.id;
+		const accountPart =
+			account.toLowerCase() !== preset.id ? `${account} · ` : '';
+		return {
+			label: `OpenCode ${openCodeTierLabel(provider)}`,
+			detail: `${accountPart}${provider.baseUrl ?? ''}`,
+		};
+	}
+	return {label: provider.name || provider.id, detail: provider.baseUrl ?? ''};
+}
+
 /** REAL provider identity used to merge multiple connections (preset id). */
 export function providerGroupKey(provider: ModelProvider): string {
 	const preset = provider.baseUrl
@@ -104,7 +146,10 @@ export function groupProviders(providers: ModelProvider[]): ProviderGroup[] {
 		if (!group) {
 			group = {
 				providerId: key,
-				title: providerDisplayName(provider),
+				// The merged OpenCode group reads just "OpenCode": Zen and Go
+				// share one account, the TIER is chosen per connection in the
+				// account picker (openCodeTierLabel / connectionPickerRow).
+				title: key === 'opencode' ? 'OpenCode' : providerDisplayName(provider),
 				connections: [],
 				models: [],
 			};
@@ -957,45 +1002,59 @@ export function ModelModal(props: {
 											: [];
 									})()}
 								>
-									{({connection, active}) => (
-										<box
-											flexDirection="row"
-											height={1}
-											backgroundColor={active ? activeRow().bg : undefined}
-											{...({
-												onMouseMove: () =>
-													setConnectionIndex(
-														connectionStep()?.connections.indexOf(connection) ??
-															0,
-													),
-												onMouseUp: () => {
-													const step = connectionStep();
-													if (!step) return;
-													const chosen = connection;
-													setConnectionStep(null);
-													const current = providerForId(props.currentProvider);
-													const sameGroup = sameProviderGroup(chosen, current);
-													startEffort(
-														chosen,
-														step.model,
-														sameGroup && current?.id !== chosen.id,
-													);
-												},
-											} as any)}
-										>
-											<text
-												fg={active ? activeRow().fg : colors().text}
-												attributes={active ? bold() : undefined}
+									{({connection, active}) => {
+										// OpenCode rows name the TIER (Zen / Go)
+										// so the picker is a Zen-vs-Go choice;
+										// the account name + endpoint ride the
+										// detail line. Other providers keep the
+										// user-given name as before.
+										const row = connectionPickerRow(connection);
+										return (
+											<box
+												flexDirection="row"
+												height={1}
+												backgroundColor={active ? activeRow().bg : undefined}
+												{...({
+													onMouseMove: () =>
+														setConnectionIndex(
+															connectionStep()?.connections.indexOf(
+																connection,
+															) ?? 0,
+														),
+													onMouseUp: () => {
+														const step = connectionStep();
+														if (!step) return;
+														const chosen = connection;
+														setConnectionStep(null);
+														const current = providerForId(
+															props.currentProvider,
+														);
+														const sameGroup = sameProviderGroup(
+															chosen,
+															current,
+														);
+														startEffort(
+															chosen,
+															step.model,
+															sameGroup && current?.id !== chosen.id,
+														);
+													},
+												} as any)}
 											>
-												{active ? '❯ ' : '  '}
-												{connection.name || connection.id}
-											</text>
-											<box flexGrow={1} />
-											<text fg={colors().secondary} attributes={dim()}>
-												{connection.baseUrl ?? ''}
-											</text>
-										</box>
-									)}
+												<text
+													fg={active ? activeRow().fg : colors().text}
+													attributes={active ? bold() : undefined}
+												>
+													{active ? '❯ ' : '  '}
+													{row.label}
+												</text>
+												<box flexGrow={1} />
+												<text fg={colors().secondary} attributes={dim()}>
+													{row.detail}
+												</text>
+											</box>
+										);
+									}}
 								</For>
 								<box height={1} />
 								<text fg={colors().secondary} attributes={dim()}>
@@ -1067,11 +1126,27 @@ export function ModelModal(props: {
 								);
 							}
 							if (line.kind === 'provider') {
-								const names = (line.connections ?? [])
-									.map(connection => connection.name || connection.id)
-									.join(', ');
+								// The merged OpenCode group lists its TIERS
+								// (Zen / Go) instead of the raw connection
+								// names — they share one account, the tier is
+								// the meaningful distinction. Other groups keep
+								// the user-given names (brian, mika).
+								const isOpenCode = line.provider
+									? providerGroupKey(line.provider) === 'opencode'
+									: false;
+								const names = isOpenCode
+									? [
+											...new Set(
+												(line.connections ?? []).map(openCodeTierLabel),
+											),
+										].join(', ')
+									: (line.connections ?? [])
+											.map(connection => connection.name || connection.id)
+											.join(', ');
 								const title = line.provider
-									? providerDisplayName(line.provider)
+									? providerGroupKey(line.provider) === 'opencode'
+										? 'OpenCode'
+										: providerDisplayName(line.provider)
 									: '';
 								return (
 									<box flexDirection="row" height={1}>

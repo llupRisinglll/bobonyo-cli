@@ -106,4 +106,39 @@ describe('CompletionPopup (COMPLETED attention modal)', () => {
 		expect(dismissed).toBeGreaterThanOrEqual(1);
 		setup.renderer.destroy();
 	});
+
+	test('a long message splits its ` · ` stats onto separate SPACED lines', async () => {
+		const setup = await testRender(
+			() => (
+				<CompletionPopup
+					message="✦ Worked for a keen 0s. · 1.2K tokens · 80% hit"
+					onDismiss={() => {}}
+				/>
+			),
+			{width: 60, height: 20},
+		);
+		await setup.flush();
+		const frame = setup.captureSpans();
+		// Each segment lands on its OWN line — never a cluttered single
+		// line wrapping mid-segment into the dismiss hint.
+		const trimmed = frame.lines.map(line =>
+			line.spans
+				.map(span => span.text)
+				.join('')
+				.trim(),
+		);
+		expect(trimmed.some(line => line.includes('✦ Worked for a keen 0s.'))).toBe(
+			true,
+		);
+		expect(trimmed.some(line => line.includes('1.2K tokens'))).toBe(true);
+		expect(trimmed.some(line => line.includes('80% hit'))).toBe(true);
+		expect(
+			trimmed.some(line =>
+				line.includes('move the mouse or press any key to dismiss'),
+			),
+		).toBe(true);
+		// The joined single line (and any `·` separator) is GONE.
+		expect(trimmed.some(line => line.includes('·'))).toBe(false);
+		setup.renderer.destroy();
+	});
 });
