@@ -55,7 +55,13 @@ export function MarkdownBrief(props: {
 			flexDirection="row"
 			backgroundColor={props.hovered ? hoverBg : undefined}
 		>
-			<text fg={props.glyph as never}>✦ </text>
+			<text fg={props.glyph as never}>✦</text>
+			{/* REAL 2-column gap after the diamond (reply parity: the reply
+			    container pads its content 2 columns after `✦`). A trailing
+			    space inside the text cell gets trimmed by the renderer, so
+			    the gap is a real spacer box — `✦ ` (one trailing space)
+			    rendered the text ONE column too close to the diamond. */}
+			<box width={2} />
 			<box flexGrow={1} minWidth={0}>
 				<markdown
 					content={props.text}

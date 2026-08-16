@@ -64,20 +64,19 @@ describe('createCompletionPopupController (COMPLETED idle popup)', () => {
 		expect(shown.length).toBe(1);
 	});
 
-	test('mouse activity DURING the window restarts it (the user is active)', () => {
+	test('mouse activity DURING the window CANCELS it (the user is present)', () => {
 		const {clock, controller, shown} = makeController();
 		controller.arm();
-		// The user moves the mouse 30ms in — the idle window restarts, so
-		// the popup must NOT show at the original 100ms mark.
+		// The user moves the mouse 30ms in — they are clearly present, so
+		// the arm is cancelled and the popup NEVER shows (it must not pop up
+		// in front of an active user the moment they pause).
 		clock.tick(30);
 		controller.activity();
-		clock.tick(70); // 100ms total — old deadline, NOT due anymore
+		expect(controller.armed).toBe(false);
+		// Even a long silence afterwards must not resurrect it.
+		clock.tick(1000);
 		expect(controller.visible).toBe(false);
 		expect(shown.length).toBe(0);
-		// Only a full window AFTER the last activity shows it.
-		clock.tick(30); // 130ms total = 100ms after the restart
-		expect(controller.visible).toBe(true);
-		expect(shown.length).toBe(1);
 	});
 
 	test('the FIRST activity dismisses a visible popup (user came back)', () => {

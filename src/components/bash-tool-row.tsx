@@ -65,9 +65,10 @@ export function BashToolRow(props: {
 					</text>
 				</Show>
 				{/* With a brief, the box indents to the brief's text column
-				    (`✦ ` = 2 cols) so the border lines up under the brief. */}
+				    (`✦` + the 2-col gap = 3 cols) so the border lines up
+				    under the brief text. */}
 				<Show when={props.brief || props.batchBriefed}>
-					<box width={2} />
+					<box width={3} />
 				</Show>
 				{/* The bordered box: border + title drawn by OpenTUI, so all
 				    wrapped content stays inside by construction. */}

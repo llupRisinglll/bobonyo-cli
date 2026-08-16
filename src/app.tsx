@@ -1079,9 +1079,10 @@ export function App() {
 
 	useKeyboard(event => {
 		// COMPLETED popup: ANY key counts as user activity — dismisses a
-		// visible popup, or restarts the idle window while armed. Never
-		// claims the key (no preventDefault/stopPropagation), so typing the
-		// next prompt works immediately.
+		// visible popup, or CANCELS an armed one (the user is present, so
+		// the attention modal must never appear). Never claims the key (no
+		// preventDefault/stopPropagation), so typing the next prompt works
+		// immediately.
 		completionPopupController.activity();
 		// Ctrl+P opens the settings modal from anywhere (parity: the reference
 		// command-palette shortcut).
@@ -3613,8 +3614,8 @@ export function App() {
 			{...({
 				// COMPLETED popup idle detection: EVERY mouse move/click
 				// anywhere in the app bubbles to the root — dismisses a
-				// visible popup (the user came back) or restarts the idle
-				// window while a completion is armed.
+				// visible popup, or CANCELS an armed one (the user moved the
+				// mouse after the task finished = present = never show).
 				onMouseMove: () => completionPopupController.activity(),
 				onMouseDown: () => completionPopupController.activity(),
 			} as any)}
@@ -3854,6 +3855,25 @@ export function App() {
 					message={completionMessage()}
 					onDismiss={() => completionPopupController.activity()}
 				/>
+			</Show>
+			{/* The `✦ Worked for …` line ABOVE the input stays visible while
+			    the COMPLETED modal is up: the popup's full-screen backdrop
+			    would dim it, and the user asked to retain the message above
+			    the input. Render a bright copy at the EXACT same position
+			    (the completion line is the first row of the InputBox column,
+			    directly under the history + its gap) with a z-index above
+			    the popup's backdrop (3000) — only while the popup is
+			    visible, so nothing duplicates in normal operation. */}
+			<Show when={completionPopup() && completionMessage()}>
+				<box
+					position="absolute"
+					top={historyHeight() + 1}
+					left={1}
+					width={terminalDimensions().width ?? 80}
+					zIndex={3100}
+				>
+					<text fg={colors().secondary}>{completionMessage()}</text>
+				</box>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference
 			    "copied to clipboard" toast), setting changes (model /

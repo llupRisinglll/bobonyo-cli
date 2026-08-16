@@ -1544,3 +1544,49 @@ describe('regression guards (interrupted-turn tool ghost)', () => {
 		expect(state).toMatch(/if \(!message\.running\) return message;/);
 	});
 });
+
+describe('regression guards (brief gap + COMPLETED modal only-when-idle)', () => {
+	test('the pre-tool brief keeps a REAL 2-column gap after the diamond', () => {
+		// The reply container pads its content 2 columns after `✦`; the
+		// brief rendered `✦ ` (ONE trailing space inside the text cell) so
+		// its text sat one column too close to the diamond. The gap must be
+		// a real spacer box (trailing spaces get trimmed by the renderer).
+		const brief = read('./components/markdown-brief.tsx');
+		expect(brief).toMatch(/<text fg=\{props\.glyph as never\}>✦<\/text>/);
+		expect(brief).toMatch(/<box width=\{2\} \/>/);
+		expect(brief).not.toMatch(/✦ <\/text>/);
+		// The bordered tool box (bash) and the file row indent to the NEW
+		// text column (`✦` + 2-col gap = 3 cols) so the border still lines
+		// up under the brief text.
+		expect(read('./components/bash-tool-row.tsx')).toMatch(
+			/<box width=\{3\} \/>/,
+		);
+		const fileRow = read('./components/file-tool-row.tsx');
+		expect(fileRow).toMatch(/<box width=\{3\} \/>/);
+	});
+
+	test('COMPLETED popup: activity while ARMED cancels (never shows to an active user)', () => {
+		const src = read('./completion-popup.ts');
+		// activity() when armed must DISARM + clear the timer — a restart
+		// would show the modal the moment an active user pauses briefly.
+		expect(src).toMatch(
+			/if \(armed\) \{\n\s*armed = false;\n\s*clearTimer\(\);/,
+		);
+		// The restart path must be gone from activity().
+		const activity = src.slice(src.indexOf('activity(): void {'));
+		expect(activity).not.toMatch(/startIdleWindow\(\)/);
+	});
+
+	test('the completion line stays VISIBLE above the input while the popup is up', () => {
+		const app = read('./app.tsx');
+		// A bright copy renders at the completion line's position with a
+		// z-index above the popup's backdrop (3000), only while the popup is
+		// visible — the backdrop must never hide the `✦ Worked for …` line.
+		expect(app).toMatch(/completionPopup\(\) && completionMessage\(\)/);
+		expect(app).toMatch(/top=\{historyHeight\(\) \+ 1\}/);
+		expect(app).toMatch(/zIndex=\{3100\}/);
+		expect(app).toMatch(
+			/fg=\{colors\(\)\.secondary\}>\{completionMessage\(\)\}/,
+		);
+	});
+});

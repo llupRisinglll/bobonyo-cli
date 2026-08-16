@@ -58,7 +58,12 @@ export function createCompletionPopupController(
 		},
 		/**
 		 * User activity (mouse move, click, keypress): dismiss when the
-		 * popup is up, otherwise restart the idle window (still not idle).
+		 * popup is up; CANCEL the arm while it is still waiting. The popup
+		 * only appears after a FULLY SILENT idle window — the user pressing
+		 * keys or moving the mouse after the task finished means they are
+		 * present, so the attention modal must never pop up in front of an
+		 * active user (a restart-on-activity would show it the moment they
+		 * pause briefly).
 		 */
 		activity(): void {
 			if (visible) {
@@ -68,7 +73,10 @@ export function createCompletionPopupController(
 				onHide();
 				return;
 			}
-			if (armed) startIdleWindow();
+			if (armed) {
+				armed = false;
+				clearTimer();
+			}
 		},
 		/** New turn / /clear / undo: stop watching, hide. */
 		cancel(): void {

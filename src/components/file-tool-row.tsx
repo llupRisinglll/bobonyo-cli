@@ -68,10 +68,10 @@ export function FileToolRow(props: {
 					backgroundColor={props.hovered ? hoverBg : undefined}
 				>
 					{/* With a brief, the row indents to the brief's text
-					    column (`✦ ` = 2 cols) and the header chunk's own
-					    glyph is stripped — one glyph per batch. */}
+					    column (`✦` + the 2-col gap = 3 cols) and the header
+					    chunk's own glyph is stripped — one glyph per batch. */}
 					<Show when={briefed() || props.batchBriefed}>
-						<box width={2} />
+						<box width={3} />
 					</Show>
 					<text>
 						<For each={props.header}>
@@ -104,7 +104,7 @@ export function FileToolRow(props: {
 						backgroundColor={props.hovered ? hoverBg : undefined}
 					>
 						<Show when={briefed() || props.batchBriefed}>
-							<box width={2} />
+							<box width={3} />
 						</Show>
 						<text>
 							<For each={line}>
