@@ -32,9 +32,14 @@ const read = (rel: string): string =>
 		.replace(/^\s*\/\/.*$/gm, '');
 
 describe('regression guards (foolproof live rows + hover)', () => {
-	test('LiveToolRows renders plain text cells, never markdown', () => {
+	test('LiveToolRows renders plain text cells, never markdown (brief is exempt)', () => {
 		const src = read('./components/live-tool-rows.tsx');
-		expect(src).not.toMatch(/<markdown|MarkdownRenderable/i);
+		// MarkdownBrief is the brief-specific wrapper (not the full markdown
+		// pipeline); the generic live row imports it to paint the pre-tool
+		// brief identically to the settled row. The body must never use
+		// <markdown> directly or MarkdownRenderable.
+		expect(src).not.toMatch(/<markdown(?!Brief)|MarkdownRenderable/i);
+		expect(src).toMatch(/MarkdownBrief/);
 		expect(src).toMatch(/<text/);
 		// Chunk colors ride as SPANS inside ONE <text> per line, never as a
 		// per-cell <text> (each <text> is a native TextBufferRenderable with

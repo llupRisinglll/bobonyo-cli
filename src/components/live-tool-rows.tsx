@@ -6,7 +6,9 @@ import {colors} from '../theme';
 import {glyphBlinkOn, spinnerFrame} from '../state';
 import {BashToolRow} from './bash-tool-row';
 import {FileToolRow} from './file-tool-row';
-import type {MarkdownBriefRenderer} from './markdown-brief';
+import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
+import {themeColors} from '../highlight';
+import {settledGlyphColor} from '../row-highlight';
 
 /**
  * FOOLPROOF live tool-row renderer — the ONLY way running tool rows render.
@@ -81,12 +83,34 @@ export function LiveToolRows(props: {
 						    blank row while running — the "extra breakline"
 						    that vanished when the row settled. */}
 						<box height={1} />
+						<Show when={row.brief && row.brief.trim()}>
+							{/* Pre-tool brief (parity: the settled row and the
+							    bash/file rows render it through the SAME
+							    markdown pipeline; a running generic row must
+							    paint identically to its settled form). */}
+							<MarkdownBrief
+								text={row.brief ?? ''}
+								glyph={settledGlyphColor('✦', 'running', themeColors(colors()))}
+								hovered={false}
+								md={props.md}
+							/>
+						</Show>
 						<box flexDirection="row">
 							{/* Blinking secondary glyph, width-stable (the
-							    hidden frame keeps a space). */}
-							<text fg={colors().secondary} attributes={dim()}>
-								{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
-							</text>
+							    hidden frame keeps a space). HIDDEN for
+							    briefed/batch rows — the brief line carries
+							    the entry's single glyph (bash/file parity). */}
+							<Show when={!row.brief && !row.batchBriefed}>
+								<text fg={colors().secondary} attributes={dim()}>
+									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
+								</text>
+							</Show>
+							{/* Briefed/batch rows indent to the brief's text
+							    column (col 3: `✦` + 2-col gap) — width 3, the
+							    bash/file rows use the same box. */}
+							<Show when={row.brief || row.batchBriefed}>
+								<box width={3} />
+							</Show>
 							{/* ONE text renderable per header/body line,
 							    styled SPANS for the per-chunk colors. The
 							    old per-cell <text> gave every chunk its own
@@ -114,6 +138,12 @@ export function LiveToolRows(props: {
 						<For each={row.body}>
 							{line => (
 								<box flexDirection="row">
+									{/* Body shifts with the brief too: the
+									    chunks carry their own 2-space lead, so
+									    the box is 1 wide (settled parity). */}
+									<Show when={row.brief || row.batchBriefed}>
+										<box width={1} />
+									</Show>
 									<text>
 										<For each={line}>
 											{c => (

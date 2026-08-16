@@ -69,14 +69,18 @@ export function SettledToolRow(props: {
 				backgroundColor={props.hovered ? hoverBg : undefined}
 			>
 				{/* With a brief, the brief line carries the entry's single
-				    glyph; the header indents to the brief's text column. */}
+				    glyph; the header indents to the brief's text column.
+				    The brief renders `✦` + a 2-col gap (text at col 3), so
+				    the header must start at col 3 — width 3, NOT 2 — or the
+				    tool content sits one gap LEFT of the brief (bash parity:
+				    the bordered box indents width 3 for the same reason). */}
 				<Show when={!briefed() && !props.batchBriefed}>
 					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
 						{(props.glyph ?? '✦') + ' '}
 					</text>
 				</Show>
 				<Show when={briefed() || props.batchBriefed}>
-					<box width={2} />
+					<box width={3} />
 				</Show>
 				{/* ONE text renderable for the whole header, styled SPANS for
 				    the per-chunk colors. A per-cell <text> would give every
@@ -109,6 +113,15 @@ export function SettledToolRow(props: {
 						width={props.width}
 						backgroundColor={props.hovered ? hoverBg : undefined}
 					>
+						{/* Briefed rows: shift the body to the brief's text
+						    column too. The body chunks carry their OWN
+						    2-space container lead (`  └`), so the indent box
+						    is 1 wide — the `└` lands at col 3, aligned with
+						    the header text AND the brief text (non-briefed:
+						    `└` at col 2 = the header text col 2). */}
+						<Show when={briefed() || props.batchBriefed}>
+							<box width={1} />
+						</Show>
 						<text>
 							<For each={line}>
 								{c => (
