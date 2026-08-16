@@ -80,6 +80,13 @@ export function providerGroupKey(provider: ModelProvider): string {
 	const preset = provider.baseUrl
 		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
 		: undefined;
+	// OpenCode Zen and OpenCode Go share the SAME opencode.ai account/API
+	// key — a subscription unlocks both catalogs (the zen endpoint even
+	// lists the go models). They must merge into ONE group, otherwise a user
+	// who connected both sees the same service twice in the model modal.
+	if (preset?.id === 'opencode-zen' || preset?.id === 'opencode-go') {
+		return 'opencode';
+	}
 	return preset?.id ?? provider.id;
 }
 
@@ -174,6 +181,10 @@ export function connectProviderShortcut(
  * the first cell of a group jumps to the PREVIOUS group's last cell and
  * RIGHT from the last cell jumps to the NEXT group's first cell (they must
  * stay symmetric); the very first/last cell of the whole grid stay put.
+ * UP from a group's first ROW exits to the previous group's last cell (or
+ * the Inherit row) — it never wraps to the bottom of its own group, which
+ * would trap the cursor inside one provider; DOWN from a group's last row
+ * jumps to the next group's first cell (ragged last rows wrap in-column).
  */
 export function nextModelCursor(
 	current: number,
@@ -219,22 +230,23 @@ export function nextModelCursor(
 			return current;
 		}
 		case 'up': {
-			let next = local - columns;
-			if (next < 0) {
+			if (local < columns) {
+				// FIRST ROW of the group: exit UPWARD — the previous group's
+				// last cell, or the Inherit row above the very first group.
+				// NEVER wrap to the bottom of this group: that would trap the
+				// cursor inside one provider and make anything above the list
+				// unreachable with ↑. Only at the very top of the whole grid
+				// (no previous group, no Inherit) does the column wrap to its
+				// bottom row — single-group cycle parity with ↓.
+				if (groupIndex > 0) {
+					return offset(groupIndex - 1) + (groupSizes[groupIndex - 1] ?? 0) - 1;
+				}
+				if (hasInherit) return -1;
 				const bottomRow = Math.max(0, Math.floor((count - 1) / columns));
 				const bottom = bottomRow * columns + col;
-				next = bottom < count ? bottom : Math.max(0, bottom - columns);
-				if (next === local) {
-					if (groupIndex > 0) {
-						return (
-							offset(groupIndex - 1) + (groupSizes[groupIndex - 1] ?? 0) - 1
-						);
-					}
-					if (hasInherit) return -1;
-					return current;
-				}
+				return bottom < count ? bottom : Math.max(0, bottom - columns);
 			}
-			return offset(groupIndex) + next;
+			return offset(groupIndex) + (local - columns);
 		}
 		case 'down': {
 			const next = local + columns;
@@ -527,9 +539,10 @@ export function ModelModal(props: {
 	};
 	// Grid navigation (row-major per provider group). Moving past a group's
 	// last row jumps to the NEXT group's first cell so long catalogs stay
-	// reachable with ↓ alone; ↑ from a group's first cell wraps to the
-	// previous group's last cell (or the Inherit row). LEFT/RIGHT wrap across
-	// group boundaries symmetrically (pure, unit-tested).
+	// reachable with ↓ alone; ↑ from a group's first ROW exits to the
+	// previous group's last cell (or the Inherit row) — never trapped inside
+	// one provider. LEFT/RIGHT wrap across group boundaries symmetrically
+	// (pure, unit-tested).
 	const moveCell = (direction: 'up' | 'down' | 'left' | 'right'): void => {
 		const list = groups();
 		setCursor(

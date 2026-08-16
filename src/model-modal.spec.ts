@@ -22,12 +22,12 @@ const provider = (name: string) => ({
 
 describe('modelWithProvider (provider name in parentheses)', () => {
 	test('appends the provider display name in parentheses', () => {
-		expect(
-			modelWithProvider('deepseek-v4-flash', provider('deepseek')),
-		).toBe('deepseek-v4-flash (deepseek)');
-		expect(
-			modelWithProvider('gpt-5.6-luna', provider('opencode-go')),
-		).toBe('gpt-5.6-luna (opencode-go)');
+		expect(modelWithProvider('deepseek-v4-flash', provider('deepseek'))).toBe(
+			'deepseek-v4-flash (deepseek)',
+		);
+		expect(modelWithProvider('gpt-5.6-luna', provider('opencode-go'))).toBe(
+			'gpt-5.6-luna (opencode-go)',
+		);
 	});
 
 	test('uses the REAL provider title when the connection matches a preset', () => {
@@ -52,9 +52,7 @@ describe('modelWithProvider (provider name in parentheses)', () => {
 	});
 
 	test('no provider means no parentheses', () => {
-		expect(modelWithProvider('mock-model-1', undefined)).toBe(
-			'mock-model-1',
-		);
+		expect(modelWithProvider('mock-model-1', undefined)).toBe('mock-model-1');
 	});
 });
 
@@ -155,9 +153,10 @@ describe('groupProviders (ONE list per real provider)', () => {
 		]);
 		expect(groups).toHaveLength(1);
 		expect(groups[0]!.title).toBe('OpenCode Go');
-		expect(groups[0]!.connections.map(connection => connection.id)).toEqual(
-			['brian', 'mika'],
-		);
+		expect(groups[0]!.connections.map(connection => connection.id)).toEqual([
+			'brian',
+			'mika',
+		]);
 		// Models are the UNION, order preserved, no duplicates.
 		expect(groups[0]!.models).toEqual(['minimax-m3', 'kimi-k3', 'glm-5.2']);
 	});
@@ -176,12 +175,41 @@ describe('groupProviders (ONE list per real provider)', () => {
 		expect(groups).toHaveLength(2);
 		expect(groups.map(group => group.providerId).sort()).toEqual([
 			'my-gateway',
-			'opencode-go',
+			'opencode',
 		]);
 	});
 
+	test('OpenCode Zen and OpenCode Go share ONE group (same opencode.ai key)', () => {
+		const zen = (name: string, models: string[]) => ({
+			id: name,
+			name,
+			baseUrl: 'https://opencode.ai/zen/v1',
+			models,
+			modelEfforts: {},
+		});
+		const groups = groupProviders([
+			go('brian', ['minimax-m3']),
+			zen('mika', ['deepseek-v4-flash']),
+		]);
+		// ONE merged group — not two duplicate-looking OpenCode lists.
+		expect(groups).toHaveLength(1);
+		expect(groups[0]!.connections.map(connection => connection.id)).toEqual([
+			'brian',
+			'mika',
+		]);
+		expect(groups[0]!.models).toEqual(['minimax-m3', 'deepseek-v4-flash']);
+	});
 	test('providerGroupKey resolves the preset id (or the raw id)', () => {
-		expect(providerGroupKey(go('brian', []))).toBe('opencode-go');
+		expect(providerGroupKey(go('brian', []))).toBe('opencode');
+		expect(
+			providerGroupKey({
+				id: 'opencode-zen',
+				name: 'opencode-zen',
+				baseUrl: 'https://opencode.ai/zen/v1',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBe('opencode');
 		expect(
 			providerGroupKey({
 				id: 'x',
@@ -205,6 +233,17 @@ describe('sameProviderGroup (account-swap detection)', () => {
 
 	test('two connections of the same real provider are the same group', () => {
 		expect(sameProviderGroup(go('brian'), go('mika'))).toBe(true);
+	});
+	test('OpenCode Zen and OpenCode Go are the SAME group (shared opencode.ai key)', () => {
+		const zen = (name: string) => ({
+			id: name,
+			name,
+			baseUrl: 'https://opencode.ai/zen/v1',
+			models: [],
+			modelEfforts: {},
+		});
+		expect(sameProviderGroup(go('brian'), zen('mika'))).toBe(true);
+		expect(sameProviderGroup(zen('mika'), go('brian'))).toBe(true);
 	});
 
 	test('different providers (or undefined) are NOT the same group', () => {
@@ -318,10 +357,11 @@ describe('nextModelCursor (grid navigation, symmetric across groups)', () => {
 		expect(nextModelCursor(0, 'down', SIZES, 2, false)).toBe(1);
 	});
 
-	test('UP wraps to the bottom of the same column / previous group / Inherit', () => {
-		// codex row 0 col 0 → bottom of column 0 (cell 3), not the previous
-		// group: vertical wrap stays INSIDE a multi-row group.
-		expect(nextModelCursor(1, 'up', SIZES, 2, false)).toBe(3);
+	test('UP exits the group from its first row / previous group / Inherit', () => {
+		// codex row 0 col 0 → the PREVIOUS group's last cell (mock, cell 0):
+		// ↑ must never wrap to the bottom of its own group, that would trap
+		// the cursor inside one provider and block reaching above the list.
+		expect(nextModelCursor(1, 'up', SIZES, 2, false)).toBe(0);
 		// A single-row group has nowhere to wrap: previous group's last cell,
 		// or the Inherit row when present.
 		expect(nextModelCursor(0, 'up', SIZES, 2, true)).toBe(-1);
