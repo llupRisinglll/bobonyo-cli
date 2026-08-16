@@ -78,38 +78,80 @@ export function activeBgCount(): number {
 }
 
 /**
- * Drop a leading echoed-command line from captured bash output.
+ * Drop a leading echoed-command line (or run of lines) from captured bash
+ * output.
  *
  * A shell can echo the typed command back into the captured stream
  * (PTY-backed execution, shell wrappers, `set -v`-style configs): for
  * `cd /tmp/bobonyo-link && echo hi` the first captured line can be
  * `$ cd /tmp/bobonyo-link && echo hi` (or `cd /tmp/bobonyo-link && echo hi`,
- * possibly with a trailing `\r` from PTY line endings). The tool row
- * ALREADY renders the command as its box header, so the echo would show the
- * command twice — the "entry appears twice while running" bug. Stripping it
- * at CAPTURE keeps the live stream, the settled result, the provider
- * context AND the persisted session clean (display-level stripping in
+ * possibly with a trailing `\r` from PTY line endings). A MULTI-LINE
+ * command echoes as MULTIPLE captured lines — the shell prints every line
+ * of the typed command, so `git add a.ts\n&& git commit -m "…"` leaks as
+ * `$ git add a.ts`, `> && git commit -m "…"`, … The tool row ALREADY
+ * renders the command as its box header, so the echo would show the command
+ * twice — the "entry appears twice while running" bug. Stripping it at
+ * CAPTURE keeps the live stream, the settled result, the provider context
+ * AND the persisted session clean (display-level stripping in
  * formatBashEntry additionally heals already-saved sessions).
  *
- * Only a LEADING line is stripped, and only when it is the command itself
- * (optionally `$ ` / `❯ ` prefixed): a real output line that merely
- * CONTAINS the command text later in the stream is never touched. Pure,
- * unit-tested.
+ * Only a LEADING run of lines is stripped, and only when it is the command
+ * itself (every command line, optionally `$ ` / `❯ ` / `> ` prefixed and
+ * CR-suffixed): a real output line that merely CONTAINS command text later
+ * in the stream is never touched, and a partial match is never stripped.
+ * Pure, unit-tested.
  */
 export function stripEchoedCommand(lines: string[], command: string): string[] {
-	const cmd = command.trim();
-	if (!cmd) return lines;
-	const normalized = (line: string) => line.replace(/\r$/, '').trim();
+	// Compare WHITESPACE-COLLAPSED text: the echo can differ from the raw
+	// command in three ways and still be the same command — (1) a
+	// MULTI-LINE command echoes as one captured line per command line, (2)
+	// a LONG single-line command's echo can split across stream reads (the
+	// pump pushes read-fragments as separate lines), (3) PTY line endings.
+	const collapsed = collapseText(command);
+	if (!collapsed) return lines;
 	const out = [...lines];
-	while (out.length > 0) {
-		const first = normalized(out[0] ?? '');
-		if (first === cmd || first === `$ ${cmd}` || first === `❯ ${cmd}`) {
-			out.shift();
-			continue;
+	// The echo can appear more than once (stdout AND stderr both echoed).
+	let matched = true;
+	while (matched) {
+		matched = false;
+		let consumed = 0;
+		let acc = '';
+		let firstHadPrompt = false;
+		for (const line of out) {
+			const normalized = line.replace(/\r$/, '').trim();
+			const prompt = /^(\$|❯|>)\s*/.exec(normalized);
+			const bare = prompt ? normalized.slice(prompt[0].length) : normalized;
+			if (!bare) {
+				consumed += 1;
+				continue;
+			}
+			if (prompt && consumed === 0) firstHadPrompt = true;
+			const piece = collapseText(bare);
+			const next = acc ? `${acc} ${piece}` : piece;
+			// The accumulated echo must stay a PREFIX of the command.
+			if (!collapsed.startsWith(next)) break;
+			acc = next;
+			consumed += 1;
+			if (acc === collapsed) break;
 		}
-		break;
+		// Strip when the accumulated echo IS the whole command, or when the
+		// echo started with a prompt (`$ ` / `❯ ` / `> `) and is a real
+		// prefix — a prompt-marked fragment is an echo, not real output
+		// (the echo can be truncated across stream ticks).
+		if (
+			consumed > 0 &&
+			(acc === collapsed || (firstHadPrompt && acc.length >= 2))
+		) {
+			out.splice(0, consumed);
+			matched = true;
+		}
 	}
 	return out;
+}
+
+/** Collapse every run of whitespace (incl. newlines) to ONE space. */
+function collapseText(text: string): string {
+	return text.trim().split(/\s+/).filter(Boolean).join(' ');
 }
 
 export interface BashTurnResult {

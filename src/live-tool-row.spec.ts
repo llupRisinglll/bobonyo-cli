@@ -599,4 +599,47 @@ describe('bash echoed-command dedup (the "entry shows twice" bug)', () => {
 		);
 		expect(raw).toBe(`$ ${CMD}\nEXIT_CODE: 0\nran: ${CMD}`);
 	});
+
+	test('a MULTI-LINE command whose output echoes every line shows the command ONCE', () => {
+		// The reported case: the model ran a multi-line git command and the
+		// shell echoed the typed command back, one captured line PER command
+		// line — the old whole-command match missed it and the box painted
+		// the command twice (header + echoed lines). The whole echo run must
+		// be stripped at display time too (heals saved sessions).
+		const cmd = [
+			'cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/components/completion-popup.tsx',
+			'  src/completion-popup.render.spec.tsx src/regression-guards.spec.ts && git commit -m "feat: x"',
+			'  && git log --oneline -1',
+		].join('\n');
+		const echo = [
+			'$ cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/components/completion-popup.tsx',
+			'  src/completion-popup.render.spec.tsx src/regression-guards.spec.ts && git commit -m "feat: x"',
+			'  && git log --oneline -1',
+		];
+		const raw = formatToolEntry(
+			{
+				name: 'execute_bash',
+				detail: cmd,
+				output: `EXIT_CODE: 0\n${echo.join('\n')}\n(pass) parseXmlToolCalls > args`,
+				args: {command: cmd},
+			},
+			true,
+			'done',
+			true,
+			true,
+			84,
+		);
+		// The command text appears EXACTLY once (the box header line; the
+		// header itself wraps at the box width, so count the wrap-safe
+		// filename) — the echoed copy in the output is gone.
+		const occurrences = raw.match(/completion-popup\.tsx/g);
+		expect(occurrences?.length).toBe(1);
+		expect(raw).toContain('(pass) parseXmlToolCalls > args');
+		// The echoed copy (a SECOND `$ cd …` after the header) is gone — the
+		// raw text has exactly ONE command line.
+		expect(
+			raw.match(/\$ cd \/mnt\/data\/KSProjects\/NanoCollective\/bobonyo/g)
+				?.length,
+		).toBe(1);
+	});
 });

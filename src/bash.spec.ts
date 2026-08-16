@@ -100,4 +100,98 @@ describe('stripEchoedCommand (leading echoed-command line)', () => {
 			'hi',
 		]);
 	});
+
+	test('a MULTI-LINE command echo spans several captured lines and is stripped whole', () => {
+		// The reported case: the model ran a multi-line git command
+		// (`git add …\n  && git commit -m "…"\n  …`). The shell echoed the
+		// typed command back, one captured line PER command line, so the
+		// old whole-command match missed it and the box showed the command
+		// twice (header + echoed lines). All command lines must be consumed.
+		const cmd = [
+			'cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/a.ts',
+			'  src/b.ts && git commit -m "feat: x" && git log --oneline -1',
+		].join('\n');
+		const echo = [
+			`$ cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/a.ts`,
+			'  src/b.ts && git commit -m "feat: x" && git log --oneline -1',
+		];
+		const output = [
+			'(pass) parseXmlToolCalls > args via the arg order',
+			'… +42 more lines',
+		];
+		expect(stripEchoedCommand([...echo, ...output], cmd)).toEqual(output);
+	});
+
+	test('multi-line echo with `> ` continuation prompts (interactive PTY)', () => {
+		const cmd = ['git add a.ts', 'git commit -m "feat: x"'].join('\n');
+		const echo = ['$ git add a.ts', '> git commit -m "feat: x"'];
+		expect(stripEchoedCommand([...echo, 'done'], cmd)).toEqual(['done']);
+	});
+
+	test('multi-line echo with bare continuation lines (no prompt) is stripped', () => {
+		const cmd = ['git add a.ts', 'git commit -m "feat: x"'].join('\n');
+		expect(
+			stripEchoedCommand(
+				['$ git add a.ts', 'git commit -m "feat: x"', 'done'],
+				cmd,
+			),
+		).toEqual(['done']);
+	});
+
+	test('multi-line echo tolerates CR line endings', () => {
+		const cmd = ['git add a.ts', 'git commit -m "feat: x"'].join('\n');
+		expect(
+			stripEchoedCommand(
+				['$ git add a.ts\r', '> git commit -m "feat: x"\r', 'done\r'],
+				cmd,
+			),
+		).toEqual(['done\r']);
+	});
+
+	test('a PARTIAL echo (prompt-marked fragment) is stripped — it is the echo split across reads', () => {
+		// A LONG single-line command's echo can arrive in stream-read
+		// fragments: the pump pushes each fragment as a separate line, so
+		// the captured leading lines are a PROMPT-MARKED PREFIX of the
+		// command. That is the echo, not real output — strip it.
+		const cmd = 'git add a.ts && git commit -m "feat: x"';
+		expect(
+			stripEchoedCommand(['$ git add a.ts', 'some real output', 'done'], cmd),
+		).toEqual(['some real output', 'done']);
+	});
+
+	test('a partial line WITHOUT a prompt prefix is real output and is preserved', () => {
+		// `git log` can print `git` as its first real output word; without a
+		// prompt marker nothing may be stripped.
+		const cmd = 'git log --oneline -1';
+		expect(stripEchoedCommand(['git log', 'abc123 fix'], cmd)).toEqual([
+			'git log',
+			'abc123 fix',
+		]);
+	});
+
+	test('a LONG single-line command echo split across read fragments is stripped whole', () => {
+		// The reported case: a long git command (single line, box-wrapped)
+		// whose echo arrived in fragments — `out[0]` is only a PREFIX, so
+		// the old exact-match missed it. The collapsed-text comparison must
+		// reassemble the fragments and strip the whole echo.
+		const cmd =
+			'cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/a.ts src/b.ts ' +
+			'&& git commit -m "feat: center COMPLETED popup message" && git log --oneline -1';
+		const echoFragments = [
+			'$ cd /mnt/data/KSProjects/NanoCollective/bobonyo && git add src/a.ts',
+			'src/b.ts && git commit -m "feat: center COMPLETED popup',
+			'message" && git log --oneline -1',
+		];
+		expect(stripEchoedCommand([...echoFragments, '(pass) done'], cmd)).toEqual([
+			'(pass) done',
+		]);
+	});
+
+	test('multi-line echo appears twice (stdout + stderr) and BOTH are stripped', () => {
+		const cmd = ['git add a.ts', 'git commit -m "feat: x"'].join('\n');
+		const echo = ['$ git add a.ts', 'git commit -m "feat: x"'];
+		expect(stripEchoedCommand([...echo, ...echo, 'done'], cmd)).toEqual([
+			'done',
+		]);
+	});
 });
