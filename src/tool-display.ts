@@ -10,6 +10,7 @@
  */
 
 import {displayToolName, resolveToolName} from './tools';
+import {stripEchoedCommand} from './bash';
 import {lineDiff, type RowStatus} from './row-highlight';
 import {tasks} from './state';
 
@@ -450,8 +451,42 @@ function formatBashEntry(
 		hiddenCommand > 0
 			? `\n… +${hiddenCommand} more line${hiddenCommand === 1 ? '' : 's'}`
 			: '';
-	const output = formatOutputTail(tool.output, expanded, width, '');
+	// DISPLAY HEAL: drop a leading echoed-command line from the saved
+	// output (the shell printed the typed command back, e.g.
+	// `EXIT_CODE: 0\n$ cd x && echo hi\nhi`). The command line right above
+	// IS the header, so the echo would render the command twice — the
+	// "entry shows twice" artifact. The capture path (runBash) strips the
+	// echo going forward; this heals already-persisted sessions at render.
+	const output = formatOutputTail(
+		stripBashEcho(tool.output, tool.detail),
+		expanded,
+		width,
+		'',
+	);
 	return `${commandLines.join('\n')}${commandHint}${output ? `\n${output}` : ''}`;
+}
+
+/**
+ * Display-level heal for already-saved bash results: drop a leading
+ * echoed-command line (the shell printed the typed command back into the
+ * captured stream). The row's box header already shows the command, so a
+ * saved `EXIT_CODE: 0\n$ cd x && echo hi\nhi` would otherwise render the
+ * command twice. runBash strips the echo at CAPTURE for new runs; this
+ * handles pre-fix persisted sessions. Pure, unit-tested.
+ */
+export function stripBashEcho(output: string, command: string): string {
+	if (!command.trim()) return output;
+	const lines = output.split('\n');
+	// runBash results carry a leading `EXIT_CODE: N`; the echo (when the
+	// shell printed the command) lands right after it. Raw captures (or
+	// non-EXIT_CODE results like `Declined by user.`) start with the echo.
+	let i = 0;
+	while (i < lines.length && (lines[i]?.trim() ?? '') === '') i++;
+	if (/^EXIT_CODE:\s*-?\d+/.test(lines[i]?.trim() ?? '')) {
+		i++;
+	}
+	const stripped = stripEchoedCommand(lines.slice(i), command);
+	return [...lines.slice(0, i), ...stripped].join('\n');
 }
 
 /**

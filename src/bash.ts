@@ -43,8 +43,7 @@ export function capOutputTail(
 	maxLines = MAX_BASH_OUTPUT_LINES,
 	maxChars = MAX_BASH_OUTPUT_CHARS,
 ): {lines: string[]; truncated: boolean} {
-	const byLines =
-		lines.length > maxLines ? lines.slice(-maxLines) : lines;
+	const byLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
 	let truncated = lines.length > maxLines;
 	const capped: string[] = [];
 	let chars = 0;
@@ -55,9 +54,7 @@ export function capOutputTail(
 			const keep = maxChars - chars;
 			if (keep > 0) {
 				const piece = line.slice(-keep);
-				capped.unshift(
-					piece.length < line.length ? `…${piece}` : piece,
-				);
+				capped.unshift(piece.length < line.length ? `…${piece}` : piece);
 			}
 			truncated = true;
 			break;
@@ -78,6 +75,41 @@ function nextTaskId(): string {
 
 export function activeBgCount(): number {
 	return bgTasks().filter(task => task.running).length;
+}
+
+/**
+ * Drop a leading echoed-command line from captured bash output.
+ *
+ * A shell can echo the typed command back into the captured stream
+ * (PTY-backed execution, shell wrappers, `set -v`-style configs): for
+ * `cd /tmp/bobonyo-link && echo hi` the first captured line can be
+ * `$ cd /tmp/bobonyo-link && echo hi` (or `cd /tmp/bobonyo-link && echo hi`,
+ * possibly with a trailing `\r` from PTY line endings). The tool row
+ * ALREADY renders the command as its box header, so the echo would show the
+ * command twice — the "entry appears twice while running" bug. Stripping it
+ * at CAPTURE keeps the live stream, the settled result, the provider
+ * context AND the persisted session clean (display-level stripping in
+ * formatBashEntry additionally heals already-saved sessions).
+ *
+ * Only a LEADING line is stripped, and only when it is the command itself
+ * (optionally `$ ` / `❯ ` prefixed): a real output line that merely
+ * CONTAINS the command text later in the stream is never touched. Pure,
+ * unit-tested.
+ */
+export function stripEchoedCommand(lines: string[], command: string): string[] {
+	const cmd = command.trim();
+	if (!cmd) return lines;
+	const normalized = (line: string) => line.replace(/\r$/, '').trim();
+	const out = [...lines];
+	while (out.length > 0) {
+		const first = normalized(out[0] ?? '');
+		if (first === cmd || first === `$ ${cmd}` || first === `❯ ${cmd}`) {
+			out.shift();
+			continue;
+		}
+		break;
+	}
+	return out;
 }
 
 export interface BashTurnResult {
@@ -115,6 +147,13 @@ export async function runBash(
 			for (const line of chunk.split('\n')) {
 				if (line) task.output.push(line);
 			}
+			// Strip a leading echoed-command line (the shell printed the
+			// typed command back): the tool box already renders the command
+			// as its header, so the echo duplicates the command inside the
+			// box — the "entry shows twice" artifact. Done per pump tick so
+			// the STREAMED (live) output is clean too, not just the final
+			// result.
+			task.output = stripEchoedCommand(task.output, command);
 			const capped = capOutputTail(task.output);
 			if (capped.truncated) truncated = true;
 			task.output = capped.lines;
@@ -158,23 +197,25 @@ export async function runBash(
 
 	if (outcome === 'background') {
 		setBgTasks(prev => [...prev, task]);
-		void finished.then(() => {
-			const scriptLines = command
-				.split('\n')
-				.map(line => line.trimEnd())
-				.filter(line => line !== '');
-			appendMessage({
-				role: 'assistant',
-				// Tool-style completion row (parity: nanocoder's
-				// BackgroundTaskCompleted): `✦ Background task completed ·
-				// exit N` header, the script under a `  └   ` container with
-				// the SAME wrap/expand +N footer the tool rows use.
-				content:
-					`Background task completed · exit ${task.exitCode ?? '?'}\n` +
-					scriptLines.join('\n'),
-				kind: 'info',
-			});
-		}).catch(() => {});
+		void finished
+			.then(() => {
+				const scriptLines = command
+					.split('\n')
+					.map(line => line.trimEnd())
+					.filter(line => line !== '');
+				appendMessage({
+					role: 'assistant',
+					// Tool-style completion row (parity: nanocoder's
+					// BackgroundTaskCompleted): `✦ Background task completed ·
+					// exit N` header, the script under a `  └   ` container with
+					// the SAME wrap/expand +N footer the tool rows use.
+					content:
+						`Background task completed · exit ${task.exitCode ?? '?'}\n` +
+						scriptLines.join('\n'),
+					kind: 'info',
+				});
+			})
+			.catch(() => {});
 		return {
 			content:
 				`Command exceeded the ${AUTO_BACKGROUND_MS / 1000}-second foreground budget ` +

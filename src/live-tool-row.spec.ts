@@ -8,6 +8,7 @@ import {
 	formatToolEntry,
 	replacementBaseLine,
 	rowLanguage,
+	stripBashEcho,
 } from './tool-display';
 import type {TextChunk} from '@opentui/core';
 
@@ -519,5 +520,83 @@ describe('legacy nanocoder args (old_str/new_str snake_case)', () => {
 		const raw = legacy('const a = 1;', 'const a = 1;\nconst b = 2;');
 		expect(raw).toContain(' ⎿ 1 line → 2 lines');
 		expect(raw).not.toMatch(/└/);
+	});
+});
+
+describe('bash echoed-command dedup (the "entry shows twice" bug)', () => {
+	const CMD = 'cd /tmp/bobonyo-link && echo hi';
+	// The EXACT saved shape from the user's session: the shell echoed the
+	// typed command, so the captured result carried `$ <command>` between
+	// the EXIT_CODE prefix and the real output.
+	const doubledOutput = `EXIT_CODE: 0\n$ ${CMD}\nhi`;
+
+	test('stripBashEcho drops the echo AFTER the EXIT_CODE prefix', () => {
+		expect(stripBashEcho(doubledOutput, CMD)).toBe('EXIT_CODE: 0\nhi');
+	});
+
+	test('stripBashEcho keeps a clean result byte-identical', () => {
+		const clean = 'EXIT_CODE: 0\nhi';
+		expect(stripBashEcho(clean, CMD)).toBe(clean);
+	});
+
+	test('stripBashEcho drops a bare (no-prompt) echo after EXIT_CODE', () => {
+		expect(stripBashEcho(`EXIT_CODE: 0\n${CMD}\nhi`, CMD)).toBe(
+			'EXIT_CODE: 0\nhi',
+		);
+	});
+
+	test('a settled bash row renders the command ONCE despite the echo', () => {
+		const raw = formatToolEntry(
+			{
+				name: 'execute_bash',
+				detail: CMD,
+				output: doubledOutput,
+				args: {command: CMD},
+			},
+			false,
+			'done',
+			true,
+			true,
+			84,
+		);
+		// Header + EXIT_CODE + hi. The echoed `$ <command>` line is gone, so
+		// the command text appears exactly once (the header).
+		expect(raw).toBe(`$ ${CMD}\nEXIT_CODE: 0\nhi`);
+	});
+
+	test('a RUNNING bash row streams the command ONCE too (live parity)', () => {
+		// While the tool streams, the echoed command must not double inside
+		// the live box either — the user saw the entry twice DURING the run.
+		const raw = formatToolEntry(
+			{
+				name: 'execute_bash',
+				detail: CMD,
+				output: `$ ${CMD}\nhi`,
+				args: {command: CMD},
+			},
+			false,
+			'running',
+			true,
+			true,
+			84,
+		);
+		expect(raw).toBe(`$ ${CMD}\nhi`);
+	});
+
+	test('real output that mentions the command later is never stripped', () => {
+		const raw = formatToolEntry(
+			{
+				name: 'execute_bash',
+				detail: CMD,
+				output: `EXIT_CODE: 0\nran: ${CMD}`,
+				args: {command: CMD},
+			},
+			false,
+			'done',
+			true,
+			true,
+			84,
+		);
+		expect(raw).toBe(`$ ${CMD}\nEXIT_CODE: 0\nran: ${CMD}`);
 	});
 });
