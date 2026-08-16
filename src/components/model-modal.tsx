@@ -92,11 +92,12 @@ export function openCodeTierLabel(provider: ModelProvider): string {
 }
 
 /**
- * Account-picker row for one connection: the label names the TIER for
- * OpenCode (the Zen/Go choice is the whole point of the picker — the
- * account name rides on the detail line when it differs from the default),
- * other providers show the user-given name with the endpoint as before.
- * Pure, unit-tested.
+ * Account-picker row for one connection: the LABEL is the USER-GIVEN
+ * connection name (the named provider — a user can add MULTIPLE opencode
+ * API keys, so the choice must be by name), and the detail carries the
+ * tier + endpoint so Zen-vs-Go and the base URL stay visible. Other
+ * providers show the user-given name with the endpoint as before. Pure,
+ * unit-tested.
  */
 export function connectionPickerRow(provider: ModelProvider): {
 	label: string;
@@ -106,12 +107,9 @@ export function connectionPickerRow(provider: ModelProvider): {
 		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
 		: undefined;
 	if (preset?.id === 'opencode-zen' || preset?.id === 'opencode-go') {
-		const account = provider.name || provider.id;
-		const accountPart =
-			account.toLowerCase() !== preset.id ? `${account} · ` : '';
 		return {
-			label: `OpenCode ${openCodeTierLabel(provider)}`,
-			detail: `${accountPart}${provider.baseUrl ?? ''}`,
+			label: provider.name || provider.id,
+			detail: `${openCodeTierLabel(provider)} · ${provider.baseUrl ?? ''}`,
 		};
 	}
 	return {label: provider.name || provider.id, detail: provider.baseUrl ?? ''};
@@ -1003,10 +1001,11 @@ export function ModelModal(props: {
 									})()}
 								>
 									{({connection, active}) => {
-										// OpenCode rows name the TIER (Zen / Go)
-										// so the picker is a Zen-vs-Go choice;
-										// the account name + endpoint ride the
-										// detail line. Other providers keep the
+										// OpenCode rows lead with the USER-GIVEN
+										// name (multiple API keys per endpoint —
+										// the choice is which named provider),
+										// the tier + endpoint ride the detail
+										// line. Other providers keep the
 										// user-given name as before.
 										const row = connectionPickerRow(connection);
 										return (

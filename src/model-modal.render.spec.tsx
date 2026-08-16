@@ -148,19 +148,18 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 			expect(frameHas(frame, 'OpenCode')).toBe(true);
 			expect(frameHas(frame, '- Go (Subscription)')).toBe(true);
 
-			// Selecting the model opens the ACCOUNT PICKER (the Zen-vs-Go
-			// choice; renamed accounts ride the detail line).
+			// Selecting the model opens the ACCOUNT PICKER — the choice is the
+			// NAMED provider (multiple opencode keys allowed per endpoint),
+			// with the tier + endpoint on the detail line.
 			mockInput.pressEnter();
 			await setup.flush();
 			frame = setup.captureSpans();
 			expect(frameHas(frame, 'Select provider')).toBe(true);
-			expect(frameHas(frame, 'OpenCode Go (Subscription)')).toBe(true);
-			expect(frameHas(frame, 'brian · https://opencode.ai/zen/go/v1')).toBe(
-				true,
-			);
-			expect(frameHas(frame, 'mika · https://opencode.ai/zen/go/v1')).toBe(
-				true,
-			);
+			expect(frameHas(frame, 'brian')).toBe(true);
+			expect(frameHas(frame, 'mika')).toBe(true);
+			expect(
+				frameHas(frame, 'Go (Subscription) · https://opencode.ai/zen/go/v1'),
+			).toBe(true);
 
 			// Pick the second account (mika) → effort step → select.
 			mockInput.pressArrow('down');
@@ -177,6 +176,53 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 		}
 	});
 
+	test('two opencode keys of the SAME tier still ask which NAMED provider (multiple API keys)', async () => {
+		// The user's requirement: opencode go + zen share the API key but not
+		// the endpoint, and multiple keys are allowed per endpoint. The picker
+		// must present the USER-GIVEN names as the choice — two Go connections
+		// must not both read "OpenCode Go (Subscription)".
+		let selected: string | undefined;
+		const setup = await testRender(
+			() => (
+				<ModelModal
+					providers={[go('work-key'), go('personal-key')]}
+					currentProvider="work-key"
+					currentModel="minimax-m3"
+					onSelect={providerId => {
+						selected = providerId;
+					}}
+					onConnectProvider={() => {}}
+					onClose={() => {}}
+					hasMessages={false}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await setup.flush();
+			mockInput.pressEnter(); // model → account picker (2 connections)
+			await setup.flush();
+			const frame = setup.captureSpans();
+			expect(frameHas(frame, 'Select provider')).toBe(true);
+			// The NAMES are the selectable rows — not two identical tier labels.
+			expect(frameHas(frame, 'work-key')).toBe(true);
+			expect(frameHas(frame, 'personal-key')).toBe(true);
+			expect(
+				frameHas(frame, 'Go (Subscription) · https://opencode.ai/zen/go/v1'),
+			).toBe(true);
+			// Pick the second key → effort → select uses THAT provider id.
+			mockInput.pressArrow('down');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(selected).toBe('personal-key');
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test('an account swap within the SAME provider skips the resend confirm (context + cache head stay intact)', async () => {
 		let selected: string | undefined;
 		const setup = await testRender(

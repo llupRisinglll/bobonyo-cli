@@ -254,15 +254,32 @@ describe('openCodeTierLabel / connectionPickerRow (Zen vs Go tier picker)', () =
 			}),
 		).toBe('x');
 	});
-	test('the picker row names the tier; a renamed account rides the detail line', () => {
+	test('the picker row LEADS WITH the named provider; tier + endpoint ride the detail', () => {
+		// Multiple opencode API keys are allowed per endpoint, so the choice
+		// must be by the USER-GIVEN name; the tier (Zen/Go) + base URL stay
+		// visible on the detail line.
 		expect(connectionPickerRow(go('brian'))).toEqual({
-			label: 'OpenCode Go (Subscription)',
-			detail: 'brian · https://opencode.ai/zen/go/v1',
+			label: 'brian',
+			detail: 'Go (Subscription) · https://opencode.ai/zen/go/v1',
 		});
-		expect(connectionPickerRow(zen('opencode-zen'))).toEqual({
-			label: 'OpenCode Zen (API usage)',
-			detail: 'https://opencode.ai/zen/v1',
+		expect(connectionPickerRow(zen('mika'))).toEqual({
+			label: 'mika',
+			detail: 'Zen (API usage) · https://opencode.ai/zen/v1',
 		});
+	});
+	test('two opencode keys of the SAME tier stay distinguishable by name', () => {
+		// The user's complaint: with two Go connections (different API keys)
+		// the rows must read by NAME, not both "OpenCode Go (Subscription)".
+		const first = connectionPickerRow(go('work-key'));
+		const second = connectionPickerRow(go('personal-key'));
+		expect(first.label).toBe('work-key');
+		expect(second.label).toBe('personal-key');
+		expect(first.detail).toBe(
+			'Go (Subscription) · https://opencode.ai/zen/go/v1',
+		);
+		expect(second.detail).toBe(
+			'Go (Subscription) · https://opencode.ai/zen/go/v1',
+		);
 	});
 	test('non-OpenCode picker rows keep the user-given name + endpoint', () => {
 		expect(
