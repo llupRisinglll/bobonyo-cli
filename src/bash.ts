@@ -203,6 +203,10 @@ export async function runBash(
 		}
 	};
 
+	// Register immediately so the floating notification appears from the
+	// start (not just after the 15s budget expires). The `running: true`
+	// flag controls the count; finished() flips it to false.
+	setBgTasks(prev => [...prev, task]);
 	const finished = (async () => {
 		await Promise.all([
 			proc.exited,
@@ -238,7 +242,6 @@ export async function runBash(
 		: 'done';
 
 	if (outcome === 'background') {
-		setBgTasks(prev => [...prev, task]);
 		void finished
 			.then(() => {
 				const scriptLines = command

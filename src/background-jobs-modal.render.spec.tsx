@@ -149,13 +149,13 @@ describe('BackgroundJobsModal', () => {
 						fg={colors().primary}
 						attributes={createTextAttributes({bold: true})}
 					>
-						background jobs: 1
+						bg: 1
 					</text>
 					<text
 						fg={colors().secondary}
 						attributes={createTextAttributes({dim: true})}
 					>
-						/ps or click
+						/ps · click
 					</text>
 				</box>
 			),
@@ -164,8 +164,8 @@ describe('BackgroundJobsModal', () => {
 		try {
 			await setup.flush();
 			const frame = setup.captureSpans();
-			expect(frameHas(frame, 'background jobs: 1')).toBe(true);
-			expect(frameHas(frame, '/ps or click')).toBe(true);
+			expect(frameHas(frame, 'bg: 1')).toBe(true);
+			expect(frameHas(frame, '/ps · click')).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}

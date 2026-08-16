@@ -3891,31 +3891,30 @@ export function App() {
 			</Show>
 			{/* FLOATING background-jobs notification (top-right, sticky):
 			    replaces the old `bg: n` status-line segment. Shows while
-			    any background bash task runs; clicking it (or `/ps`) opens
-			    the live jobs modal. Hidden while any modal is up (the
-			    modal owns the top of the screen). */}
+			    any bash task is running (registered immediately, before the
+			    15s foreground budget); clicking it (or `/ps`) opens the
+			    live jobs modal. Hidden while any modal is up. */}
 			<Show when={activeBgCount() > 0 && !anyModalOpen()}>
 				<box
 					position="absolute"
 					top={1}
 					right={2}
 					zIndex={2500}
-					flexDirection="column"
 					border
 					borderStyle="rounded"
 					borderColor={colors().primary}
 					backgroundColor={colors().base}
 					paddingX={2}
-					paddingY={1}
+					paddingY={0}
 					{...({
 						onMouseUp: () => setPsOpen(true),
 					} as any)}
 				>
 					<text fg={colors().primary} attributes={bold()}>
-						background jobs: {activeBgCount()}
+						bg: {activeBgCount()}
 					</text>
 					<text fg={colors().secondary} attributes={dim()}>
-						/ps or click
+						/ps · click
 					</text>
 				</box>
 			</Show>
