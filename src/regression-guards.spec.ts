@@ -1489,6 +1489,14 @@ describe('regression guards (COMPLETED attention popup)', () => {
 	test('the popup component dismisses on mouse AND key without claiming keys', () => {
 		const src = read('./components/completion-popup.tsx');
 		expect(src).toContain('✓ COMPLETED');
+		// The COMPLETED card uses the theme PRIMARY color (border + title),
+		// never the success-green — a task-done banner in green fights the
+		// terminal's signal colors and the user asked for primary.
+		expect(src).toMatch(/borderColor=\{colors\(\)\.primary\}/);
+		expect(src).toMatch(
+			/<text fg=\{colors\(\)\.primary\} attributes=\{bold\(\)\}>/,
+		);
+		expect(src).not.toMatch(/colors\(\)\.success/);
 		expect(src).toMatch(/onMouseMove: \(\) => props\.onDismiss\(\)/);
 		expect(src).toMatch(/onMouseDown: \(\) => props\.onDismiss\(\)/);
 		expect(src).toMatch(/onMouseUp: \(\) => props\.onDismiss\(\)/);

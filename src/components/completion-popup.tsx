@@ -59,13 +59,13 @@ export function CompletionPopup(props: {
 				height={cardHeight}
 				backgroundColor={colors().base}
 				borderStyle="rounded"
-				borderColor={colors().success}
+				borderColor={colors().primary}
 				paddingX={2}
 				paddingY={1}
 				flexDirection="column"
 			>
 				<box flexDirection="row" height={1}>
-					<text fg={colors().success} attributes={bold()}>
+					<text fg={colors().primary} attributes={bold()}>
 						✓ COMPLETED
 					</text>
 					<box flexGrow={1} />
