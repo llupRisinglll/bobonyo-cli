@@ -279,6 +279,12 @@ export const [detailsTitle, setDetailsTitle] = createSignal('');
 export const [detailsContent, setDetailsContent] = createSignal('');
 /** `/resume` opens as a modal (parity: the reference session picker). */
 export const [resumeOpen, setResumeOpen] = createSignal(false);
+/**
+ * Background-jobs modal (`/ps` or the floating `background jobs: n`
+ * notification): live list of running background bash tasks with tailed
+ * realtime output (the modal reads bgTasks() reactively).
+ */
+export const [psOpen, setPsOpen] = createSignal(false);
 export const [settingsTab, setSettingsTab] = createSignal(0);
 export const [settingsIndex, setSettingsIndex] = createSignal(0);
 /** Live output for running tool rows, keyed by tool-call id. */
@@ -382,6 +388,7 @@ export const anyModalOpen = createMemo(
 		agentsOpen() ||
 		detailsOpen() ||
 		resumeOpen() ||
+		psOpen() ||
 		Boolean(connectOpen()) ||
 		effortOpen() ||
 		Boolean(pendingTrust()),

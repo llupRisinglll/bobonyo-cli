@@ -42,6 +42,7 @@ export const BASE_COMMAND_NAMES = [
 	'tools',
 	'skills',
 	'tasks',
+	'ps',
 	'version',
 	'credits',
 	'doctor',
@@ -257,6 +258,8 @@ export interface CommandContext {
 	toolsList: () => void;
 	skillsList: () => void;
 	tasksList: () => void;
+	/** `/ps` — open the background-jobs modal (running bash tasks, live). */
+	ps: () => void;
 	version: () => void;
 	credits: () => void;
 	doctor: () => void;
@@ -440,6 +443,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		case 'tasks':
 			ctx.tasksList();
 			return true;
+		case 'ps':
+			ctx.ps();
+			return true;
 		case 'version':
 			ctx.version();
 			return true;
@@ -486,9 +492,7 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 				ctx.custom(name, args);
 				return true;
 			}
-			appendInfo(
-				`Unknown command: /${name}. Type /help for the command list.`,
-			);
+			appendInfo(`Unknown command: /${name}. Type /help for the command list.`);
 			return true;
 	}
 }

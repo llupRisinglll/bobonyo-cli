@@ -1179,7 +1179,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// input and the history scrollbox behind it (the k-scrolls bug
 		// class).
 		expect(read('./app.tsx')).toMatch(
-			/resumeOpen\(\) \|\|\n\s*connectOpen\(\)/,
+			/resumeOpen\(\) \|\|\n\s*psOpen\(\) \|\|\n\s*connectOpen\(\)/,
 		);
 		expect(read('./components/input-box.tsx')).toMatch(/anyModalOpen\(\)/);
 	});

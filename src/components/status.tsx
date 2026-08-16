@@ -10,7 +10,6 @@ import {
 	toolProfile,
 	usageHistory,
 } from '../state';
-import {bgTasks} from '../bash';
 import {createTextAttributes} from '@opentui/core';
 import {resolveProfile} from '../tools';
 import {colors} from '../theme';
@@ -29,10 +28,9 @@ import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
 export function Status() {
 	const terminalDimensions = useTerminalDimensions();
 	const bold = () => createTextAttributes({bold: true});
-	const bg = createMemo(() => {
-		const count = bgTasks().filter(task => task.running).length;
-		return count > 0 ? ` · bg: ${count}` : '';
-	});
+	// The `bg: n` segment is GONE: background jobs now surface as a
+	// floating top-right notification (`background jobs: n`, click or /ps
+	// opens the live modal) instead of a status-line digit.
 	const agents = createMemo(() => {
 		const count = activeAgents();
 		return count > 0 ? ` · agents: ${count}` : '';
@@ -47,7 +45,9 @@ export function Status() {
 		const chosen = toolProfile();
 		const resolved = resolveProfile(chosen, activeEndpoint().model);
 		const wide = (terminalDimensions().width ?? 80) >= 100;
-		return chosen === 'auto' && wide ? `tune: ${resolved} (auto)` : `tune: ${resolved}`;
+		return chosen === 'auto' && wide
+			? `tune: ${resolved} (auto)`
+			: `tune: ${resolved}`;
 	});
 	// `Cred: $n` (DeepSeek) between tune and the counts; label secondary,
 	// amount primary — mirrors the `tune:` two-tone pair.
@@ -99,15 +99,16 @@ export function Status() {
 			credSegment() +
 			cacheRateSegment() +
 			usageSegment() +
-			// agents/bg counts appear mid-line, budget them too or a narrow
-			// pane clips the `bg: 1` digit at the status-line edge.
-			agents() +
-			bg();
+			// The agents count appears mid-line, budget it too or a narrow
+			// pane clips the digit at the status-line edge.
+			agents();
 		return statusPathLabel({left, user, cwd, width});
 	});
 	return (
 		<box flexDirection="row" height={1}>
-			<text fg={colors().error} attributes={bold()}>⏵⏵⏵ {modeLabel()}</text>
+			<text fg={colors().error} attributes={bold()}>
+				⏵⏵⏵ {modeLabel()}
+			</text>
 			{/* Leading spaces live in the FOLLOWING node, OpenTUI trims
 			    trailing whitespace from a text node, which ate the space
 			    between `tune:` and the value. */}
@@ -132,7 +133,11 @@ export function Status() {
 					{formatCacheRate(sessionCacheStats())}
 				</text>
 			</Show>
-			<Show when={isXiaomiMiMo(activeEndpoint()) && formatMonthlyUsage(providerUsage())}>
+			<Show
+				when={
+					isXiaomiMiMo(activeEndpoint()) && formatMonthlyUsage(providerUsage())
+				}
+			>
 				<text fg={colors().secondary}> · used</text>
 				<text fg={colors().primary}>
 					{' '}
@@ -140,7 +145,6 @@ export function Status() {
 				</text>
 			</Show>
 			<text fg={colors().secondary}>{agents()}</text>
-			<text fg={colors().secondary}>{bg()}</text>
 			<box flexGrow={1} />
 			<text fg={colors().secondary}>{cwdLabel()}</text>
 		</box>

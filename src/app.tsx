@@ -119,6 +119,7 @@ import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
 import {EFFORT_LEVELS} from './components/model-modal';
 import {ConnectProviderModal} from './components/connect-provider-modal';
+import {BackgroundJobsModal} from './components/background-jobs-modal';
 import {EffortModal} from './components/effort-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
@@ -273,6 +274,8 @@ import {
 	setDetailsContent,
 	resumeOpen,
 	setResumeOpen,
+	psOpen,
+	setPsOpen,
 	settingsTab,
 	setSettingsTab,
 	settingsIndex,
@@ -285,6 +288,7 @@ import {
 	setUsageHistory,
 	sessionId,
 	sessionName,
+	anyModalOpen,
 	statusLineEnabled,
 	titleShape,
 	toolProfile,
@@ -1101,6 +1105,7 @@ export function App() {
 			agentsOpen() ||
 			detailsOpen() ||
 			resumeOpen() ||
+			psOpen() ||
 			connectOpen() ||
 			effortOpen()
 		) {
@@ -1810,6 +1815,7 @@ export function App() {
 				toolsList,
 				skillsList,
 				tasksList,
+				ps: () => setPsOpen(true),
 				version: versionInfo,
 				credits,
 				doctor,
@@ -3767,6 +3773,11 @@ export function App() {
 					onClose={() => setDetailsOpen(false)}
 				/>
 			</Show>
+			{/* Background-jobs modal (`/ps` or the floating notification):
+			    live list of running bash tasks with tailed realtime output. */}
+			<Show when={psOpen()}>
+				<BackgroundJobsModal onClose={() => setPsOpen(false)} />
+			</Show>
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
 			{/* `/commands` / `/help`: grouped 2-column catalog modal. */}
 			<Show when={commandsOpen()}>
@@ -3876,6 +3887,36 @@ export function App() {
 					zIndex={3100}
 				>
 					<text fg={colors().secondary}>{completionMessage()}</text>
+				</box>
+			</Show>
+			{/* FLOATING background-jobs notification (top-right, sticky):
+			    replaces the old `bg: n` status-line segment. Shows while
+			    any background bash task runs; clicking it (or `/ps`) opens
+			    the live jobs modal. Hidden while any modal is up (the
+			    modal owns the top of the screen). */}
+			<Show when={activeBgCount() > 0 && !anyModalOpen()}>
+				<box
+					position="absolute"
+					top={1}
+					right={2}
+					zIndex={2500}
+					flexDirection="column"
+					border
+					borderStyle="rounded"
+					borderColor={colors().primary}
+					backgroundColor={colors().base}
+					paddingX={2}
+					paddingY={1}
+					{...({
+						onMouseUp: () => setPsOpen(true),
+					} as any)}
+				>
+					<text fg={colors().primary} attributes={bold()}>
+						background jobs: {activeBgCount()}
+					</text>
+					<text fg={colors().secondary} attributes={dim()}>
+						/ps or click
+					</text>
 				</box>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference
