@@ -9,6 +9,7 @@ import {liveRowSegments} from './live-tool-row';
 import {colors} from './theme';
 import {markdownSyntaxStyleFor} from './syntax';
 import {formatToolEntry} from './tool-display';
+import {historyFillWidth, toolRowFillWidth} from './history-width';
 /**
  * RENDER-LEVEL regression guard for the Edit diff view.
  *
@@ -393,6 +394,84 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(boldSpan?.attributes).toBe(createTextAttributes({bold: true}));
 		// The glyph column still reads `✦ ` (the brief row keeps its entry
 		// glyph), and the brief text starts after it.
+
 		expect(brief.startsWith('✦ ')).toBe(true);
+	});
+	test('BRIEFED diff rows fit the renderable (3-wide indent shrinks the fill)', async () => {
+		// The briefed entry prepends a 3-wide indent box to EVERY row; the
+		// tokenizer budget must shrink by the same 3 or the padded row
+		// renders one cell wider than the renderable and the TERMINAL wraps a
+		// phantom blank row after every diff row (the "extra breakline" in
+		// the diff view — the clipped test renderer never shows it, so the
+		// check asserts the painted width against the real renderable).
+		const terminalWidth = 84;
+		const renderable = historyFillWidth(terminalWidth);
+		const raw = formatToolEntry(
+			{
+				name: 'string_replace',
+				detail:
+					'/mnt/data/KSProjects/NanoCollective/bobonyo/src/components/completion-popup.tsx',
+				output:
+					'Replaced 1 occurrence in /mnt/data/KSProjects/NanoCollective/bobonyo/src/components/completion-popup.tsx (at line 32)\nconst cardHeight = 8;\nconst cardY = () => Math.max(2, Math.floor((dims().height - cardHeight) / 2));',
+				args: {
+					path: '/mnt/data/KSProjects/NanoCollective/bobonyo/src/components/completion-popup.tsx',
+					old_string: 'const cardHeight = 8;',
+					new_string:
+						'const cardHeight = () => Math.min(dims().height - 2, 8);',
+				},
+			},
+			true,
+			'done',
+			true,
+			true,
+			renderable,
+		);
+		const inner = raw
+			.split('\n')
+			.filter(line => !/^\s*```/.test(line))
+			.join('\n');
+		const seg = liveRowSegments(
+			inner,
+			'filediff',
+			'done',
+			colors(),
+			toolRowFillWidth(terminalWidth, 'I will check the file first'),
+		);
+		const setup = await testRender(
+			() => (
+				<FileToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={false}
+					md={testMd}
+					brief="I will check the file first"
+				/>
+			),
+			{width: terminalWidth, height: 20},
+		);
+		await setup.flush();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const frame = setup.captureSpans();
+		// CHUNK-LEVEL INVARIANT: every tokenized row (indent + number +
+		// sigil + code + fill padding) plus the 3-wide FileToolRow indent
+		// box must fit the renderable. The captured frame TRIMS trailing
+		// padding, so the overflow is invisible to the painted rows — the
+		// terminal, however, wraps it onto a phantom blank row after every
+		// diff row. This is the assertion that catches the brief-indent
+		// drift (indent box 3 vs a fill shrink of 2).
+		for (const line of seg.body) {
+			const width = line.reduce((sum, c) => sum + c.text.length, 0);
+			expect(3 + width).toBeLessThanOrEqual(renderable);
+		}
+		for (const line of frame.lines) {
+			// Sanity: no painted content row overflows the terminal width.
+			const text = line.spans
+				.map(s => s.text)
+				.join('')
+				.trimEnd();
+			expect(text.length).toBeLessThanOrEqual(terminalWidth);
+		}
 	});
 });

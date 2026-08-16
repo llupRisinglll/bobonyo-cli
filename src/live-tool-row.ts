@@ -92,27 +92,14 @@ export function liveRowSegments(
 			.join('\n');
 		chunks =
 			lang === 'filerow'
-				? tokenizeFileRow(
-						inner,
-						rowPath(inner),
-						status,
-						colors,
-					)
+				? tokenizeFileRow(inner, rowPath(inner), status, colors, width)
 				: lang === 'filediff'
-					? tokenizeFileDiff(
-							inner,
-							rowPath(inner),
-							status,
-							colors,
-							width,
-						)
-					: trimmed
-							.split('\n')
-							.map(line => ({
-								__isChunk: true as const,
-								text: line,
-								fg: themeColors(colors).fg.secondary,
-							}));
+					? tokenizeFileDiff(inner, rowPath(inner), status, colors, width)
+					: trimmed.split('\n').map(line => ({
+							__isChunk: true as const,
+							text: line,
+							fg: themeColors(colors).fg.secondary,
+						}));
 	} else {
 		switch (lang) {
 			case 'bashrow':
@@ -139,6 +126,7 @@ export function liveRowSegments(
 					rowPath(trimmed),
 					status,
 					colors,
+					width,
 				);
 				break;
 			case 'filediff':

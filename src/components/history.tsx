@@ -284,6 +284,7 @@ export function History(props: {
 						rowPath(token.text ?? ''),
 						status,
 						colors(),
+						historyFillWidth(terminalDimensions().width ?? 80),
 					),
 			}),
 		filediff: (token, status) =>
@@ -640,8 +641,8 @@ export function History(props: {
 					batchBriefed: part.brief === ' ',
 					// Same tokenizer path the LIVE rows use: identical colors,
 					// spacing and syntax highlighting while running and done.
-					// Briefed rows (FileToolRow) render a 2-wide indent box per
-					// body row, so their fill budget shrinks by 2 — otherwise
+					// Briefed rows (FileToolRow) render a 3-wide indent box per
+					// body row, so their fill budget shrinks by 3 — otherwise
 					// the padded row overflows the renderable and the TERMINAL
 					// wraps a phantom line after every diff row.
 					segments: liveRowSegments(
@@ -865,7 +866,7 @@ export function History(props: {
 						rowLanguage(message.tool.name),
 						'running',
 						colors(),
-						// Briefed file rows carry a 2-wide indent box per body
+						// Briefed file rows carry a 3-wide indent box per body
 						// row — shrink the fill so they never overflow the
 						// renderable (the phantom wrapped line per diff row).
 						toolRowFillWidth(terminalDimensions().width ?? 80, message.brief),

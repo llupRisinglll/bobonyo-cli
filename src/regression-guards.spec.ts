@@ -1404,7 +1404,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const width = read('./history-width.ts');
 		expect(width).toMatch(/export function toolRowFillWidth/);
 		expect(width).toMatch(/brief !== undefined && brief !== ''/);
-		expect(width).toMatch(/Math\.max\(1, fill - 2\)/);
+		expect(width).toMatch(/Math\.max\(1, fill - 3\)/);
 		const history = read('./components/history.tsx');
 		// Settled component-tool rows (filerow/filediff render as
 		// FileToolRow) must use the brief-aware width.

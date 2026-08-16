@@ -77,6 +77,36 @@ function emitLines(
 }
 
 /**
+ * Cap a tool header (`✦ Edit /long/path/file.ts`) to the renderable width.
+ *
+ * A long repo path makes the header outgrow the terminal: `✦ Edit
+ * /mnt/data/KSProjects/…/file.ts` is ~86 chars against a 79-col renderable,
+ * and the TERMINAL wraps the overflow onto a phantom blank row after the
+ * header — the "extra breakline" in the diff/file view, invisible to the
+ * OpenTUI test renderer (it clips instead of wrapping) and worse on narrow
+ * screens. Shorten the PATH (keep the filename, ellipsis on the head —
+ * status-path parity); the glyph and action name stay intact. `width` 0
+ * (unknown) disables the cap.
+ */
+function capToolHeader(
+	glyph: string,
+	name: string,
+	rest: string,
+	width: number,
+): {glyph: string; name: string; rest: string} {
+	if (width <= 0) return {glyph, name, rest};
+	const budget = Math.max(1, width - glyph.length - name.length);
+	if (rest.length <= budget) return {glyph, name, rest};
+	const slash = rest.lastIndexOf('/');
+	const tail = slash === -1 ? rest : rest.slice(slash + 1);
+	let capped = ` …${tail}`;
+	if (capped.length > budget) {
+		capped = ` ${tail.slice(-Math.max(1, budget - 1))}`;
+	}
+	return {glyph, name, rest: capped};
+}
+
+/**
  * Longest common PREFIX and SUFFIX of two strings, the unchanged outer
  * parts of a changed line (the middle is the word-level diff).
  */
@@ -307,6 +337,7 @@ export function tokenizeFileRow(
 	path: string,
 	status: RowStatus,
 	colors: Colors,
+	width = 0,
 ): TextChunk[] {
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
@@ -327,13 +358,21 @@ export function tokenizeFileRow(
 		(line, index, isHeader) => {
 			if (isHeader) {
 				// `✦ Write <path>`, glyph by status, `Write` primary bold,
-				// `<path>` secondary.
+				// `<path>` secondary (path capped to the renderable width —
+				// a long repo path must never overflow and wrap a phantom
+				// blank row in the terminal).
 				const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
 				if (m) {
+					const capped = capToolHeader(
+						m[1] ?? '',
+						m[2] ?? '',
+						m[3] ?? '',
+						width,
+					);
 					return [
-						chunk(m[1] ?? '', glyphColor(status, palette)),
-						chunk(m[2] ?? '', palette.fg.primary, bold()),
-						chunk(m[3] ?? '', palette.fg.secondary),
+						chunk(capped.glyph, glyphColor(status, palette)),
+						chunk(capped.name, palette.fg.primary, bold()),
+						chunk(capped.rest, palette.fg.secondary),
 					];
 				}
 				return headerChunks(line, status, palette, defaultFg);
@@ -700,12 +739,21 @@ export function tokenizeFileDiff(
 			if (isHeader) {
 				// `✦ Edit <path>`, ONLY the action name (Edit) is primary bold;
 				// the glyph is status-colored and the path stays secondary.
+				// The path is capped to the renderable width (capToolHeader):
+				// a long repo path overflows on narrow terminals and the
+				// terminal wraps a phantom blank row after the header.
 				const m = line.match(/^([✦⚙]\s*)([A-Za-z]+)(\s+.*)$/);
 				if (m) {
+					const capped = capToolHeader(
+						m[1] ?? '',
+						m[2] ?? '',
+						m[3] ?? '',
+						width,
+					);
 					return [
-						chunk(m[1] ?? '', glyphColor(status, palette)),
-						chunk(m[2] ?? '', palette.fg.primary, bold()),
-						chunk(m[3] ?? '', palette.fg.secondary),
+						chunk(capped.glyph, glyphColor(status, palette)),
+						chunk(capped.name, palette.fg.primary, bold()),
+						chunk(capped.rest, palette.fg.secondary),
 					];
 				}
 				return headerChunks(line, status, palette, defaultFg);

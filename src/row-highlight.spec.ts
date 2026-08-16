@@ -375,6 +375,40 @@ describe('tokenizeFileDiff', () => {
 			if (text.trim()) expect(text.startsWith(' ')).toBe(true);
 		}
 	});
+	test('a long path header is capped to the renderable width (never wraps a phantom line)', () => {
+		// `✦ Edit /very/long/repo/path/file.ts` outgrows a narrow terminal; the
+		// TERMINAL wraps the overflow onto a phantom blank row after the
+		// header (the "extra breakline" in the diff view — the OpenTUI test
+		// renderer clips instead of wrapping, so this is asserted at the
+		// chunk level). The path shortens with a head ellipsis, the filename
+		// stays visible.
+		const width = historyFillWidth(70);
+		const header =
+			'✦ Edit /mnt/data/KSProjects/NanoCollective/bobonyo/src/components/completion-popup.tsx';
+		const chunks = tokenizeFileDiff(
+			`${header}\n ⎿ 2 lines → 17 lines\n   1 - const a = 1;`,
+			'/mnt/data/KSProjects/NanoCollective/bobonyo/src/components/completion-popup.tsx',
+			'done',
+			THEME,
+			width,
+		);
+		const lines = perLine(chunks);
+		const headerLine = lines[0] ?? [];
+		const total = headerLine.reduce((sum, c) => sum + c.text.length, 0);
+		// The capped header fits the renderable — no overflow, no wrap.
+		expect(total).toBeLessThanOrEqual(width);
+		// The filename survives; the long head is ellipsized.
+		const headerText = headerLine.map(c => c.text).join('');
+		expect(headerText).toContain('completion-popup.tsx');
+		expect(headerText).toContain('…');
+		expect(headerText).not.toContain('NanoCollective');
+	});
+	test('a short path header stays untouched (no cap)', () => {
+		const chunks = tokenizeFileDiff(DIFF_TEXT, 'src/foo.ts', 'done', THEME, 80);
+		const lines = perLine(chunks);
+		const headerText = (lines[0] ?? []).map(c => c.text).join('');
+		expect(headerText).toBe('✦ Edit src/foo.ts');
+	});
 });
 
 describe('tokenizeStatusRow', () => {
