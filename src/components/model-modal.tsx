@@ -5,7 +5,7 @@ import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
-import {knownPresetFor} from './connect-provider-modal';
+import {knownPresetFor, maskSecret} from './connect-provider-modal';
 import {loadPreferences} from '../config';
 import {wrapText} from '../text-wrap';
 
@@ -17,6 +17,12 @@ export interface ModelProvider {
 	name: string;
 	/** Endpoint the connection runs on — resolves the REAL provider title. */
 	baseUrl?: string;
+	/**
+	 * RESOLVED API key, display-only: the account picker shows a MASKED
+	 * slice (maskSecret) so the user recognizes WHICH key/connection they
+	 * created — never the raw secret.
+	 */
+	apiKey?: string;
 	models: string[];
 	modelEfforts: Record<string, string>;
 	contextWindow?: number;
@@ -106,13 +112,22 @@ export function connectionPickerRow(provider: ModelProvider): {
 	const preset = provider.baseUrl
 		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
 		: undefined;
+	// The account picker identifies the CREATED connection: the MASKED API
+	// key (first + last chars — maskSecret) when one exists, the endpoint
+	// otherwise (keyless anonymous tiers, custom providers).
+	const keyDetail = provider.apiKey ? maskSecret(provider.apiKey) : '';
 	if (preset?.id === 'opencode-zen' || preset?.id === 'opencode-go') {
 		return {
 			label: provider.name || provider.id,
-			detail: `${openCodeTierLabel(provider)} · ${provider.baseUrl ?? ''}`,
+			detail:
+				keyDetail ||
+				`${openCodeTierLabel(provider)} · ${provider.baseUrl ?? ''}`,
 		};
 	}
-	return {label: provider.name || provider.id, detail: provider.baseUrl ?? ''};
+	return {
+		label: provider.name || provider.id,
+		detail: keyDetail || provider.baseUrl || '',
+	};
 }
 
 /** OpenCode endpoint TIER (Zen vs Go): the two share ONE opencode.ai
@@ -672,10 +687,15 @@ export function ModelModal(props: {
 	};
 
 	/** OpenCode tier options for the tier step (with a label per tier). */
-	const tierOptions = (): Array<{tier: 'zen' | 'go'; label: string}> => {
+	/** OpenCode tier options for the tier step (label + ENDPOINT per tier). */
+	const tierOptions = (): Array<{
+		tier: 'zen' | 'go';
+		label: string;
+		detail: string;
+	}> => {
 		const step = tierStep();
 		if (!step) return [];
-		const out: Array<{tier: 'zen' | 'go'; label: string}> = [];
+		const out: Array<{tier: 'zen' | 'go'; label: string; detail: string}> = [];
 		for (const tier of distinctOpenCodeTiers(step.connections)) {
 			const rep = step.connections.find(c => openCodeTierOf(c) === tier);
 			out.push({
@@ -685,6 +705,9 @@ export function ModelModal(props: {
 					: tier === 'zen'
 						? 'Zen (API usage)'
 						: 'Go (Subscription)',
+				// The endpoint tells the user WHICH URL the tier will use
+				// (the two share the key, only the endpoint differs).
+				detail: rep?.baseUrl ?? '',
 			});
 		}
 		return out;
@@ -1212,6 +1235,10 @@ export function ModelModal(props: {
 													>
 														{active ? '❯ ' : '  '}
 														{option.label}
+													</text>
+													<box flexGrow={1} />
+													<text fg={colors().secondary} attributes={dim()}>
+														{option.detail}
 													</text>
 												</box>
 											)}

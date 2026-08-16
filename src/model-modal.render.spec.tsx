@@ -116,6 +116,8 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 		id: name,
 		name,
 		baseUrl: 'https://opencode.ai/zen/go/v1',
+		// A RESOLVED key: the account picker must show the MASKED slice.
+		apiKey: `sk-opencode-${name}-key-1234567890`,
 		models: ['minimax-m3'],
 		modelEfforts: {},
 	});
@@ -161,9 +163,10 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 			expect(frameHas(frame, 'Select provider')).toBe(true);
 			expect(frameHas(frame, 'brian')).toBe(true);
 			expect(frameHas(frame, 'mika')).toBe(true);
+			expect(frameHas(frame, 'sk-o…7890')).toBe(true);
 			expect(
 				frameHas(frame, 'Go (Subscription) · https://opencode.ai/zen/go/v1'),
-			).toBe(true);
+			).toBe(false);
 
 			// Pick the second account (mika) → select (effort already chosen).
 			mockInput.pressArrow('down');
@@ -212,9 +215,7 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 			// The NAMES are the selectable rows — not two identical tier labels.
 			expect(frameHas(frame, 'work-key')).toBe(true);
 			expect(frameHas(frame, 'personal-key')).toBe(true);
-			expect(
-				frameHas(frame, 'Go (Subscription) · https://opencode.ai/zen/go/v1'),
-			).toBe(true);
+			expect(frameHas(frame, 'sk-o…7890')).toBe(true);
 			// Pick the second key → effort already chosen → select.
 			mockInput.pressArrow('down');
 			await setup.flush();
@@ -270,6 +271,10 @@ describe('model modal multiple accounts (ONE group per provider)', () => {
 			expect(tierText).toContain('Select tier');
 			expect(tierText).toContain('Zen (API usage)');
 			expect(tierText).toContain('Go (Subscription)');
+			// The tier rows show their ENDPOINT, so the user knows which URL
+			// each tier will use (Zen/Go share the key, differ in endpoint).
+			expect(tierText).toContain('https://opencode.ai/zen/v1');
+			expect(tierText).toContain('https://opencode.ai/zen/go/v1');
 			// The cursor starts on ZEN (index 0) — Enter picks it directly →
 			// only the zen connection remains.
 			mockInput.pressEnter();

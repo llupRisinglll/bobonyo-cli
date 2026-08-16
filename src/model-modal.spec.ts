@@ -283,6 +283,33 @@ describe('openCodeTierLabel / connectionPickerRow (Zen vs Go tier picker)', () =
 			'Go (Subscription) · https://opencode.ai/zen/go/v1',
 		);
 	});
+	test('the picker shows the MASKED API KEY (first + last chars), never the raw secret', () => {
+		const withKey = {
+			...go('brian'),
+			apiKey: 'sk-opencode-work-key-1234567890',
+		};
+		const row = connectionPickerRow(withKey);
+		expect(row.label).toBe('brian');
+		// maskSecret: first 4 + last 4 with an ellipsis.
+		expect(row.detail).toBe('sk-o…7890');
+		expect(row.detail).not.toContain('opencode-work-key');
+		// The ENDPOINT no longer rides the detail when a key exists.
+		expect(row.detail).not.toContain('opencode.ai');
+	});
+	test('keyless connections (anonymous zen, custom) fall back to endpoint/tier detail', () => {
+		expect(connectionPickerRow(go('brian')).detail).toBe(
+			'Go (Subscription) · https://opencode.ai/zen/go/v1',
+		);
+		expect(
+			connectionPickerRow({
+				id: 'my-gateway',
+				name: 'my-gateway',
+				baseUrl: 'https://my-gateway.example/v1',
+				models: [],
+				modelEfforts: {},
+			}).detail,
+		).toBe('https://my-gateway.example/v1');
+	});
 	test('non-OpenCode picker rows keep the user-given name + endpoint', () => {
 		expect(
 			connectionPickerRow({

@@ -3357,6 +3357,9 @@ export function App() {
 			id: provider.id,
 			name: provider.name ?? provider.id,
 			baseUrl: provider.baseUrl,
+			// RESOLVED key for the account picker's MASKED display — never
+			// the raw secret (maskSecret shows only first/last chars).
+			apiKey: provider.apiKeyResolved || undefined,
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
 			contextWindow: provider.contextWindow,
