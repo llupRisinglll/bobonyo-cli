@@ -2,11 +2,13 @@ import {describe, expect, test} from 'bun:test';
 import {
 	connectProviderShortcut,
 	connectionPickerRow,
+	distinctOpenCodeTiers,
 	groupProviders,
 	initialModelRowIndex,
 	modelWithProvider,
 	nextModelCursor,
 	openCodeTierLabel,
+	openCodeTierOf,
 	providerDisplayName,
 	providerGroupKey,
 	providerHeaderParts,
@@ -294,6 +296,47 @@ describe('openCodeTierLabel / connectionPickerRow (Zen vs Go tier picker)', () =
 			label: 'my-gateway',
 			detail: 'https://my-gateway.example/v1',
 		});
+	});
+});
+describe('openCodeTierOf / distinctOpenCodeTiers (Zen vs Go endpoints)', () => {
+	const go = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/go/v1',
+		models: [],
+		modelEfforts: {},
+	});
+	const zen = (name: string) => ({
+		id: name,
+		name,
+		baseUrl: 'https://opencode.ai/zen/v1',
+		models: [],
+		modelEfforts: {},
+	});
+	test('maps the endpoint to the tier', () => {
+		expect(openCodeTierOf(go('brian'))).toBe('go');
+		expect(openCodeTierOf(zen('mika'))).toBe('zen');
+	});
+	test('non-OpenCode connections have no tier', () => {
+		expect(
+			openCodeTierOf({
+				id: 'deepseek',
+				name: 'deepseek',
+				baseUrl: 'https://api.deepseek.com',
+				models: [],
+				modelEfforts: {},
+			}),
+		).toBeUndefined();
+	});
+	test('distinct tiers across a merged group, Zen first', () => {
+		expect(distinctOpenCodeTiers([go('a'), zen('b')])).toEqual(['zen', 'go']);
+		expect(distinctOpenCodeTiers([go('a'), go('b')])).toEqual(['go']);
+		expect(distinctOpenCodeTiers([zen('a')])).toEqual(['zen']);
+		expect(
+			distinctOpenCodeTiers([
+				{id: 'x', name: 'x', models: [], modelEfforts: {}},
+			]),
+		).toEqual([]);
 	});
 });
 describe('sameProviderGroup (account-swap detection)', () => {

@@ -115,6 +115,35 @@ export function connectionPickerRow(provider: ModelProvider): {
 	return {label: provider.name || provider.id, detail: provider.baseUrl ?? ''};
 }
 
+/** OpenCode endpoint TIER (Zen vs Go): the two share ONE opencode.ai
+ *  API key, only the endpoint differs. Undefined for non-OpenCode
+ *  connections. Pure, unit-tested.
+ */
+export function openCodeTierOf(
+	provider: ModelProvider,
+): 'zen' | 'go' | undefined {
+	const preset = provider.baseUrl
+		? knownPresetFor({id: provider.id, baseUrl: provider.baseUrl})
+		: undefined;
+	if (preset?.id === 'opencode-zen') return 'zen';
+	if (preset?.id === 'opencode-go') return 'go';
+	return undefined;
+}
+
+/** The OpenCode tiers present among the given connections, Zen → Go order. */
+export function distinctOpenCodeTiers(
+	providers: ModelProvider[],
+): Array<'zen' | 'go'> {
+	const tiers: Array<'zen' | 'go'> = [];
+	if (providers.some(provider => openCodeTierOf(provider) === 'zen')) {
+		tiers.push('zen');
+	}
+	if (providers.some(provider => openCodeTierOf(provider) === 'go')) {
+		tiers.push('go');
+	}
+	return tiers;
+}
+
 /** REAL provider identity used to merge multiple connections (preset id). */
 export function providerGroupKey(provider: ModelProvider): string {
 	const preset = provider.baseUrl
@@ -560,11 +589,30 @@ export function ModelModal(props: {
 		model: string;
 		/** Chosen via the account picker on a DIFFERENT connection. */
 		accountSwitch?: boolean;
+		/**
+		 * OPENCODE (Zen + Go share one key): the model-selection flow is
+		 * model → effort → TIER (Zen/Go) → named connection. Present when
+		 * the effort step was entered from an opencode group with multiple
+		 * connections; the tier step narrows them by endpoint.
+		 */
+		opencodeConnections?: ModelProvider[];
 	} | null>(null);
+	/** OPENCODE TIER step: choose Zen or Go BEFORE the named connection. */
+	const [tierStep, setTierStep] = createSignal<{
+		model: string;
+		/** Effort chosen at the effort step (rides through to the select). */
+		effort?: string;
+		connections: ModelProvider[];
+	} | null>(null);
+	const [tierIndex, setTierIndex] = createSignal(0);
 	/** Account picker: the model is chosen, pick WHICH connection to use. */
 	const [connectionStep, setConnectionStep] = createSignal<{
 		model: string;
 		connections: ModelProvider[];
+		/** Effort already chosen (opencode tier flow) — commit directly. */
+		effort?: string;
+		/** True when reached via the opencode tier step. */
+		fromTier?: boolean;
 	} | null>(null);
 	const [connectionIndex, setConnectionIndex] = createSignal(0);
 	const [effortIndex, setEffortIndex] = createSignal(0);
@@ -604,11 +652,13 @@ export function ModelModal(props: {
 		provider: ModelProvider,
 		model: string,
 		accountSwitch?: boolean,
+		opencodeConnections?: ModelProvider[],
 	): void => {
 		setEffortStep({
 			providerId: provider.id,
 			model,
 			accountSwitch,
+			opencodeConnections,
 		});
 		const currentEffort = effectiveEffort(provider, model);
 		setEffortIndex(
@@ -621,15 +671,87 @@ export function ModelModal(props: {
 		);
 	};
 
+	/** OpenCode tier options for the tier step (with a label per tier). */
+	const tierOptions = (): Array<{tier: 'zen' | 'go'; label: string}> => {
+		const step = tierStep();
+		if (!step) return [];
+		const out: Array<{tier: 'zen' | 'go'; label: string}> = [];
+		for (const tier of distinctOpenCodeTiers(step.connections)) {
+			const rep = step.connections.find(c => openCodeTierOf(c) === tier);
+			out.push({
+				tier,
+				label: rep
+					? openCodeTierLabel(rep)
+					: tier === 'zen'
+						? 'Zen (API usage)'
+						: 'Go (Subscription)',
+			});
+		}
+		return out;
+	};
+
+	/** After the tier step: the tier's connections, then the named picker. */
+	const chooseTier = (index: number): void => {
+		const step = tierStep();
+		if (!step) return;
+		const option = tierOptions()[index];
+		if (!option) return;
+		setTierStep(null);
+		const connections = step.connections.filter(
+			connection => openCodeTierOf(connection) === option.tier,
+		);
+		setConnectionStep({
+			model: step.model,
+			effort: step.effort,
+			connections,
+			fromTier: true,
+		});
+		setConnectionIndex(0);
+	};
+
+	/**
+	 * FINAL select for the OPENCODE tier/connection flow: the key is SHARED
+	 * across Zen/Go, so switching to a DIFFERENT connection of the same
+	 * group is an account swap (context + cache head stay, no resend
+	 * confirm) — but only when the MODEL is unchanged; a model switch still
+	 * confirms the resend.
+	 */
+	const commitOpenCode = (
+		chosen: ModelProvider,
+		model: string,
+		effort?: string,
+	): void => {
+		const current = providerForId(props.currentProvider);
+		const accountSwap =
+			sameProviderGroup(chosen, current) &&
+			current?.id !== chosen.id &&
+			model === props.currentModel;
+		const target = {providerId: chosen.id, model, effort};
+		if (props.hasMessages && !accountSwap) setConfirming(target);
+		else props.onSelect(chosen.id, model, effort);
+	};
+
 	const selectCell = (cell: ModelCell): void => {
-		// A provider group with MULTIPLE accounts asks which connection to
-		// use for the selected model BEFORE the effort step.
-		if (cell.connections.length > 1) {
-			setConnectionStep({model: cell.model, connections: cell.connections});
+		const connections = cell.connections;
+		// OPENCODE (Zen + Go share ONE opencode.ai key, only the endpoint
+		// differs): model → effort → TIER (Zen/Go) → named connection.
+		// The tier + account are asked AFTER the effort, so the chosen
+		// effort rides through to the final select.
+		if (
+			connections.length > 1 &&
+			distinctOpenCodeTiers(connections).length > 0
+		) {
+			startEffort(connections[0]!, cell.model, false, connections);
+			return;
+		}
+		// Other groups with MULTIPLE accounts ask which connection to use
+		// for the selected model BEFORE the effort step.
+		if (connections.length > 1) {
+			setConnectionStep({model: cell.model, connections});
 			setConnectionIndex(0);
 			return;
 		}
-		startEffort(cell.connections[0]!, cell.model);
+		startEffort(connections[0]!, cell.model);
 	};
 
 	// The display LINE holding the cursor (for the scroll window).
@@ -689,9 +811,24 @@ export function ModelModal(props: {
 	useKeyboard(event => {
 		if (event.name === 'escape') {
 			if (connectionStep()) setConnectionStep(null);
+			else if (tierStep()) setTierStep(null);
 			else if (effortStep()) setEffortStep(null);
 			else if (confirming()) setConfirming(null);
 			else props.onClose();
+			return true;
+		}
+		if (tierStep()) {
+			const tiers = tierOptions();
+			if (event.name === 'up' || event.name === 'down') {
+				setTierIndex(prev => {
+					const next = event.name === 'down' ? prev + 1 : prev - 1;
+					return Math.max(0, Math.min(tiers.length - 1, next));
+				});
+				return true;
+			}
+			if (event.name === 'return') {
+				chooseTier(tierIndex());
+			}
 			return true;
 		}
 		if (connectionStep()) {
@@ -707,13 +844,24 @@ export function ModelModal(props: {
 				const step = connectionStep()!;
 				const chosen = connections[connectionIndex()]!;
 				setConnectionStep(null);
-				// Same provider, DIFFERENT account = an account swap: the
-				// conversation context and cache head stay untouched (the
-				// next turn sends normally), so no "will RESEND" confirm.
+				// OPENCODE tier flow: the effort was ALREADY chosen at the
+				// effort step — commit directly (account-swap rules apply).
+				if (step.fromTier) {
+					commitOpenCode(chosen, step.model, step.effort);
+					return true;
+				}
+				// Same provider, DIFFERENT account (and the SAME model) = an
+				// account swap: the conversation context and cache head stay
+				// untouched (the next turn sends normally), so no "will
+				// RESEND" confirm. A model change still confirms.
 				const current = providerForId(props.currentProvider);
 				const sameGroup = sameProviderGroup(chosen, current);
 				const sameConnection = current?.id === chosen.id;
-				startEffort(chosen, step.model, sameGroup && !sameConnection);
+				startEffort(
+					chosen,
+					step.model,
+					sameGroup && !sameConnection && step.model === props.currentModel,
+				);
 			}
 			return true;
 		}
@@ -730,12 +878,48 @@ export function ModelModal(props: {
 				const step = effortStep();
 				if (!step) return true;
 				const chosen = options[effortIndex()]!;
+				const effort = chosen.id === 'default' ? undefined : chosen.id;
+				setEffortStep(null);
+				// OPENCODE: effort is chosen FIRST, then the TIER (Zen / Go),
+				// then the named connection — the key is shared, only the
+				// endpoint differs.
+				if (step.opencodeConnections) {
+					const tiers = distinctOpenCodeTiers(step.opencodeConnections);
+					if (tiers.length > 1) {
+						setTierStep({
+							model: step.model,
+							effort,
+							connections: step.opencodeConnections,
+						});
+						setTierIndex(0);
+						return true;
+					}
+					if (tiers.length === 1) {
+						const tier = tiers[0]!;
+						const tierConns = step.opencodeConnections.filter(
+							connection => openCodeTierOf(connection) === tier,
+						);
+						if (tierConns.length > 1) {
+							setConnectionStep({
+								model: step.model,
+								effort,
+								connections: tierConns,
+								fromTier: true,
+							});
+							setConnectionIndex(0);
+							return true;
+						}
+						commitOpenCode(tierConns[0]!, step.model, effort);
+						return true;
+					}
+					commitOpenCode(step.opencodeConnections[0]!, step.model, effort);
+					return true;
+				}
 				const target = {
 					providerId: step.providerId,
 					model: step.model,
-					effort: chosen.id === 'default' ? undefined : chosen.id,
+					effort,
 				};
-				setEffortStep(null);
 				// Mid-conversation model switches RESEND the whole history,
 				// confirm first (parity: the reference warns about usage).
 				// An ACCOUNT swap within the same provider skips it: the
@@ -869,6 +1053,7 @@ export function ModelModal(props: {
 				<Show
 					when={
 						effortStep() === null &&
+						tierStep() === null &&
 						confirming() === null &&
 						connectionStep() === null
 					}
@@ -877,48 +1062,133 @@ export function ModelModal(props: {
 							when={connectionStep() !== null}
 							fallback={
 								<Show
-									when={effortStep() !== null}
+									when={tierStep() !== null}
 									fallback={
-										<box flexDirection="column">
-											<text fg={colors().primary} attributes={bold()}>
-												Switch model
-											</text>
-											<box height={1} />
-											<text fg={colors().warning}>
-												Switching to "
-												{modelWithProvider(
-													confirming()?.model ?? '',
-													providerForId(confirming()?.providerId),
-												)}
-												" will RESEND the entire conversation to the new model
-												and take additional usage.
-											</text>
-											<box height={1} />
-											<text fg={colors().secondary} attributes={dim()}>
-												(y) continue · (n) cancel
-											</text>
-										</box>
-									}
-								>
-									{/* opencode-style effort step: choose
+										<Show
+											when={effortStep() !== null}
+											fallback={
+												<box flexDirection="column">
+													<text fg={colors().primary} attributes={bold()}>
+														Switch model
+													</text>
+													<box height={1} />
+													<text fg={colors().warning}>
+														Switching to "
+														{modelWithProvider(
+															confirming()?.model ?? '',
+															providerForId(confirming()?.providerId),
+														)}
+														" will RESEND the entire conversation to the new
+														model and take additional usage.
+													</text>
+													<box height={1} />
+													<text fg={colors().secondary} attributes={dim()}>
+														(y) continue · (n) cancel
+													</text>
+												</box>
+											}
+										>
+											{/* opencode-style effort step: choose
 									    Default or a reasoning tier for THIS
 									    model before switching. */}
+											<box flexDirection="column">
+												<text fg={colors().primary} attributes={bold()}>
+													Select effort
+												</text>
+												<box height={1} />
+												<text fg={colors().text}>
+													{modelWithProvider(
+														effortStep()?.model ?? '',
+														providerForId(effortStep()?.providerId),
+													)}
+												</text>
+												<box height={1} />
+												<For
+													each={(() => {
+														const sel = effortIndex();
+														return EFFORT_OPTIONS.map((option, idx) => ({
+															option,
+															active: idx === sel,
+														}));
+													})()}
+												>
+													{({option, active}) => (
+														<box
+															flexDirection="row"
+															height={1}
+															backgroundColor={
+																active ? activeRow().bg : undefined
+															}
+															{...({
+																onMouseMove: () =>
+																	setEffortIndex(
+																		EFFORT_OPTIONS.indexOf(option),
+																	),
+																onMouseUp: () => {
+																	const step = effortStep();
+																	if (!step) return;
+																	setEffortStep(null);
+																	const target = {
+																		providerId: step.providerId,
+																		model: step.model,
+																		effort:
+																			option.id === 'default'
+																				? undefined
+																				: option.id,
+																	};
+																	if (
+																		props.hasMessages &&
+																		!step.accountSwitch
+																	) {
+																		setConfirming(target);
+																	} else {
+																		props.onSelect(
+																			target.providerId,
+																			target.model,
+																			target.effort,
+																		);
+																	}
+																},
+															} as any)}
+														>
+															<text
+																fg={active ? activeRow().fg : colors().text}
+																attributes={active ? bold() : undefined}
+															>
+																{active ? '❯ ' : '  '}
+																{option.id === 'default'
+																	? effortDefaultLabel()
+																	: option.label}
+															</text>
+														</box>
+													)}
+												</For>
+												<box height={1} />
+												<text fg={colors().secondary} attributes={dim()}>
+													↑/↓ select · Enter choose · Esc back
+													{props.hasMessages
+														? ' · will resend the conversation'
+														: ''}
+												</text>
+											</box>
+										</Show>
+									}
+								>
+									{/* OPENCODE TIER STEP: Zen vs Go — the two share
+									    ONE opencode.ai API key (only the endpoint
+									    differs), so the tier is chosen BEFORE the
+									    named connection. */}
 									<box flexDirection="column">
 										<text fg={colors().primary} attributes={bold()}>
-											Select effort
+											Select tier
 										</text>
 										<box height={1} />
-										<text fg={colors().text}>
-											{modelWithProvider(
-												effortStep()?.model ?? '',
-												providerForId(effortStep()?.providerId),
-											)}
-										</text>
+										<text fg={colors().text}>{tierStep()?.model ?? ''}</text>
 										<box height={1} />
 										<For
 											each={(() => {
-												const sel = effortIndex();
-												return EFFORT_OPTIONS.map((option, idx) => ({
+												const sel = tierIndex();
+												return tierOptions().map((option, idx) => ({
 													option,
 													active: idx === sel,
 												}));
@@ -931,29 +1201,9 @@ export function ModelModal(props: {
 													backgroundColor={active ? activeRow().bg : undefined}
 													{...({
 														onMouseMove: () =>
-															setEffortIndex(EFFORT_OPTIONS.indexOf(option)),
-														onMouseUp: () => {
-															const step = effortStep();
-															if (!step) return;
-															setEffortStep(null);
-															const target = {
-																providerId: step.providerId,
-																model: step.model,
-																effort:
-																	option.id === 'default'
-																		? undefined
-																		: option.id,
-															};
-															if (props.hasMessages && !step.accountSwitch) {
-																setConfirming(target);
-															} else {
-																props.onSelect(
-																	target.providerId,
-																	target.model,
-																	target.effort,
-																);
-															}
-														},
+															setTierIndex(tierOptions().indexOf(option)),
+														onMouseUp: () =>
+															chooseTier(tierOptions().indexOf(option)),
 													} as any)}
 												>
 													<text
@@ -961,9 +1211,7 @@ export function ModelModal(props: {
 														attributes={active ? bold() : undefined}
 													>
 														{active ? '❯ ' : '  '}
-														{option.id === 'default'
-															? effortDefaultLabel()
-															: option.label}
+														{option.label}
 													</text>
 												</box>
 											)}
@@ -971,9 +1219,6 @@ export function ModelModal(props: {
 										<box height={1} />
 										<text fg={colors().secondary} attributes={dim()}>
 											↑/↓ select · Enter choose · Esc back
-											{props.hasMessages
-												? ' · will resend the conversation'
-												: ''}
 										</text>
 									</box>
 								</Show>

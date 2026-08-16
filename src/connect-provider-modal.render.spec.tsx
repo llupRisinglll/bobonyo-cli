@@ -73,9 +73,7 @@ describe('connect-provider edit flow (blank = keep, adaptive steps)', () => {
 			expect(frameHas(frame, 'Base URL')).toBe(false);
 			// custom-key: blank input, MASKED key placeholder, raw key must
 			// never appear anywhere in the frame.
-			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(
-				true,
-			);
+			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(true);
 			expect(frameHas(frame, PROVIDER.apiKey)).toBe(false);
 
 			// Discovery fetches the catalog, so the models step is skipped:
@@ -83,12 +81,8 @@ describe('connect-provider edit flow (blank = keep, adaptive steps)', () => {
 			mockInput.pressEnter();
 			await setup.flush();
 			frame = setup.captureSpans();
-			expect(frameHas(frame, 'Models (comma-separated, optional)')).toBe(
-				false,
-			);
-			expect(
-				frameHas(frame, 'leave blank to keep deepseek'),
-			).toBe(true);
+			expect(frameHas(frame, 'Models (comma-separated, optional)')).toBe(false);
+			expect(frameHas(frame, 'leave blank to keep deepseek')).toBe(true);
 
 			// Submit with every field still blank: the connection is saved
 			// UNCHANGED (blank = keep), not wiped.
@@ -134,18 +128,13 @@ describe('connect-provider edit flow (blank = keep, adaptive steps)', () => {
 			// Unmatched endpoint → the base-URL step is asked first.
 			let frame = setup.captureSpans();
 			expect(
-				frameHas(
-					frame,
-					'leave blank to keep https://my-gateway.example',
-				),
+				frameHas(frame, 'leave blank to keep https://my-gateway.example'),
 			).toBe(true);
 
 			mockInput.pressEnter();
 			await setup.flush();
 			frame = setup.captureSpans();
-			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(
-				true,
-			);
+			expect(frameHas(frame, 'leave blank to keep sk-a…wxyz')).toBe(true);
 
 			// No discovery → the models step IS asked.
 			mockInput.pressEnter();
@@ -161,9 +150,7 @@ describe('connect-provider edit flow (blank = keep, adaptive steps)', () => {
 			mockInput.pressEnter();
 			await setup.flush();
 			frame = setup.captureSpans();
-			expect(frameHas(frame, 'leave blank to keep my-gateway')).toBe(
-				true,
-			);
+			expect(frameHas(frame, 'leave blank to keep my-gateway')).toBe(true);
 		} finally {
 			delete process.env.BOBONYO_PROVIDERS;
 			setup.renderer.destroy();
@@ -238,12 +225,7 @@ describe('connect-provider paste handling', () => {
 			providers: [PROVIDER],
 		});
 		const setup = await testRender(
-			() => (
-				<ConnectProviderModal
-					onConnect={() => {}}
-					onClose={() => {}}
-				/>
-			),
+			() => <ConnectProviderModal onConnect={() => {}} onClose={() => {}} />,
 			{width: 80, height: 24, kittyKeyboard: true},
 		);
 		try {
@@ -264,9 +246,7 @@ describe('connect-provider paste handling', () => {
 			await mockInput.typeText('ab');
 			await setup.flush();
 			expect(frameHas(setup.captureSpans(), '•')).toBe(true);
-			expect(frameHas(setup.captureSpans(), 'leave blank to keep')).toBe(
-				false,
-			);
+			expect(frameHas(setup.captureSpans(), 'leave blank to keep')).toBe(false);
 
 			// Bracketed paste inserts into the SECRET field (masked bullets),
 			// and the raw pasted key must never appear in the frame.
@@ -297,9 +277,7 @@ describe('connect-provider delete flow (manage step d → y)', () => {
 					onDelete={id => {
 						deleted = id;
 						// Mirror the app's deleteProvider: remove from config.
-						const config = JSON.parse(
-							process.env.BOBONYO_PROVIDERS!,
-						);
+						const config = JSON.parse(process.env.BOBONYO_PROVIDERS!);
 						config.providers = config.providers.filter(
 							(provider: {id: string}) =>
 								provider.id.toLowerCase() !== id.toLowerCase(),
@@ -341,9 +319,7 @@ describe('connect-provider delete flow (manage step d → y)', () => {
 			await mockInput.typeText('d');
 			await setup.flush();
 			expect(deleted).toBeUndefined();
-			expect(frameHas(setup.captureSpans(), 'Delete provider')).toBe(
-				false,
-			);
+			expect(frameHas(setup.captureSpans(), 'Delete provider')).toBe(false);
 
 			// Back up and `d` → `y` deletes the connection.
 			mockInput.pressArrow('up');
@@ -356,6 +332,98 @@ describe('connect-provider delete flow (manage step d → y)', () => {
 			// The modal closes after a successful delete (the manage list
 			// cannot refresh in place — it is a frozen Show child).
 			expect(closed).toBe(1);
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+});
+
+describe('opencode connect flow (key only, no name step)', () => {
+	test('adding an OpenCode Zen/Go connection asks ONLY the API key', async () => {
+		let submitted: ProviderConfig | undefined;
+		// Pin the provider list: without this the REAL user config leaks in
+		// (the manage step appeared instead of the fresh connect flow).
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({providers: []});
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					onConnect={provider => {
+						submitted = provider;
+					}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			// Filter the picker to OpenCode and pick the ZEN entry (index 0).
+			await mockInput.typeText('opencode');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'API key')).toBe(true);
+			// Enter the key — the NAME step is SKIPPED (Zen/Go share one
+			// opencode.ai key; a new connection is just the key, auto-named).
+			await mockInput.typeText('sk-opencode-shared-key');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			const frame = setup.captureSpans();
+			expect(frameHas(frame, 'OpenCode Zen name')).toBe(false);
+			expect(submitted?.id).toBe('opencode-zen');
+			expect(submitted?.name).toBe('opencode-zen');
+			expect(submitted?.apiKey).toBe('sk-opencode-shared-key');
+			expect(submitted?.baseUrl).toBe('https://opencode.ai/zen/v1');
+		} finally {
+			delete process.env.BOBONYO_PROVIDERS;
+			setup.renderer.destroy();
+		}
+	});
+	test('a second OpenCode key gets the (2) suffix (no clobber)', async () => {
+		let submitted: ProviderConfig | undefined;
+		process.env.BOBONYO_PROVIDERS = JSON.stringify({
+			providers: [
+				{
+					id: 'opencode-zen',
+					name: 'opencode-zen',
+					baseUrl: 'https://opencode.ai/zen/v1',
+					apiKey: 'sk-first',
+					models: ['deepseek-v4-flash-free'],
+				},
+			],
+		});
+		const setup = await testRender(
+			() => (
+				<ConnectProviderModal
+					onConnect={provider => {
+						submitted = provider;
+					}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			const {mockInput} = setup;
+			await mockInput.typeText('opencode');
+			await setup.flush();
+			mockInput.pressEnter(); // → manage step (already connected)
+			await setup.flush();
+			mockInput.pressArrow('down'); // "Connect a new OpenCode Zen"
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'API key')).toBe(true);
+			await mockInput.typeText('sk-second');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			// Auto-named with the (2) suffix — the second key never clobbers
+			// the first connection.
+			expect(submitted?.id).toBe('opencode-zen (2)');
+			expect(submitted?.apiKey).toBe('sk-second');
 		} finally {
 			delete process.env.BOBONYO_PROVIDERS;
 			setup.renderer.destroy();

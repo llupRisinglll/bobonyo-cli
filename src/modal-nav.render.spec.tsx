@@ -66,7 +66,10 @@ describe('modal arrow navigation moves the VISIBLE selection', () => {
 		try {
 			const {mockInput} = setup;
 			await setup.flush();
-			mockInput.pressEnter(); // select the model → connection picker
+			mockInput.pressEnter(); // select the model → EFFORT step (opencode)
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'Select effort')).toBe(true);
+			mockInput.pressEnter(); // default effort
 			await setup.flush();
 			expect(frameHas(setup.captureSpans(), 'Select provider')).toBe(true);
 			// Initially brian (the first connection) is selected.

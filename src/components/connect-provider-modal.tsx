@@ -866,6 +866,16 @@ export function ConnectProviderModal(props: {
 
 	const submitApiKey = (): void => {
 		setPresetKey(input().trim());
+		// OpenCode Zen / OpenCode Go share the SAME opencode.ai API key —
+		// only the endpoint differs. A new connection needs JUST the key:
+		// connect immediately with the auto name (id + `(n)` suffix for
+		// duplicates), no name step.
+		const preset = selectedPreset();
+		if (preset.id === 'opencode-zen' || preset.id === 'opencode-go') {
+			setInput('');
+			connectPreset();
+			return;
+		}
 		push({kind: 'name'});
 	};
 	const connectPreset = (): void => {
