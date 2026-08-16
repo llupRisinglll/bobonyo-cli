@@ -227,6 +227,7 @@ import {
 	setInput,
 	setThinkingActive,
 	setLastUsage,
+	liveOutputs,
 	setLiveOutputs,
 	setMaxMessages,
 	setMessages,
@@ -2648,6 +2649,15 @@ export function App() {
 			// running" the user saw. Settle them with whatever output
 			// streamed so the transcript is honest and no ghost survives.
 			setMessages(prev => settleRunningToolRows(prev, liveOutputs()));
+			// CLEAR the live-output cache: liveOutputs persists tool output
+			// across turns (the pump writes to it, liveToolRows reads it).
+			// Settling consumed it into the transcript; clearing it prevents
+			// STALE output from bleeding into the NEXT turn's identical tool
+			// (a brief live-region window where the new message reads the old
+			// tool's output from liveOutputs = the "same bash printed twice
+			// while running" the user saw). Done after the settle so the
+			// settled row's output is captured first.
+			setLiveOutputs({});
 			setCancelling(false);
 			setRunning(false);
 			setBusy(false);
