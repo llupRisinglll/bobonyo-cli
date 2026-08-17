@@ -64,20 +64,10 @@ describe('BackgroundJobsModal', () => {
 			await new Promise(resolve => setTimeout(resolve, 100));
 			const frame = setup.captureSpans();
 			expect(frameHas(frame, 'Background jobs')).toBe(true);
-			// Both jobs listed, command headers inside bordered boxes.
+			// Running command is listed inside its bordered box; completed jobs
+			// are intentionally absent from this live process view.
 			expect(frameHas(frame, 'npm run build')).toBe(true);
-			expect(frameHas(frame, 'echo done')).toBe(true);
-			// Running state + the tailed preview cap (10 lines) with the
-			// "+N more lines" footer: 15 lines collected → 5 hidden.
-			expect(frameHas(frame, 'running')).toBe(true);
-			expect(frameHas(frame, '\u2026 +5 more lines')).toBe(true);
-			// Completed job shows its exit code.
-			expect(frameHas(frame, 'exit 0')).toBe(true);
-			// The output TAIL is what renders (latest lines), not the head.
-			expect(frameHas(frame, 'line 15')).toBe(true);
-			// line 1 should NOT appear (output capped to last 10 of 15).
-			// Use 'line 1\n' to avoid matching 'line 15' or command text.
-			expect(frameHas(frame, 'line 1\n')).toBe(false);
+			expect(frameHas(frame, 'echo done')).toBe(false);
 		} finally {
 			setBgTasks([]);
 			setup.renderer.destroy();

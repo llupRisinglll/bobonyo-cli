@@ -8,7 +8,6 @@ import {liveRowSegments} from '../live-tool-row';
 import {BashToolRow} from './bash-tool-row';
 import type {MarkdownBriefRenderer} from './markdown-brief';
 import {markdownSyntaxStyleFor} from '../syntax';
-import {formatElapsed} from '../state';
 
 /**
  * Background-jobs modal (`/ps`, or clicking the floating `background jobs:
@@ -37,13 +36,13 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
-	// Running jobs FIRST (live output), then completed ones.
-	const jobs = createMemo(() => {
-		const tasks = bgTasks();
-		return [...tasks]
-			.sort((a, b) => Number(b.running) - Number(a.running))
-			.slice(0, 8);
-	});
+	// Live process list only; snapshot output for reactive row updates.
+	const jobs = createMemo(() =>
+		bgTasks()
+			.filter(task => task.running)
+			.slice(0, 8)
+			.map(task => ({...task, output: [...task.output]})),
+	);
 
 	// The markdown renderer bits the bash rows want (no briefs here, but the
 	// component requires the accessor shape).
@@ -59,26 +58,23 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 	// box, colors and wrapping are identical. Re-runs on every output tick.
 	const jobSegments = (task: BackgroundTask) => {
 		const width = cardWidth() - 8;
-		const commandLines = wrapCommand(task.command, Math.max(20, width - 4));
-		const PREVIEW = 10;
-		const outputTail = task.output.slice(-PREVIEW);
+		const contentWidth = Math.max(20, width - 4);
+		const commandLines = wrapCommand(task.command, contentWidth);
+		const outputTail = task.output.slice(-10);
 		const hidden = task.output.length - outputTail.length;
+		const outputLines = outputTail.flatMap(line =>
+			wrapLine(line, contentWidth),
+		);
 		const body = [
 			...commandLines,
-			...outputTail,
+			...outputLines,
 			...(hidden > 0
 				? [`… +${hidden} more lines`]
-				: task.output.length === 0
+				: outputLines.length === 0
 					? ['(no output yet)']
 					: []),
 		].join('\n');
-		return liveRowSegments(
-			body,
-			'bashrow',
-			task.running ? 'running' : 'done',
-			colors(),
-			width,
-		);
+		return liveRowSegments(body, 'bashrow', 'running', colors(), width);
 	};
 
 	useKeyboard(event => {
@@ -146,29 +142,11 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 									<BashToolRow
 										header={seg.header}
 										body={seg.body}
-										status={task.running ? 'running' : 'done'}
+										status="running"
 										glyph="✦"
 										hovered={false}
 										md={md}
 									/>
-									{/* Meta line: task id · running/exit + elapsed. */}
-									<box flexDirection="row" height={1} paddingLeft={4}>
-										<text fg={colors().secondary} attributes={dim()}>
-											{task.id}
-											{' · '}
-											{task.running
-												? `running (${formatElapsed(
-														Math.floor((Date.now() - task.startedAt) / 1000),
-													)})`
-												: `exit ${task.exitCode ?? '?'} · ${formatElapsed(
-														Math.floor(
-															((task.completedAt ?? Date.now()) -
-																task.startedAt) /
-																1000,
-														),
-													)}`}
-										</text>
-									</box>
 								</box>
 							);
 						}}
@@ -177,6 +155,29 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 			</box>
 		</box>
 	);
+}
+
+/** Wrap streamed output so each piece gets its own rendered row. */
+function wrapLine(text: string, width: number): string[] {
+	if (!text) return [''];
+	const words = text.split(/\s+/).filter(Boolean);
+	const lines: string[] = [];
+	let current = '';
+	for (const word of words) {
+		if (word.length > width) {
+			if (current) lines.push(current);
+			current = '';
+			for (let i = 0; i < word.length; i += width)
+				lines.push(word.slice(i, i + width));
+		} else if (!current) current = word;
+		else if (current.length + 1 + word.length <= width) current += ` ${word}`;
+		else {
+			lines.push(current);
+			current = word;
+		}
+	}
+	if (current) lines.push(current);
+	return lines;
 }
 
 /** Wrap a command line to a width (hard-split long words, bash parity). */
