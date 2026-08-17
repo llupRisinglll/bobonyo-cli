@@ -143,6 +143,12 @@ describe('codex limit rows (payload → /status rows)', () => {
 		});
 		expect(rows[0]?.label).toBe('GPT-5.3-Codex-Spark Weekly limit');
 	});
+	test('shows available earned reset count', () => {
+		const rows = codexLimitRows({
+			rate_limit_reset_credits: {available_count: 2},
+		});
+		expect(rows).toEqual([{label: 'Resets available', value: '2'}]);
+	});
 	test('unlimited credits and empty payloads', () => {
 		expect(
 			codexLimitRows({

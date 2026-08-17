@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {readCodexAuth} from './codex-auth';
 import type {StatusRow} from './components/status-modal';
 
@@ -99,6 +100,7 @@ interface CodexUsagePayload {
 		limit_name?: string | null;
 		rate_limit?: CodexRateLimitDetails | null;
 	}> | null;
+	rate_limit_reset_credits?: {available_count?: number} | null;
 	credits?: {
 		has_credits?: boolean;
 		unlimited?: boolean;
@@ -162,6 +164,10 @@ export function codexLimitRows(payload: CodexUsagePayload): StatusRow[] {
 	} else if (credits?.has_credits) {
 		rows.push({label: 'Credits', value: 'Available'});
 	}
+	const resetCount = payload.rate_limit_reset_credits?.available_count;
+	if (typeof resetCount === 'number' && resetCount >= 0) {
+		rows.push({label: 'Resets available', value: String(resetCount)});
+	}
 	const monthly = payload.spend_control?.individual_limit;
 	if (monthly?.remaining_percent != null) {
 		const used = Number(monthly.used);
@@ -185,6 +191,45 @@ function capitalize(text: string): string {
 	return text.length === 0
 		? text
 		: text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Consume one earned Codex reset credit, then invalidate limit cache. */
+export async function consumeCodexReset(
+	baseUrl: string,
+	creditId?: string,
+): Promise<string> {
+	const auth = readCodexAuth();
+	if (!auth.accessToken) return 'CODEx reset unavailable: not logged in.';
+	const cacheKey = baseUrl.replace(/\/+$/, '');
+	const backend = cacheKey.replace(/\/codex$/, '');
+	try {
+		const response = await fetch(
+			`${backend}/wham/rate-limit-reset-credits/consume`,
+			{
+				method: 'POST',
+				headers: {
+					accept: 'application/json',
+					'content-type': 'application/json',
+					authorization: `Bearer ${auth.accessToken}`,
+					...(auth.accountId ? {'chatgpt-account-id': auth.accountId} : {}),
+					originator: 'bobonyo',
+				},
+				body: JSON.stringify({
+					redeem_request_id: randomUUID(),
+					...(creditId ? {credit_id: creditId} : {}),
+				}),
+			},
+		);
+		if (!response.ok) return `Codex reset failed: HTTP ${response.status}.`;
+		const body = (await response.json()) as {code?: string; outcome?: string};
+		limitsCache.delete(cacheKey);
+		const outcome = body.code ?? body.outcome ?? 'reset';
+		return outcome === 'reset' || outcome === 'already_redeemed'
+			? 'Codex reset redeemed. Reopen /status to refresh limits.'
+			: `Codex reset not redeemed: ${outcome}.`;
+	} catch (error) {
+		return `Codex reset failed: ${error instanceof Error ? error.message : String(error)}.`;
+	}
 }
 
 /**

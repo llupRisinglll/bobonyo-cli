@@ -31,6 +31,7 @@ export const BASE_COMMAND_NAMES = [
 	'setup-providers',
 	'connect',
 	'codex',
+	'codex-reset',
 	'mcp',
 	'session',
 	'checkpoint',
@@ -238,6 +239,8 @@ export interface CommandContext {
 	setupProviders: (args: string) => void;
 	/** `/codex` — scaffold the Codex (OpenAI) provider with one API key. */
 	connectCodex: () => void;
+	/** Redeem one earned Codex reset credit. */
+	codexReset: () => void;
 	/** `/connect` — smooth provider connect flow (Codex or custom). */
 	connectProvider: (args: string) => void;
 	mcp: () => void;
@@ -409,6 +412,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'codex':
 			ctx.connectCodex();
+			return true;
+		case 'codex-reset':
+			ctx.codexReset();
 			return true;
 		case 'mcp':
 			ctx.mcp();

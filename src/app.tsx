@@ -125,7 +125,7 @@ import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {buildStatusRows, providerStatusLabel} from './status-rows';
-import {fetchCodexLimits} from './codex-limits';
+import {consumeCodexReset, fetchCodexLimits} from './codex-limits';
 import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
 import {detectLanguageServers} from './lsp';
 import {
@@ -1823,6 +1823,7 @@ export function App() {
 				settings: settingsSurface,
 				setupProviders,
 				connectCodex,
+				codexReset,
 				connectProvider,
 				mcp: mcpSurface,
 				session: sessionCommand,
@@ -3582,6 +3583,15 @@ export function App() {
 		appendInfo('Usage: /session delete <last|N|id>');
 	};
 
+	const codexReset = async () => {
+		if (!activeEndpoint().codexAccount) {
+			appendInfo(
+				'Codex reset is available only for ChatGPT/Codex connections.',
+			);
+			return;
+		}
+		appendInfo(await consumeCodexReset(activeEndpoint().baseUrl));
+	};
 	const openPRs = () => {
 		const urls = prs();
 		if (urls.length === 0) {
