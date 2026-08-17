@@ -136,15 +136,27 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 					</text>
 				</box>
 				<box height={1} flexDirection="row">
-					<text
-						fg={tab() === 'jobs' ? colors().primary : colors().secondary}
-						attributes={tab() === 'jobs' ? bold() : dim()}
-					>{`Jobs (${jobs().length})`}</text>
-					<text fg={colors().secondary}>{' · '}</text>
-					<text
-						fg={tab() === 'agents' ? colors().primary : colors().secondary}
-						attributes={tab() === 'agents' ? bold() : dim()}
-					>{`Agents (${activeAgents()})`}</text>
+					<box
+						height={1}
+						paddingX={1}
+						backgroundColor={tab() === 'jobs' ? colors().info : undefined}
+					>
+						<text
+							fg={tab() === 'jobs' ? colors().base : colors().secondary}
+							attributes={tab() === 'jobs' ? bold() : dim()}
+						>{`Jobs (${jobs().length})`}</text>
+					</box>
+					<box width={1} />
+					<box
+						height={1}
+						paddingX={1}
+						backgroundColor={tab() === 'agents' ? colors().info : undefined}
+					>
+						<text
+							fg={tab() === 'agents' ? colors().base : colors().secondary}
+							attributes={tab() === 'agents' ? bold() : dim()}
+						>{`Agents (${activeAgents()})`}</text>
+					</box>
 				</box>
 				<Show when={tab() === 'jobs'}>
 					<Show

@@ -201,45 +201,54 @@ export function formatUsageCalendar(
 	const start = new Date(
 		Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - months + 1, 1),
 	);
-	const days: Date[] = [];
+	// Codex layout: seven weekday rows, one narrow cell per week.
+	const firstSunday = new Date(start);
+	firstSunday.setUTCDate(start.getUTCDate() - start.getUTCDay());
+	const weeks: Date[][] = [];
 	for (
-		const cursor = new Date(start);
+		let cursor = new Date(firstSunday);
 		cursor <= end;
-		cursor.setUTCDate(cursor.getUTCDate() + 1)
-	)
-		days.push(new Date(cursor));
-	const values = days.map(day => daily[day.toISOString().slice(0, 10)] ?? 0);
+		cursor.setUTCDate(cursor.getUTCDate() + 7)
+	) {
+		weeks.push(
+			Array.from({length: 7}, (_, weekday) => {
+				const day = new Date(cursor);
+				day.setUTCDate(cursor.getUTCDate() + weekday);
+				return day;
+			}),
+		);
+	}
+	const values = weeks
+		.flatMap(week => week)
+		.map(day => daily[day.toISOString().slice(0, 10)] ?? 0);
 	const total = Object.values(daily).reduce((sum, value) => sum + value, 0);
 	const peak = Math.max(0, ...Object.values(daily));
-	let longest = 0;
-	let streak = 0;
+	let best = 0;
 	let run = 0;
 	for (const value of values) {
 		run = value > 0 ? run + 1 : 0;
-		longest = Math.max(longest, run);
+		best = Math.max(best, run);
 	}
+	let streak = 0;
 	for (let i = values.length - 1; i >= 0 && values[i]! > 0; i--) streak++;
-	const fmt = (value: number): string => formatCount(value);
-	const monthLabels = days
-		.filter((day, index) => index === 0 || day.getUTCDate() === 1)
-		.map(day =>
-			new Intl.DateTimeFormat('en', {month: 'short', timeZone: 'UTC'}).format(
-				day,
-			),
-		);
 	const max = Math.max(1, peak);
-	const cells = values.map(value =>
-		value <= 0 ? '·' : value < max * 0.25 ? '▪' : value < max * 0.6 ? '■' : '█',
-	);
+	const cell = (value: number): string =>
+		value <= 0 ? '·' : value < max * 0.25 ? '▪' : value < max * 0.6 ? '■' : '█';
 	const rows = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(
-		(label, weekday) => {
-			const row = days
-				.map((day, index) => (day.getUTCDay() === weekday ? cells[index] : ' '))
-				.join('');
-			return `${label} ${row}`;
-		},
+		(label, weekday) =>
+			`${label} ${weeks.map(week => `${cell(daily[week[weekday]!.toISOString().slice(0, 10)] ?? 0)} `).join('')}`,
 	);
-	return `Token activity   last ${months} months\n\nLifetime ${fmt(total)} · Peak ${fmt(peak)} · Streak ${streak}d (best ${longest}d)\n\n        ${monthLabels.join('     ')}\n${rows.join('\n')}\n\n   Less · ▪ ▪ ■ ■ █ More\n   daily · weekly · cumulative`;
+	const monthLabels = weeks
+		.map((week, index) =>
+			week[0]!.getUTCDate() <= 7
+				? new Intl.DateTimeFormat('en', {
+						month: 'short',
+						timeZone: 'UTC',
+					}).format(week[0]!)
+				: '   ',
+		)
+		.join('');
+	return `Token activity   last ${months} months\n\nLifetime ${formatCount(total)} · Peak ${formatCount(peak)} · Streak ${streak}d (best ${best}d)\n\n   ${monthLabels}\n${rows.join('\n')}\n\n   Less · ▪ ▪ ■ ■ █ More\n   daily · weekly · cumulative`;
 }
 
 /**

@@ -104,6 +104,40 @@ export function detailsCardHeight(
  * entries, so the user can read the information without the in-place toggle
  * confusing them. Esc / backdrop click closes; ↑/↓/PageUp/PageDn scroll.
  */
+function UsageCalendarLine(props: {line: string}) {
+	const cells = () =>
+		props.line
+			.slice(3)
+			.split('')
+			.filter((_, index) => index % 2 === 0);
+	return (
+		<box flexDirection="row" height={1}>
+			<text width={3} fg={colors().secondary}>
+				{props.line.slice(0, 2)}
+			</text>
+			<For each={cells()}>
+				{cell => (
+					<box
+						width={2}
+						height={1}
+						backgroundColor={RGBA.fromHex(
+							cell === '█'
+								? colors().success
+								: cell === '■'
+									? colors().primary
+									: cell === '▪'
+										? colors().secondary
+										: colors().base,
+						)}
+					>
+						<text fg={colors().base}>{cell}</text>
+					</box>
+				)}
+			</For>
+		</box>
+	);
+}
+
 export function DetailsModal(props: {
 	title: string;
 	content: string;
@@ -218,17 +252,22 @@ export function DetailsModal(props: {
 								index: scroll() + index,
 							}))}
 					>
-						{line => (
-							<box flexDirection="row">
-								<For each={colorLine(line.text)}>
-									{segment => (
-										<text fg={segment.fg} attributes={segment.attrs}>
-											{segment.text}
-										</text>
-									)}
-								</For>
-							</box>
-						)}
+						{line =>
+							props.title === 'Usage' &&
+							/^(Su|Mo|Tu|We|Th|Fr|Sa)\s/.test(line.text) ? (
+								<UsageCalendarLine line={line.text} />
+							) : (
+								<box flexDirection="row">
+									<For each={colorLine(line.text)}>
+										{segment => (
+											<text fg={segment.fg} attributes={segment.attrs}>
+												{segment.text}
+											</text>
+										)}
+									</For>
+								</box>
+							)
+						}
 					</For>
 					<Show when={lines().length > cardHeight() - 7}>
 						<text fg={colors().secondary} attributes={dim()}>
