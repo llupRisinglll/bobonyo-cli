@@ -365,6 +365,10 @@ export function App() {
 	} | null>(null);
 	/** Measured rendered height of the chat history (banner + transcript). */
 	const [historyContentHeight, setHistoryContentHeight] = createSignal(0);
+	// Filesystem-backed session metadata is not reactive by itself. Bump this
+	// after every save so an already-mounted `/resume` modal refreshes when
+	// the resumed conversation receives a new message.
+	const [sessionListVersion, setSessionListVersion] = createSignal(0);
 	/** Open the settings LIST modal (also opens the settings surface). */
 	const openSettingsList = (title: string, rows: SettingsListRow[]) => {
 		setSettingsList({title, rows});
@@ -718,6 +722,7 @@ export function App() {
 			model: activeEndpoint().model,
 		};
 		saveSession(currentSession);
+		setSessionListVersion(version => version + 1);
 	};
 
 	const exit = () => {
@@ -3815,7 +3820,8 @@ export function App() {
 			<Show when={resumeOpen()}>
 				<ResumeModal
 					cwd={process.cwd()}
-					sessions={listSessions().map(session => ({
+					// Read version makes filesystem-backed rows refresh after saves.
+					sessions={(sessionListVersion(), listSessions()).map(session => ({
 						id: session.id,
 						name: session.name,
 						createdAt: session.createdAt,

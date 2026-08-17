@@ -227,7 +227,11 @@ export function saveSession(data: SessionData): void {
 		}
 		return;
 	}
-	writeFileSync(sessionPath(data.id), `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+	writeFileSync(
+		sessionPath(data.id),
+		`${JSON.stringify(data, null, 2)}\n`,
+		'utf8',
+	);
 }
 
 export function listSessions(): SessionMeta[] {
@@ -236,58 +240,64 @@ export function listSessions(): SessionMeta[] {
 	migrateNanocoderSessions();
 	const dir = sessionsDir();
 	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter(file => file.endsWith('.json'))
-		.map(file => {
-			try {
-				const data = JSON.parse(readFileSync(join(dir, file), 'utf8')) as SessionData & {
-					title?: string;
-					messageCount?: number;
-				};
-				// Skip EMPTY sessions (both formats).
-				const messageCount =
-					data.messages?.length ?? data.messageCount ?? 0;
-				if (messageCount === 0) return null;
-				const createdAt = toEpoch(data.createdAt);
-				const updatedAt = toEpoch(data.updatedAt) || createdAt;
-				const cwd =
-					typeof data.cwd === 'string' && data.cwd.length > 0
-						? data.cwd
-						: undefined;
-				return {
-					id: data.id,
-					// nanocoder sessions carry `title` instead of `name`.
-					name: data.name ?? data.title ?? data.id,
-					createdAt,
-					updatedAt,
-					firstMessage: data.firstMessage,
-					...(cwd ? {cwd} : {}),
-				};
-			} catch {
-				return null;
-			}
-		})
-		.filter((meta): meta is SessionMeta => meta !== null)
-		.sort((a, b) => b.updatedAt - a.updatedAt)
-		// Dedupe by id: the same session can be saved under several files
-		// (nanocoder sessions + local copies), keep the newest entry so the
-		// resume picker never shows duplicates ("Today" twice, same days).
-		.filter(
-			((seen: Set<string>) => (meta: SessionMeta) =>
-				!seen.has(meta.id) && (seen.add(meta.id), true))(new Set()),
-		);
+	return (
+		readdirSync(dir)
+			.filter(file => file.endsWith('.json'))
+			.map(file => {
+				try {
+					const data = JSON.parse(
+						readFileSync(join(dir, file), 'utf8'),
+					) as SessionData & {
+						title?: string;
+						messageCount?: number;
+					};
+					// Skip EMPTY sessions (both formats).
+					const messageCount = data.messages?.length ?? data.messageCount ?? 0;
+					if (messageCount === 0) return null;
+					const createdAt = toEpoch(data.createdAt);
+					const updatedAt = toEpoch(data.updatedAt) || createdAt;
+					const cwd =
+						typeof data.cwd === 'string' && data.cwd.length > 0
+							? data.cwd
+							: undefined;
+					return {
+						id: data.id,
+						// nanocoder sessions carry `title` instead of `name`.
+						name: data.name ?? data.title ?? data.id,
+						createdAt,
+						updatedAt,
+						firstMessage:
+							data.firstMessage ?? firstMessagePreview(data.messages ?? []),
+						...(cwd ? {cwd} : {}),
+					};
+				} catch {
+					return null;
+				}
+			})
+			.filter((meta): meta is SessionMeta => meta !== null)
+			.sort((a, b) => b.updatedAt - a.updatedAt)
+			// Dedupe by id: the same session can be saved under several files
+			// (nanocoder sessions + local copies), keep the newest entry so the
+			// resume picker never shows duplicates ("Today" twice, same days).
+			.filter(
+				(
+					(seen: Set<string>) => (meta: SessionMeta) =>
+						!seen.has(meta.id) && (seen.add(meta.id), true)
+				)(new Set()),
+			)
+	);
 }
 
 export function loadSession(id: string): SessionData | null {
 	try {
-		const raw = JSON.parse(readFileSync(sessionPath(id), 'utf8')) as SessionData;
+		const raw = JSON.parse(
+			readFileSync(sessionPath(id), 'utf8'),
+		) as SessionData;
 		// NANOCODER session files use a different shape (`title`, OpenAI-style
 		// messages, no `context`), convert them so resume actually works.
 		if (raw.context === undefined || raw.name === undefined) {
 			return (
-				convertNanocoderSession(
-					raw as unknown as NanocoderSessionFile,
-				) ?? raw
+				convertNanocoderSession(raw as unknown as NanocoderSessionFile) ?? raw
 			);
 		}
 		return raw;
@@ -545,9 +555,7 @@ export function convertNanocoderSession(
 			const name = message.name ?? '';
 			const toolId = message.tool_call_id ?? '';
 			// Attach the result to the matching tool row (by call id).
-			const existing = messages.find(
-				candidate => candidate.toolId === toolId,
-			);
+			const existing = messages.find(candidate => candidate.toolId === toolId);
 			if (existing?.tool) {
 				existing.tool.output = content;
 				existing.content = content;
