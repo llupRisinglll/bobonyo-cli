@@ -190,6 +190,7 @@ export function formatUsageCalendar(
 	baseUrl: string,
 	now = Date.now(),
 	months = 12,
+	startMonth = 0,
 ): string {
 	const entries = loadProviderUsage().entries[cacheKey(baseUrl)] ?? {};
 	const daily: Record<string, number> = {};

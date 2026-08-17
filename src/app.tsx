@@ -3167,9 +3167,12 @@ export function App() {
 								`prompt ${snapshot.prompt_tokens != null ? formatTokens(snapshot.prompt_tokens) : '?'} · completion ${snapshot.completion_tokens != null ? formatTokens(snapshot.completion_tokens) : '?'}`,
 						)
 						.join('\n');
+		const pages = [0, 3, 6, 9].map(start =>
+			formatUsageCalendar(activeEndpoint().baseUrl, Date.now(), 3, start),
+		);
 		openInfoModal(
 			'Usage',
-			`${formatUsageCalendar(activeEndpoint().baseUrl)}\n\n${details}`,
+			`${pages.join('\n---USAGE_PAGE---\n')}\n\n${details}`,
 		);
 	};
 

@@ -112,7 +112,7 @@ function UsageCalendarLine(props: {line: string; width: number}) {
 			.filter((_, index) => index % 2 === 0);
 	const fg = (cell: string): string =>
 		cell === '█'
-			? colors().success
+			? colors().primary
 			: cell === '■'
 				? colors().primary
 				: cell === '▪'
@@ -156,8 +156,15 @@ export function DetailsModal(props: {
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	const lines = () => props.content.replace(/\s+$/, '').split('\n');
+	const lines = () => visibleContent().replace(/\s+$/, '').split('\n');
 	const [scroll, setScroll] = createSignal(0);
+	const usagePages = () =>
+		props.title === 'Usage'
+			? props.content.split('\n---USAGE_PAGE---\n')
+			: [props.content];
+	const [usagePage, setUsagePage] = createSignal(0);
+	const visibleContent = () =>
+		usagePages()[usagePage()] ?? usagePages()[0] ?? '';
 	// AUTO-CLOSE GUARD: the modal opens on the row's mouse-DOWN; the SAME
 	// click's mouse-UP lands on the backdrop and would close it instantly.
 	// Only that opening release is ignored — a time window, NOT a one-shot
@@ -174,6 +181,22 @@ export function DetailsModal(props: {
 	useKeyboard(event => {
 		if (event.name === 'escape') {
 			props.onClose();
+			return;
+		}
+		if (
+			props.title === 'Usage' &&
+			(event.name === 'left' || event.name === 'right')
+		) {
+			setUsagePage(prev =>
+				Math.max(
+					0,
+					Math.min(
+						usagePages().length - 1,
+						prev + (event.name === 'right' ? 1 : -1),
+					),
+				),
+			);
+			setScroll(0);
 			return;
 		}
 		if (event.name === 'up') {
@@ -233,6 +256,12 @@ export function DetailsModal(props: {
 					<text fg={colors().primary} attributes={bold()}>
 						{props.title || 'Tool details'}
 					</text>
+					<Show when={props.title === 'Usage' && usagePages().length > 1}>
+						<text
+							fg={colors().primary}
+							attributes={bold()}
+						>{` [${usagePage() + 1}/${usagePages().length}] `}</text>
+					</Show>
 					<box flexGrow={1} />
 					<text fg={colors().secondary} attributes={dim()}>
 						Esc close · ↑/↓ scroll
