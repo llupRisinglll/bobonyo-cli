@@ -63,7 +63,7 @@ describe('BackgroundJobsModal', () => {
 			await setup.flush();
 			await new Promise(resolve => setTimeout(resolve, 100));
 			const frame = setup.captureSpans();
-			expect(frameHas(frame, 'Background jobs')).toBe(true);
+			expect(frameHas(frame, 'Process monitor')).toBe(true);
 			// Running command is listed inside its bordered box; completed jobs
 			// are intentionally absent from this live process view.
 			expect(frameHas(frame, 'npm run build')).toBe(true);

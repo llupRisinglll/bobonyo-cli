@@ -128,7 +128,7 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 			>
 				<box flexDirection="row" height={1}>
 					<text fg={colors().primary} attributes={bold()}>
-						Background jobs
+						{`Process monitor [${tab() === 'jobs' ? '*jobs*' : 'jobs'} | ${tab() === 'agents' ? '*agents*' : 'agents'}]`}
 					</text>
 					<box flexGrow={1} />
 					<text fg={colors().secondary} attributes={dim()}>
