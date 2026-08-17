@@ -22,6 +22,46 @@ export function colorDetailLine(
 	colors: Colors,
 	attrs: {bold: () => number; dim: () => number},
 ): DetailSegment[] {
+	// Usage calendar rows use Codex-style colored activity squares. Keep
+	// labels secondary, then color cells by intensity instead of dimming the
+	// whole indented row as generic details output.
+	if (/^(Su|Mo|Tu|We|Th|Fr|Sa)\s/.test(line)) {
+		const label = line.slice(0, 3);
+		const cells = line.slice(3).split('');
+		const segments: DetailSegment[] = [
+			{text: label, fg: colors.secondary, attrs: attrs.dim()},
+		];
+		for (const cell of cells) {
+			const fg =
+				cell === '█'
+					? colors.success
+					: cell === '■'
+						? colors.primary
+						: cell === '▪'
+							? colors.secondary
+							: colors.text;
+			segments.push({
+				text: cell,
+				fg,
+				attrs: cell === ' ' ? attrs.dim() : attrs.bold(),
+			});
+		}
+		return segments;
+	}
+	if (/^\s+Less /.test(line)) {
+		return line.split('').map(cell => ({
+			text: cell,
+			fg:
+				cell === '█'
+					? colors.success
+					: cell === '■'
+						? colors.primary
+						: cell === '▪'
+							? colors.secondary
+							: colors.text,
+			attrs: cell === ' ' ? attrs.dim() : attrs.bold(),
+		}));
+	}
 	if (/^✦\s*[A-Za-z]/.test(line)) {
 		const m = line.match(/^(✦\s*)([A-Za-z][A-Za-z0-9_:-]*)(.*)$/);
 		if (m) {
@@ -103,9 +143,7 @@ export function DetailsModal(props: {
 			return;
 		}
 		if (event.name === 'down') {
-			setScroll(prev =>
-				Math.min(Math.max(0, lines().length - 1), prev + 1),
-			);
+			setScroll(prev => Math.min(Math.max(0, lines().length - 1), prev + 1));
 			return;
 		}
 		if (event.name === 'pageup') {
@@ -113,12 +151,7 @@ export function DetailsModal(props: {
 			return;
 		}
 		if (event.name === 'pagedown') {
-			setScroll(prev =>
-				Math.min(
-					Math.max(0, lines().length - 1),
-					prev + 10,
-				),
-			);
+			setScroll(prev => Math.min(Math.max(0, lines().length - 1), prev + 10));
 		}
 	});
 
@@ -185,14 +218,11 @@ export function DetailsModal(props: {
 								index: scroll() + index,
 							}))}
 					>
-						{(line) => (
+						{line => (
 							<box flexDirection="row">
 								<For each={colorLine(line.text)}>
-									{(segment) => (
-										<text
-											fg={segment.fg}
-											attributes={segment.attrs}
-										>
+									{segment => (
+										<text fg={segment.fg} attributes={segment.attrs}>
 											{segment.text}
 										</text>
 									)}
