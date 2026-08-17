@@ -6,7 +6,12 @@
 
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {activeEndpoint, cavemanMode, sessionId, setRetryingAttempt} from './state';
+import {
+	activeEndpoint,
+	cavemanMode,
+	sessionId,
+	setRetryingAttempt,
+} from './state';
 import {resolveRulesFile} from './rules-file';
 import {builtinCavemanSkill, loadSkills} from './custom';
 import {readCodexAuth} from './codex-auth';
@@ -15,10 +20,7 @@ import {
 	formatOpenCodeLimitMessage,
 	parseOpenCodeLimitError,
 } from './opencode-limit';
-import {
-	resolveSystemPrompt,
-	type SystemPromptStyle,
-} from './system-prompt';
+import {resolveSystemPrompt, type SystemPromptStyle} from './system-prompt';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -117,8 +119,9 @@ function buildVolatileSystemInfo(): string {
 		skills.length > 0
 			? `\n\n## AVAILABLE SKILLS\n` +
 				skills
-					.map(skill =>
-						`- ${skill.name}${skill.description ? `: ${skill.description}` : ''}`,
+					.map(
+						skill =>
+							`- ${skill.name}${skill.description ? `: ${skill.description}` : ''}`,
 					)
 					.join('\n') +
 				`\nUse the skill tool to load a skill's instructions before acting on its domain.`
@@ -163,9 +166,7 @@ export function buildSystemParts(toolProfile?: string): {
 	// System-prompt STYLE (Settings → Behavior → System prompt): default /
 	// opencode / claudecode / codex / custom (SYSTEM.md). A style change is
 	// a legitimate head change, never a per-turn one.
-	const style = (
-		loadSettings().systemPrompt ?? 'default'
-	) as SystemPromptStyle;
+	const style = (loadSettings().systemPrompt ?? 'default') as SystemPromptStyle;
 	const base = resolveSystemPrompt(style, defaultBase);
 	// Built-in caveman mode (Settings → Behavior → Caveman mode). The
 	// instructions are part of the STABLE block so the cache head stays
@@ -435,9 +436,14 @@ export async function streamChat(
 	toolProfile?: string,
 	/** Called when the ACTIVE provider failed and a fallback answered. */
 	onFallback?: (endpoint: EndpointOverride) => void,
+	/** Optional model override for isolated subagents; same provider/key. */
+	modelOverride?: string,
 ): Promise<TurnResult> {
+	const active = activeEndpoint();
 	const candidates: Array<EndpointOverride | undefined> = [
-		undefined,
+		modelOverride && modelOverride !== active.model
+			? {...active, model: modelOverride}
+			: undefined,
 		...fallbackEndpoints,
 	];
 	let lastError: unknown;
@@ -563,19 +569,12 @@ async function streamOnce(
 			streamGuard,
 		);
 	}
-	const body = buildOpenAIRequestBody(
-		messages,
-		tools,
-		endpoint,
-		toolProfile,
-	);
+	const body = buildOpenAIRequestBody(messages, tools, endpoint, toolProfile);
 	const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
-			...(endpoint.apiKey
-				? {authorization: `Bearer ${endpoint.apiKey}`}
-				: {}),
+			...(endpoint.apiKey ? {authorization: `Bearer ${endpoint.apiKey}`} : {}),
 		},
 		body: JSON.stringify(body),
 		signal,
@@ -602,8 +601,7 @@ async function streamOnce(
 	>();
 	// B23: runaway-stream bounds, resolved once per request.
 	const guard = {
-		maxOutputChars:
-			streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
+		maxOutputChars: streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
 		maxDurationMs: streamGuard?.maxDurationMs ?? MAX_STREAM_DURATION_MS,
 		stallTimeoutMs: streamGuard?.stallTimeoutMs ?? 60_000,
 	};
@@ -810,17 +808,13 @@ function parseJSONToolCalls(content: string): {
 } {
 	const toolCalls: Array<{id: string; name: string; arguments: string}> = [];
 	const matched: Array<[number, number]> = [];
-	const fencePattern =
-		/```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
+	const fencePattern = /```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
 	let fenceMatch: RegExpExecArray | null;
 	while ((fenceMatch = fencePattern.exec(content)) !== null) {
 		const call = tryParseJSONToolCall(fenceMatch[1] ?? '');
 		if (call) {
 			toolCalls.push(call);
-			matched.push([
-				fenceMatch.index,
-				fenceMatch.index + fenceMatch[0].length,
-			]);
+			matched.push([fenceMatch.index, fenceMatch.index + fenceMatch[0].length]);
 		}
 	}
 	const inlinePattern =
@@ -907,7 +901,11 @@ export function parseToolCalls(content: string): ToolCallParseResult {
 	// 3. JSON tool-call objects.
 	const json = parseJSONToolCalls(stripped);
 	if (json.toolCalls.length > 0) {
-		return {success: true, toolCalls: json.toolCalls, cleanText: json.cleanText};
+		return {
+			success: true,
+			toolCalls: json.toolCalls,
+			cleanText: json.cleanText,
+		};
 	}
 	// 4. Malformed XML / JSON detection → self-correction feedback.
 	if (/<tool_calls|<invoke|<antml:|<function=/i.test(stripped)) {
@@ -1058,7 +1056,10 @@ async function anthropicStreamOnce(
 						text += chunk.delta.text;
 						handlers.onText(chunk.delta.text);
 					}
-					if (chunk.delta?.type === 'input_json_delta' && chunk.delta.partial_json) {
+					if (
+						chunk.delta?.type === 'input_json_delta' &&
+						chunk.delta.partial_json
+					) {
 						const call = toolCalls.get(chunk.index ?? 0);
 						if (call) call.arguments += chunk.delta.partial_json;
 					}
@@ -1261,8 +1262,7 @@ async function responsesStreamOnce(
 		{id: string; name: string; arguments: string}
 	>();
 	const guard = {
-		maxOutputChars:
-			streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
+		maxOutputChars: streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
 		maxDurationMs: streamGuard?.maxDurationMs ?? MAX_STREAM_DURATION_MS,
 		stallTimeoutMs: streamGuard?.stallTimeoutMs ?? 60_000,
 	};
@@ -1324,9 +1324,7 @@ async function responsesStreamOnce(
 			}
 			const type = chunk.type ?? eventName;
 			if (type === 'error' || chunk.error) {
-				throw new Error(
-					chunk.error?.message ?? 'responses stream error',
-				);
+				throw new Error(chunk.error?.message ?? 'responses stream error');
 			}
 			switch (type) {
 				case 'response.output_item.added': {
@@ -1341,8 +1339,7 @@ async function responsesStreamOnce(
 					break;
 				}
 				case 'response.output_text.delta': {
-					const delta =
-						typeof chunk.delta === 'string' ? chunk.delta : '';
+					const delta = typeof chunk.delta === 'string' ? chunk.delta : '';
 					if (delta) {
 						text += delta;
 						if (text.length > guard.maxOutputChars) {
@@ -1359,8 +1356,7 @@ async function responsesStreamOnce(
 					const part =
 						typeof chunk.delta === 'string'
 							? chunk.delta
-							: (chunk.delta as {text?: string} | undefined)
-									?.text ?? '';
+							: ((chunk.delta as {text?: string} | undefined)?.text ?? '');
 					if (part) {
 						text += part;
 						if (text.length > guard.maxOutputChars) {
@@ -1383,8 +1379,7 @@ async function responsesStreamOnce(
 				case 'response.function_call_arguments.delta':
 				case 'response.custom_tool_call_input.delta': {
 					if (typeof chunk.delta === 'string' && chunk.delta) {
-						const index =
-							chunk.output_index ?? toolCalls.size - 1;
+						const index = chunk.output_index ?? toolCalls.size - 1;
 						const call = toolCalls.get(index);
 						if (call) call.arguments += chunk.delta;
 					}
@@ -1393,8 +1388,7 @@ async function responsesStreamOnce(
 				case 'response.output_item.done': {
 					const item = chunk.item;
 					if (item?.type === 'function_call') {
-						const index =
-							chunk.output_index ?? toolCalls.size - 1;
+						const index = chunk.output_index ?? toolCalls.size - 1;
 						const existing = toolCalls.get(index);
 						if (existing) {
 							if (item.name) existing.name = item.name;
@@ -1416,26 +1410,18 @@ async function responsesStreamOnce(
 					const response = chunk.response;
 					if (response?.status) {
 						finishReason =
-							response.status === 'completed'
-								? 'stop'
-								: response.status;
+							response.status === 'completed' ? 'stop' : response.status;
 					}
 					if (response?.usage) usage = response.usage;
 					break;
 				}
 				case 'response.incomplete': {
 					const reason =
-						chunk.response?.incomplete_details?.reason ??
-						'unknown';
-					throw new Error(
-						`Incomplete response returned, reason: ${reason}`,
-					);
+						chunk.response?.incomplete_details?.reason ?? 'unknown';
+					throw new Error(`Incomplete response returned, reason: ${reason}`);
 				}
 				case 'response.failed': {
-					throw new Error(
-						chunk.response?.error?.message ??
-							'response failed',
-					);
+					throw new Error(chunk.response?.error?.message ?? 'response failed');
 				}
 				default:
 					break;
@@ -1508,7 +1494,9 @@ export function buildAnthropicMessages(
 				Array.isArray(last.content) &&
 				last.content.some(
 					(block: {type?: string}) =>
-						typeof block === 'object' && block !== null && block.type === 'tool_result',
+						typeof block === 'object' &&
+						block !== null &&
+						block.type === 'tool_result',
 				)
 			) {
 				(last.content as Array<Record<string, unknown>>).push({
@@ -1535,7 +1523,11 @@ export function buildAnthropicMessages(
 		const message = out[i];
 		if (message?.role === 'user' && typeof message.content === 'string') {
 			message.content = [
-				{type: 'text', text: message.content, cache_control: {type: 'ephemeral'}},
+				{
+					type: 'text',
+					text: message.content,
+					cache_control: {type: 'ephemeral'},
+				},
 			];
 			break;
 		}

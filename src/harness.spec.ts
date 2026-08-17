@@ -73,8 +73,11 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			{id: 'x', model: 'm'},
 		);
 		expect(Array.isArray(body.tools)).toBe(true);
-		expect((body.tools as Array<{function: {name: string}}>).map(t => t.function.name))
-			.toEqual(['execute_bash', 'read_file']);
+		expect(
+			(body.tools as Array<{function: {name: string}}>).map(
+				t => t.function.name,
+			),
+		).toEqual(['execute_bash', 'read_file']);
 	});
 
 	test('the tool head is byte-identical regardless of registration order', () => {
@@ -107,7 +110,9 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		);
 		expect(JSON.stringify(orderA.tools)).toBe(JSON.stringify(orderB.tools));
 		expect(
-			(orderA.tools as Array<{function: {name: string}}>).map(t => t.function.name),
+			(orderA.tools as Array<{function: {name: string}}>).map(
+				t => t.function.name,
+			),
 		).toEqual([
 			'alpha_mcp__read',
 			'execute_bash',
@@ -209,13 +214,13 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			toolCatalog(),
 			{id: 'x', model: 'm'},
 		);
-		const tools = (body.tools as Array<{
+		const tools = body.tools as Array<{
 			function: {
 				name: string;
 				description: string;
 				parameters: {properties?: Record<string, unknown>};
 			};
-		}>);
+		}>;
 		const skill = tools.find(tool => tool.function.name === 'skill');
 		const check = tools.find(tool => tool.function.name === 'check_skill');
 		expect(skill?.function.description.length).toBeGreaterThan(0);
@@ -234,9 +239,9 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			toolCatalog(),
 			{id: 'x', model: 'm'},
 		);
-		const tools = (body.tools as Array<{
+		const tools = body.tools as Array<{
 			function: {name: string; description: string};
-		}>);
+		}>;
 		const bash = tools.find(tool => tool.function.name === 'execute_bash');
 		expect(bash).toBeDefined();
 		// The PURPOSE stays the lead of the description (what bash is FOR),
@@ -244,8 +249,12 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		expect(bash?.function.description).toMatch(
 			/^Run a shell command in the terminal/,
 		);
-		expect(bash?.function.description).toMatch(/ALWAYS write a one-line PRE-TOOL BRIEF/i);
-		expect(bash?.function.description).toMatch(/then call it in the same message/i);
+		expect(bash?.function.description).toMatch(
+			/ALWAYS write a one-line PRE-TOOL BRIEF/i,
+		);
+		expect(bash?.function.description).toMatch(
+			/then call it in the same message/i,
+		);
 		expect(bash?.function.description).toMatch(/MANDATORY/i);
 	});
 
@@ -274,4 +283,10 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 			1;
 		expect(total).toBeLessThanOrEqual(4);
 	});
+});
+
+test('review_changes stays in the stable tool catalog without injecting workflow bodies', () => {
+	const tool = toolCatalog().find(item => item.name === 'review_changes');
+	expect(tool?.description).toContain('review subagents');
+	expect(buildSystemPrompt('full')).not.toContain('MANDATORY WORKFLOW GATE');
 });

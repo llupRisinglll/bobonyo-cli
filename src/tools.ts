@@ -20,7 +20,7 @@ import {
 	ghPrMessagesViolation,
 } from './commit-guard';
 import {lintBody, loadSkills} from './custom';
-import {subagentSystemPrompt} from './subagents';
+import {loadSubagents, subagentModel, subagentSystemPrompt} from './subagents';
 import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
 import {snapshotMutationTargets} from './file-undo';
 import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
@@ -932,6 +932,54 @@ registerTool('check_skill', {
 	},
 });
 
+registerTool('review_changes', {
+	description:
+		'Run parallel read-only review subagents before creating or releasing a PR. ' +
+		'Use one reviewer per configured review-* agent and return every finding.',
+	parameters: {
+		type: 'object',
+		properties: {
+			reviewers: {
+				type: 'array',
+				items: {type: 'string'},
+				description: 'Reviewer agent names; defaults to all review-* agents.',
+			},
+			base: {type: 'string', description: 'Base ref, for example origin/main.'},
+		},
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		const configured = loadSubagentNames();
+		const requested = Array.isArray(args.reviewers)
+			? args.reviewers.map(String).filter(Boolean)
+			: configured;
+		const reviewers = [...new Set(requested)].filter(name =>
+			configured.includes(name),
+		);
+		if (reviewers.length === 0) {
+			return 'REVIEW_UNAVAILABLE: no review-* agents configured.';
+		}
+		const base = text(args, 'base') || 'origin/main';
+		const results = await Promise.all(
+			reviewers.map(async name => {
+				setActiveAgents(prev => prev + 1);
+				try {
+					const result = await runSubagent(
+						name,
+						`Review current git diff against ${base}. Read-only. Return ` +
+							'REVIEW_PASSED if no blockers, otherwise REVIEW_FINDINGS with every ' +
+							'finding including file and line. Do not edit, commit, push, or create a PR.',
+						ctx.onProgress,
+					);
+					return `## ${name}\n${result}`;
+				} finally {
+					setActiveAgents(prev => Math.max(0, prev - 1));
+				}
+			}),
+		);
+		return results.join('\n\n');
+	},
+});
 registerTool('agent', {
 	async execute(args, ctx) {
 		const description =
@@ -993,6 +1041,12 @@ registerTool('write_tasks', {
 	},
 });
 
+function loadSubagentNames(): string[] {
+	return loadSubagents()
+		.map(agent => agent.name)
+		.filter(name => /^review(?:-|$)/i.test(name))
+		.sort();
+}
 async function runSubagent(
 	subagentType: string,
 	description: string,
@@ -1024,6 +1078,10 @@ async function runSubagent(
 			},
 			undefined,
 			toolCatalog(),
+			undefined,
+			undefined,
+			undefined,
+			subagentModel(subagentType),
 		);
 		if (result.toolCalls.length === 0) {
 			return result.text.trim() || 'Subagent produced no output.';

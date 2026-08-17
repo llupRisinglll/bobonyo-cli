@@ -1245,7 +1245,11 @@ export function App() {
 			appendInfo(`Custom command /${name} has an empty prompt.`);
 			return;
 		}
-		void submit(prompt, undefined, {
+		const workflowReview =
+			/^(create-pr|release-to-prod|release-branch-to-prod)$/i.test(command.name)
+				? '\n\nMANDATORY WORKFLOW GATE: Before any push, PR creation, or merge, call the `review_changes` tool. Wait for all configured review-* subagents. Do not bypass REVIEW_FINDINGS or REVIEW_UNAVAILABLE without explicit user approval.'
+				: '';
+		void submit(prompt + workflowReview, undefined, {
 			kind: 'command',
 			name: command.name,
 			// The ORIGINAL typed command (e.g. `/worktree purpose: hello
