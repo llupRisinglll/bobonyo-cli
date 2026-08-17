@@ -135,15 +135,14 @@ export function codexLimitRows(payload: CodexUsagePayload): StatusRow[] {
 			windows.push({window: details.secondary_window, secondary: true});
 		}
 		for (const {window, secondary} of windows) {
-			const label = capitalize(codexLimitLabel(window.limit_window_seconds ?? 0));
+			const label = capitalize(
+				codexLimitLabel(window.limit_window_seconds ?? 0),
+			);
 			rows.push({
 				// Additional (non-codex) buckets prefix the window label so
 				// the feature the window meters is identifiable (codex
 				// parity: `codex_other weekly limit`).
-				label:
-					bucket && label === 'Usage'
-						? `${bucket} limit`
-						: `${label} limit`,
+				label: bucket ? `${bucket} ${label} limit` : `${label} limit`,
 				value: codexWindowValue(window.used_percent!, window.reset_at),
 			});
 		}
@@ -174,10 +173,8 @@ export function codexLimitRows(payload: CodexUsagePayload): StatusRow[] {
 		rows.push({
 			label: 'Monthly limit',
 			value:
-				codexWindowValue(
-					100 - monthly.remaining_percent,
-					monthly.resets_at,
-				) + detail,
+				codexWindowValue(100 - monthly.remaining_percent, monthly.resets_at) +
+				detail,
 		});
 	}
 	return rows;
@@ -185,7 +182,9 @@ export function codexLimitRows(payload: CodexUsagePayload): StatusRow[] {
 
 /** `monthly` → `Monthly` (codex parity: `capitalize_first`). */
 function capitalize(text: string): string {
-	return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
+	return text.length === 0
+		? text
+		: text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**
@@ -206,9 +205,7 @@ export async function fetchCodexLimits(baseUrl: string): Promise<StatusRow[]> {
 			headers: {
 				accept: 'application/json',
 				authorization: `Bearer ${auth.accessToken}`,
-				...(auth.accountId
-					? {'chatgpt-account-id': auth.accountId}
-					: {}),
+				...(auth.accountId ? {'chatgpt-account-id': auth.accountId} : {}),
 				originator: 'bobonyo',
 			},
 		});

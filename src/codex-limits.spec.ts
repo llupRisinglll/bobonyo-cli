@@ -63,10 +63,7 @@ describe('codex reset labels', () => {
 			tomorrow,
 		);
 		expect(
-			codexResetLabel(
-				Math.floor(tomorrow.getTime() / 1000),
-				now.getTime(),
-			),
+			codexResetLabel(Math.floor(tomorrow.getTime() / 1000), now.getTime()),
 		).toBe(`22:59 on ${tomorrow.getDate()} ${month}`);
 	});
 });
@@ -132,6 +129,20 @@ describe('codex limit rows (payload → /status rows)', () => {
 		]);
 	});
 
+	test('keeps additional model limit names such as Codex Spark', () => {
+		const rows = codexLimitRows({
+			additional_rate_limits: [
+				{
+					limit_name: 'GPT-5.3-Codex-Spark',
+					metered_feature: 'codex_other',
+					rate_limit: {
+						primary_window: {used_percent: 0, limit_window_seconds: 604800},
+					},
+				},
+			],
+		});
+		expect(rows[0]?.label).toBe('GPT-5.3-Codex-Spark Weekly limit');
+	});
 	test('unlimited credits and empty payloads', () => {
 		expect(
 			codexLimitRows({
@@ -151,8 +162,8 @@ describe('fetchCodexLimits (live /wham/usage)', () => {
 		globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 			calledUrl = String(url);
 			authHeader = String(
-				(init?.headers as Record<string, string> | undefined)
-					?.authorization ?? '',
+				(init?.headers as Record<string, string> | undefined)?.authorization ??
+					'',
 			);
 			accountHeader = String(
 				(init?.headers as Record<string, string> | undefined)?.[
