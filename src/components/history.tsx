@@ -549,11 +549,11 @@ export function History(props: {
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
-				// RUNNING tool rows render in the LIVE region (their output
-				// streams). Including them here would re-read liveOutputs,
-				// re-run the whole settled memo on every output tick, and
-				// re-render every block (the tool-call flicker).
-				if (message.running) continue;
+				// Tool rows render in the LIVE region until the whole tool turn
+				// settles. A fast tool can flip its own `running` flag before the
+				// global turn flag does; excluding it here prevents one frame of
+				// live + settled duplication (brief/command shown twice).
+				if (message.running || (running() && message.toolId)) continue;
 				// Collect the maximal run of consecutive tool calls, then group
 				// same-family calls into compact blocks (expanding per-call).
 				const run: ChatMessage[] = [message];
