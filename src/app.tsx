@@ -1843,7 +1843,17 @@ export function App() {
 			return;
 		}
 		if (busy()) {
-			setPendingQueue(prev => [...prev, {value, attachments}]);
+			// Queue protection: terminal key repeats can deliver the same
+			// Enter twice before Solid paints the cleared input. Never enqueue
+			// an identical prompt/attachment set twice in one burst.
+			setPendingQueue(prev => {
+				const previous = prev[prev.length - 1];
+				const sameAttachments =
+					JSON.stringify(previous?.attachments ?? {}) ===
+					JSON.stringify(attachments ?? {});
+				if (previous?.value === value && sameAttachments) return prev;
+				return [...prev, {value, attachments}];
+			});
 			// The queued message renders as a persistent block above the
 			// input (parity: nanocoder's queuedBlock), NOT a transcript row
 			// that scrolls away.

@@ -261,11 +261,21 @@ export function InputBox(props: {
 		insertAtCursor(compact);
 	});
 	/** Submit with `[Text #N]` expanded back to the real pasted content. */
+	let lastSubmittedValue = '';
+	let lastSubmittedAt = 0;
 	const submitExpanded = (value: string): void => {
-		props.onSubmit(
-			expandTextPlaceholders(value, pasteAttachments()),
-			pasteAttachments(),
-		);
+		const trimmed = value.trim();
+		if (!trimmed) return;
+		// Clear BEFORE calling async app logic (vision fallback, slash-command
+		// work, or queue insertion). Otherwise the old text remains painted
+		// during that await and a second Enter queues it again.
+		const now = Date.now();
+		if (trimmed === lastSubmittedValue && now - lastSubmittedAt < 500) return;
+		lastSubmittedValue = trimmed;
+		lastSubmittedAt = now;
+		const attachments = pasteAttachments();
+		setInputAt('');
+		props.onSubmit(expandTextPlaceholders(trimmed, attachments), attachments);
 	};
 
 	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
