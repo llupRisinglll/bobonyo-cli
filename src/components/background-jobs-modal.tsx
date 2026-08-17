@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
-import {createMemo, For, Show} from 'solid-js';
+import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {bgTasks, type BackgroundTask} from '../bash';
+import {activeAgents} from '../state';
 import {liveRowSegments} from '../live-tool-row';
 import {BashToolRow} from './bash-tool-row';
 import type {MarkdownBriefRenderer} from './markdown-brief';
@@ -33,6 +34,7 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 		x <= cardX() + cardWidth() &&
 		y >= cardY() &&
 		y <= cardY() + cardHeight();
+	const [tab, setTab] = createSignal<'jobs' | 'agents'>('jobs');
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 
@@ -82,6 +84,14 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 			props.onClose();
 			return true;
 		}
+		if (
+			event.name === 'left' ||
+			event.name === 'right' ||
+			event.name === 'tab'
+		) {
+			setTab(current => (current === 'jobs' ? 'agents' : 'jobs'));
+			return true;
+		}
 	});
 
 	return (
@@ -125,32 +135,51 @@ export function BackgroundJobsModal(props: {onClose: () => void}) {
 						Esc close
 					</text>
 				</box>
-				<box height={1} />
-				<Show
-					when={jobs().length > 0}
-					fallback={
-						<text fg={colors().secondary} attributes={dim()}>
-							No background jobs.
-						</text>
-					}
-				>
-					<For each={jobs()}>
-						{task => {
-							const seg = jobSegments(task);
-							return (
-								<box flexDirection="column">
-									<BashToolRow
-										header={seg.header}
-										body={seg.body}
-										status="running"
-										glyph="✦"
-										hovered={false}
-										md={md}
-									/>
-								</box>
-							);
-						}}
-					</For>
+				<box height={1} flexDirection="row">
+					<text
+						fg={tab() === 'jobs' ? colors().primary : colors().secondary}
+						attributes={tab() === 'jobs' ? bold() : dim()}
+					>{`Jobs (${jobs().length})`}</text>
+					<text fg={colors().secondary}>{' · '}</text>
+					<text
+						fg={tab() === 'agents' ? colors().primary : colors().secondary}
+						attributes={tab() === 'agents' ? bold() : dim()}
+					>{`Agents (${activeAgents()})`}</text>
+				</box>
+				<Show when={tab() === 'jobs'}>
+					<Show
+						when={jobs().length > 0}
+						fallback={
+							<text fg={colors().secondary} attributes={dim()}>
+								No background jobs.
+							</text>
+						}
+					>
+						<For each={jobs()}>
+							{task => {
+								const seg = jobSegments(task);
+								return (
+									<box flexDirection="column">
+										<BashToolRow
+											header={seg.header}
+											body={seg.body}
+											status="running"
+											glyph="✦"
+											hovered={false}
+											md={md}
+										/>
+									</box>
+								);
+							}}
+						</For>
+					</Show>
+				</Show>
+				<Show when={tab() === 'agents'}>
+					<text fg={colors().secondary} attributes={dim()}>
+						{activeAgents() > 0
+							? `${activeAgents()} subagent${activeAgents() === 1 ? '' : 's'} running.`
+							: 'No subagents running.'}
+					</text>
 				</Show>
 			</box>
 		</box>

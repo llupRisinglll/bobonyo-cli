@@ -3944,7 +3944,9 @@ export function App() {
 			    any bash task is running (registered immediately, before the
 			    15s foreground budget); clicking it (or `/ps`) opens the
 			    live jobs modal. Hidden while any modal is up. */}
-			<Show when={activeBgCount() > 0 && !anyModalOpen()}>
+			<Show
+				when={(activeBgCount() > 0 || activeAgents() > 0) && !anyModalOpen()}
+			>
 				<box
 					position="absolute"
 					top={1}
@@ -3961,7 +3963,8 @@ export function App() {
 					} as any)}
 				>
 					<text fg={colors().primary} attributes={bold()}>
-						bg: {activeBgCount()}
+						bg: {activeBgCount()} · agents: {activeAgents()} · agents:{' '}
+						{activeAgents()}
 					</text>
 					<text fg={colors().secondary} attributes={dim()}>
 						/ps · click
