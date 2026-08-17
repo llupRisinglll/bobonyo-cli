@@ -7,6 +7,7 @@ import {
 	extractCacheTokens,
 	formatCacheRate,
 	formatMonthlyUsage,
+	formatUsageCalendar,
 	formatTokens,
 	loadProviderUsage,
 	monthKey,
@@ -25,7 +26,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+	if (ORIGINAL_CONFIG_DIR === undefined)
+		delete process.env.NANOCODER_CONFIG_DIR;
 	else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
 	rmSync(configDir, {recursive: true, force: true});
 });
@@ -86,18 +88,16 @@ describe('recordProviderUsage / currentMonthUsage', () => {
 
 	test('different providers keep separate ledgers', () => {
 		const at = Date.UTC(2026, 7, 12);
-		recordProviderUsage(
-			MIMO_BASE,
-			{prompt_tokens: 100, total_tokens: 100},
-			at,
-		);
+		recordProviderUsage(MIMO_BASE, {prompt_tokens: 100, total_tokens: 100}, at);
 		recordProviderUsage(
 			'https://api.deepseek.com',
 			{prompt_tokens: 999, total_tokens: 999},
 			at,
 		);
 		expect(currentMonthUsage(MIMO_BASE, at)?.totalTokens).toBe(100);
-		expect(currentMonthUsage('https://api.deepseek.com', at)?.totalTokens).toBe(999);
+		expect(currentMonthUsage('https://api.deepseek.com', at)?.totalTokens).toBe(
+			999,
+		);
 	});
 
 	test('an empty usage snapshot is ignored (no zero rows)', () => {
@@ -114,8 +114,9 @@ describe('recordProviderUsage / currentMonthUsage', () => {
 		expect(next?.month).toBe('2026-09');
 		expect(next?.totalTokens).toBe(50);
 		// August is still on disk, keyed separately.
-		expect(loadProviderUsage().entries['token-plan-sgp.xiaomimimo.com']?.['2026-08'])
-			.toMatchObject({totalTokens: 100});
+		expect(
+			loadProviderUsage().entries['token-plan-sgp.xiaomimimo.com']?.['2026-08'],
+		).toMatchObject({totalTokens: 100});
 	});
 
 	test('the ledger survives restarts (disk-backed)', () => {
@@ -153,10 +154,12 @@ describe('formatMonthlyUsage', () => {
 });
 
 describe('formatCacheRate (DeepSeek status-line cost driver)', () => {
-	const usage = (overrides: Partial<{
-		cacheHitTokens?: number;
-		cacheMissTokens?: number;
-	}> = {}) => ({
+	const usage = (
+		overrides: Partial<{
+			cacheHitTokens?: number;
+			cacheMissTokens?: number;
+		}> = {},
+	) => ({
 		month: '2026-08',
 		promptTokens: 0,
 		completionTokens: 0,
@@ -258,5 +261,17 @@ describe('extractCacheTokens (provider-agnostic cache rate)', () => {
 		expect(
 			extractCacheTokens({prompt_tokens: 100, prompt_tokens_details: {}}),
 		).toEqual({hit: 0, miss: 0});
+	});
+});
+
+describe('formatUsageCalendar', () => {
+	test('renders token activity summary and weekday rows', () => {
+		const now = Date.UTC(2026, 7, 17);
+		recordProviderUsage(MIMO_BASE, {total_tokens: 100}, now);
+		const calendar = formatUsageCalendar(MIMO_BASE, now, 12);
+		expect(calendar).toContain('Token activity   last 12 months');
+		expect(calendar).toContain('Lifetime 100');
+		expect(calendar).toContain('Su ');
+		expect(calendar).toContain('daily · weekly · cumulative');
 	});
 });

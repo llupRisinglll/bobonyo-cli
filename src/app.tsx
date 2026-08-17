@@ -143,6 +143,7 @@ import {
 	currentMonthUsage,
 	extractCacheTokens,
 	formatTokens,
+	formatUsageCalendar,
 	recordProviderUsage,
 } from './provider-usage';
 import {buildBannerBox} from './banner';
@@ -3154,40 +3155,21 @@ export function App() {
 
 	const usage = () => {
 		const history = usageHistory();
-		const current = lastUsage();
-		if (history.length === 0 && !current) {
-			const monthly = currentMonthUsage(activeEndpoint().baseUrl);
-			appendInfo(
-				monthly
-					? `This month: ${formatTokens(monthly.totalTokens)} tokens total · ` +
-							`${formatTokens(monthly.promptTokens)} prompt · ` +
-							`${formatTokens(monthly.completionTokens)} completion · ` +
-							`${formatTokens(monthly.cachedTokens)} cached`
-					: 'No token usage recorded yet.',
-			);
-			return;
-		}
 		const monthly = currentMonthUsage(activeEndpoint().baseUrl);
-		appendInfo(
-			(monthly
-				? `This month: ${formatTokens(monthly.totalTokens)} tokens total · ` +
-					`${formatTokens(monthly.promptTokens)} prompt · ` +
-					`${formatTokens(monthly.completionTokens)} completion · ` +
-					`${formatTokens(monthly.cachedTokens)} cached\n\n`
-				: '') +
-				`Usage history:\n` +
-				history
-					.map(
-						(snapshot, index) =>
-							`  └ call ${index + 1} · ${snapshot.provider}/${snapshot.model}: ` +
-							`prompt ${snapshot.prompt_tokens != null ? formatTokens(snapshot.prompt_tokens) : '?'} · ` +
-							`completion ${snapshot.completion_tokens != null ? formatTokens(snapshot.completion_tokens) : '?'} · ` +
-							`total ${snapshot.total_tokens != null ? formatTokens(snapshot.total_tokens) : '?'}` +
-							(snapshot.promptCacheHitTokens !== undefined
-								? ` · cache ${formatTokens(snapshot.promptCacheHitTokens)}h/${formatTokens(snapshot.promptCacheMissTokens ?? 0)}m`
-								: ''),
-					)
-					.join('\n'),
+		const details =
+			history.length === 0 && !lastUsage()
+				? 'No token usage recorded yet.'
+				: `Current month: ${monthly ? formatTokens(monthly.totalTokens) : '0'} tokens\n\nUsage history:\n` +
+					history
+						.map(
+							(snapshot, index) =>
+								`  └ call ${index + 1} · ${snapshot.provider}/${snapshot.model}: ` +
+								`prompt ${snapshot.prompt_tokens != null ? formatTokens(snapshot.prompt_tokens) : '?'} · completion ${snapshot.completion_tokens != null ? formatTokens(snapshot.completion_tokens) : '?'}`,
+						)
+						.join('\n');
+		openInfoModal(
+			'Usage',
+			`${formatUsageCalendar(activeEndpoint().baseUrl)}\n\n${details}`,
 		);
 	};
 

@@ -19,7 +19,13 @@
  * single accounting ledger.
  */
 
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from 'node:fs';
 import {join} from 'node:path';
 import {configDir} from './config';
 import {cacheKey} from './deepseek';
@@ -42,6 +48,8 @@ export interface MonthlyUsage {
 	cacheMissTokens?: number;
 	/** Wall-clock ms of the last recorded usage in this bucket. */
 	at: number;
+	/** Daily totals (`YYYY-MM-DD` UTC) for `/usage` activity calendar. */
+	dailyTokens?: Record<string, number>;
 }
 
 /** Shape persisted in `~/.config/bobonyo/provider-usage.json`. */
@@ -108,7 +116,9 @@ export function recordProviderUsage(
 	},
 	now = Date.now(),
 ): MonthlyUsage | undefined {
-	const prompt = Number.isFinite(usage.prompt_tokens) ? usage.prompt_tokens! : 0;
+	const prompt = Number.isFinite(usage.prompt_tokens)
+		? usage.prompt_tokens!
+		: 0;
 	const completion = Number.isFinite(usage.completion_tokens)
 		? usage.completion_tokens!
 		: 0;
@@ -141,6 +151,7 @@ export function recordProviderUsage(
 		cachedTokens: 0,
 		totalTokens: 0,
 		at: now,
+		dailyTokens: {},
 	};
 	const updated: MonthlyUsage = {
 		month,
@@ -151,6 +162,13 @@ export function recordProviderUsage(
 		cacheMissTokens: (previous.cacheMissTokens ?? 0) + cacheMiss,
 		totalTokens: previous.totalTokens + total,
 		at: now,
+		dailyTokens: {
+			...(previous.dailyTokens ?? {}),
+			[new Date(now).toISOString().slice(0, 10)]:
+				((previous.dailyTokens ?? {})[
+					new Date(now).toISOString().slice(0, 10)
+				] ?? 0) + total,
+		},
 	};
 	byMonth[month] = updated;
 	file.entries[key] = byMonth;
@@ -163,6 +181,65 @@ import {formatCount} from './format';
 /** `1.24M` / `482K` / `7.9K` / `9` — compact human-readable token totals. */
 export function formatTokens(total: number): string {
 	return formatCount(total);
+}
+
+/** Build compact Codex-style daily activity calendar for one provider. */
+export function formatUsageCalendar(
+	baseUrl: string,
+	now = Date.now(),
+	months = 12,
+): string {
+	const entries = loadProviderUsage().entries[cacheKey(baseUrl)] ?? {};
+	const daily: Record<string, number> = {};
+	for (const bucket of Object.values(entries)) {
+		for (const [day, total] of Object.entries(bucket.dailyTokens ?? {})) {
+			daily[day] = (daily[day] ?? 0) + total;
+		}
+	}
+	const end = new Date(now);
+	end.setUTCHours(0, 0, 0, 0);
+	const start = new Date(
+		Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - months + 1, 1),
+	);
+	const days: Date[] = [];
+	for (
+		const cursor = new Date(start);
+		cursor <= end;
+		cursor.setUTCDate(cursor.getUTCDate() + 1)
+	)
+		days.push(new Date(cursor));
+	const values = days.map(day => daily[day.toISOString().slice(0, 10)] ?? 0);
+	const total = Object.values(daily).reduce((sum, value) => sum + value, 0);
+	const peak = Math.max(0, ...Object.values(daily));
+	let longest = 0;
+	let streak = 0;
+	let run = 0;
+	for (const value of values) {
+		run = value > 0 ? run + 1 : 0;
+		longest = Math.max(longest, run);
+	}
+	for (let i = values.length - 1; i >= 0 && values[i]! > 0; i--) streak++;
+	const fmt = (value: number): string => formatCount(value);
+	const monthLabels = days
+		.filter((day, index) => index === 0 || day.getUTCDate() === 1)
+		.map(day =>
+			new Intl.DateTimeFormat('en', {month: 'short', timeZone: 'UTC'}).format(
+				day,
+			),
+		);
+	const max = Math.max(1, peak);
+	const cells = values.map(value =>
+		value <= 0 ? '·' : value < max * 0.25 ? '▪' : value < max * 0.6 ? '■' : '█',
+	);
+	const rows = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(
+		(label, weekday) => {
+			const row = days
+				.map((day, index) => (day.getUTCDay() === weekday ? cells[index] : ' '))
+				.join('');
+			return `${label} ${row}`;
+		},
+	);
+	return `Token activity   last ${months} months\n\nLifetime ${fmt(total)} · Peak ${fmt(peak)} · Streak ${streak}d (best ${longest}d)\n\n        ${monthLabels.join('     ')}\n${rows.join('\n')}\n\n   Less · ▪ ▪ ■ ■ █ More\n   daily · weekly · cumulative`;
 }
 
 /**
@@ -221,7 +298,9 @@ export function sessionCacheUsage(
 }
 
 function toFinite(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+	return typeof value === 'number' && Number.isFinite(value)
+		? value
+		: undefined;
 }
 
 /**
