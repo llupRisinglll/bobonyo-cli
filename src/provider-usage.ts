@@ -229,8 +229,16 @@ export function formatUsageCalendar(
 		/* missing session directory is normal */
 	}
 	for (const bucket of Object.values(entries)) {
-		for (const [day, total] of Object.entries(bucket.dailyTokens ?? {})) {
+		const recorded = bucket.dailyTokens ?? {};
+		for (const [day, total] of Object.entries(recorded)) {
 			daily[day] = Math.max(daily[day] ?? 0, total);
+		}
+		// Legacy monthly buckets predate dailyTokens. Put their total on the
+		// recorded bucket day so old usage produces visible calendar activity
+		// instead of a misleading all-empty grid.
+		if (Object.keys(recorded).length === 0 && bucket.totalTokens > 0) {
+			const day = new Date(bucket.at).toISOString().slice(0, 10);
+			daily[day] = Math.max(daily[day] ?? 0, bucket.totalTokens);
 		}
 	}
 	const end = new Date(now);
