@@ -3247,18 +3247,30 @@ export function App() {
 				: 'off',
 			version: `bobonyo ${VERSION}`,
 		};
-		setStatusRows(buildStatusRows(baseStatusData));
+		setStatusRows(
+			buildStatusRows({
+				...baseStatusData,
+				codexLimitRows: endpoint.codexAccount
+					? [{label: 'Codex limits', value: 'loading limits…'}]
+					: [],
+			}),
+		);
 		// Live codex usage limits (`GET /wham/usage`), appended when the
 		// active connection is the ChatGPT-account codex backend. Same
 		// auth + silent-failure contract as the codex model discovery; the
 		// TTL cache keeps repeated opens cheap.
 		if (endpoint.codexAccount) {
 			void fetchCodexLimits(endpoint.baseUrl).then(rows => {
-				if (rows.length > 0 && openSeq === statusOpenSeq) {
-					setStatusRows(
-						buildStatusRows({...baseStatusData, codexLimitRows: rows}),
-					);
-				}
+				if (openSeq !== statusOpenSeq) return;
+				setStatusRows(
+					buildStatusRows({
+						...baseStatusData,
+						codexLimitRows:
+							rows.length > 0
+								? rows
+								: [{label: 'Codex limits', value: 'limits unavailable'}],
+					}),
+				);
 			});
 		}
 		setStatusOpen(true);

@@ -873,7 +873,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// decides the label, and every window gets its own row.
 		const app = read('./app.tsx');
 		expect(app).toMatch(/fetchCodexLimits\(endpoint\.baseUrl\)/);
-		expect(app).toMatch(/codexLimitRows: rows/);
+		expect(app).toMatch(/codexLimitRows:/);
 		expect(app).toMatch(/endpoint\.codexAccount/);
 		const rows = read('./status-rows.ts');
 		expect(rows).toMatch(/codexLimitRows\?: StatusRow\[\]/);

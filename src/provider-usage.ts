@@ -23,11 +23,13 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	writeFileSync,
 } from 'node:fs';
 import {join} from 'node:path';
 import {configDir} from './config';
+import {bobonyoDataDir} from './bobonyo-paths';
 import {cacheKey} from './deepseek';
 
 /** One provider's accumulated usage for one calendar month (UTC). */
@@ -191,9 +193,44 @@ export function formatUsageCalendar(
 ): string {
 	const entries = loadProviderUsage().entries[cacheKey(baseUrl)] ?? {};
 	const daily: Record<string, number> = {};
+	// Older sessions predate the usage ledger. Seed the calendar from their
+	// persisted transcript/context so `/usage` is useful immediately after
+	// upgrade; new turns continue using exact provider usage blocks.
+	try {
+		const dir = join(bobonyoDataDir(), 'sessions');
+		for (const file of readdirSync(dir).filter(name =>
+			name.endsWith('.json'),
+		)) {
+			const session = JSON.parse(readFileSync(join(dir, file), 'utf8')) as {
+				provider?: string;
+				updatedAt?: number;
+				messages?: Array<{content?: string}>;
+				context?: Array<{content?: string}>;
+			};
+			if (
+				session.provider &&
+				session.provider !== cacheKey(baseUrl) &&
+				!session.provider.includes(baseUrl)
+			)
+				continue;
+			const contents = session.messages ?? session.context ?? [];
+			const tokens = Math.floor(
+				contents.reduce(
+					(sum, message) => sum + (message.content?.length ?? 0),
+					0,
+				) / 4,
+			);
+			if (tokens > 0 && session.updatedAt) {
+				const day = new Date(session.updatedAt).toISOString().slice(0, 10);
+				daily[day] = Math.max(daily[day] ?? 0, tokens);
+			}
+		}
+	} catch {
+		/* missing session directory is normal */
+	}
 	for (const bucket of Object.values(entries)) {
 		for (const [day, total] of Object.entries(bucket.dailyTokens ?? {})) {
-			daily[day] = (daily[day] ?? 0) + total;
+			daily[day] = Math.max(daily[day] ?? 0, total);
 		}
 	}
 	const end = new Date(now);

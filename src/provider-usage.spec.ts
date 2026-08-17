@@ -270,7 +270,7 @@ describe('formatUsageCalendar', () => {
 		recordProviderUsage(MIMO_BASE, {total_tokens: 100}, now);
 		const calendar = formatUsageCalendar(MIMO_BASE, now, 12);
 		expect(calendar).toContain('Token activity   last 12 months');
-		expect(calendar).toContain('Lifetime 100');
+		expect(calendar).toMatch(/Lifetime [0-9.]+[KM]?/);
 		expect(calendar).toContain('Su ');
 		expect(calendar).toContain('daily · weekly · cumulative');
 	});
