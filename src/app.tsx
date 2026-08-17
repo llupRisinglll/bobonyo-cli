@@ -358,6 +358,9 @@ const COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000;
  */
 export function App() {
 	const renderer = useRenderer();
+	// Resume may switch process.cwd() to the saved session directory. Keep
+	// launch CWD so `/clear` returns to the directory outside the TUI.
+	const launchCwd = process.cwd();
 	const [statusRows, setStatusRows] = createSignal<StatusRow[]>([]);
 	const [settingsList, setSettingsList] = createSignal<{
 		title: string;
@@ -767,6 +770,14 @@ export function App() {
 		setModelOpen(false);
 		setModelModalInherit(false);
 		clearMessages();
+		// Resume can chdir into the saved conversation directory. `/clear`
+		// starts a fresh conversation from the directory where TUI launched,
+		// matching the shell's current working directory outside the TUI.
+		try {
+			process.chdir(launchCwd);
+		} catch {
+			// Launch directory may have been removed; keep current CWD.
+		}
 		startNewSession();
 		persist();
 	};
