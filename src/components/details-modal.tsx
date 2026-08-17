@@ -110,6 +110,14 @@ function UsageCalendarLine(props: {line: string}) {
 			.slice(3)
 			.split('')
 			.filter((_, index) => index % 2 === 0);
+	const fg = (cell: string): string =>
+		cell === '█'
+			? colors().success
+			: cell === '■'
+				? colors().primary
+				: cell === '▪'
+					? colors().secondary
+					: colors().text;
 	return (
 		<box flexDirection="row" height={1}>
 			<text width={3} fg={colors().secondary}>
@@ -117,21 +125,13 @@ function UsageCalendarLine(props: {line: string}) {
 			</text>
 			<For each={cells()}>
 				{cell => (
-					<box
+					<text
 						width={2}
-						height={1}
-						backgroundColor={RGBA.fromHex(
-							cell === '█'
-								? colors().success
-								: cell === '■'
-									? colors().primary
-									: cell === '▪'
-										? colors().secondary
-										: colors().base,
-						)}
+						fg={fg(cell)}
+						attributes={createTextAttributes({bold: true})}
 					>
-						<text fg={colors().base}>{cell}</text>
-					</box>
+						{cell === '·' ? '· ' : '■ '}
+					</text>
 				)}
 			</For>
 		</box>
