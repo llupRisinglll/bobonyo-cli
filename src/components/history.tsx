@@ -1461,17 +1461,21 @@ export function settledThought(
  * script. Every other info row renders verbatim.
  */
 export function renderInfoRow(content: string, key: string): string {
+	// Every chat-history info row owns a leading breakline. Without it,
+	// command output such as `/tool:open-prs` glues directly to the preceding
+	// row; tool rows already own their internal layout and are unaffected.
+	const withBreakline = (text: string): string => `\n${text}`;
 	if (content.startsWith('Background task completed')) {
-		return renderBackgroundTaskRow(content, key);
+		return withBreakline(renderBackgroundTaskRow(content, key));
 	}
 	if (!content.startsWith('Session:   ')) {
-		return content;
+		return withBreakline(content);
 	}
 	// `/status` block (codex-like): render through a custom fenced row so the
 	// `model[effort]` brackets survive (the markdown/tree-sitter pipeline
 	// drops bare `[x]` groups). Everything else stays plain markdown.
 	if (content.startsWith('Session:   ')) {
-		return fence('statusrow', 'done', content);
+		return withBreakline(fence('statusrow', 'done', content));
 	}
 	const lines = content.replace(/\n+$/, '').split('\n');
 	const header = lines[0] ?? '';

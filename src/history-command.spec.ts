@@ -130,10 +130,12 @@ describe('renderInfoRow (background task completion)', () => {
 			'info-1',
 		);
 		const lines = text.split('\n');
-		// Fence opener + blank + header, then the wrapped body lines.
-		const body = lines.slice(3, lines.length - 1);
+		// Leading history breakline + fence opener + blank + header, then
+		// wrapped body lines.
+		const body = lines.slice(4, lines.length - 1);
 		expect(body.length).toBeGreaterThan(2);
 		expect(body[0]!.startsWith('  └   ')).toBe(true);
-		for (const line of body.slice(1)) expect(line.startsWith('      ')).toBe(true);
+		for (const line of body.slice(1))
+			expect(line.startsWith('      ')).toBe(true);
 	});
 });
