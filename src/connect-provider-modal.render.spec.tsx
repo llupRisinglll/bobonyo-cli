@@ -339,7 +339,7 @@ describe('connect-provider delete flow (manage step d → y)', () => {
 	});
 });
 
-describe('opencode connect flow (key only, no name step)', () => {
+describe('opencode connect flow (one picker option, key + name)', () => {
 	test('adding an OpenCode Zen/Go connection asks ONLY the API key', async () => {
 		let submitted: ProviderConfig | undefined;
 		// Pin the provider list: without this the REAL user config leaks in
@@ -364,16 +364,18 @@ describe('opencode connect flow (key only, no name step)', () => {
 			mockInput.pressEnter();
 			await setup.flush();
 			expect(frameHas(setup.captureSpans(), 'API key')).toBe(true);
-			// Enter the key — the NAME step is SKIPPED (Zen/Go share one
-			// opencode.ai key; a new connection is just the key, auto-named).
+			// Enter the shared key, then provide the connection name.
 			await mockInput.typeText('sk-opencode-shared-key');
 			await setup.flush();
 			mockInput.pressEnter();
 			await setup.flush();
-			const frame = setup.captureSpans();
-			expect(frameHas(frame, 'OpenCode Zen name')).toBe(false);
-			expect(submitted?.id).toBe('opencode-zen');
-			expect(submitted?.name).toBe('opencode-zen');
+			expect(frameHas(setup.captureSpans(), 'name')).toBe(true);
+			await mockInput.typeText('named-key');
+			await setup.flush();
+			mockInput.pressEnter();
+			await setup.flush();
+			expect(submitted?.id).toBe('named-key');
+			expect(submitted?.name).toBe('named-key');
 			expect(submitted?.apiKey).toBe('sk-opencode-shared-key');
 			expect(submitted?.baseUrl).toBe('https://opencode.ai/zen/v1');
 		} finally {
@@ -418,11 +420,16 @@ describe('opencode connect flow (key only, no name step)', () => {
 			expect(frameHas(setup.captureSpans(), 'API key')).toBe(true);
 			await mockInput.typeText('sk-second');
 			await setup.flush();
+			mockInput.pressEnter(); // key → name
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'name')).toBe(true);
+			await mockInput.typeText('second-key');
+			await setup.flush();
 			mockInput.pressEnter();
 			await setup.flush();
-			// Auto-named with the (2) suffix — the second key never clobbers
-			// the first connection.
-			expect(submitted?.id).toBe('opencode-zen (2)');
+			// The named connection never clobbers the first connection.
+			expect(submitted?.id).toBe('second-key');
+			expect(submitted?.name).toBe('second-key');
 			expect(submitted?.apiKey).toBe('sk-second');
 		} finally {
 			delete process.env.BOBONYO_PROVIDERS;

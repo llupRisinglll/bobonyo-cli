@@ -162,6 +162,7 @@ export interface BashTurnResult {
 export async function runBash(
 	command: string,
 	onProgress?: (output: string) => void,
+	signal?: AbortSignal,
 ): Promise<BashTurnResult> {
 	const task: BackgroundTask = {
 		id: nextTaskId(),
@@ -177,6 +178,20 @@ export async function runBash(
 		stdout: 'pipe',
 		stderr: 'pipe',
 	});
+
+	// ABORT SIGNAL: when the user presses Esc (the turn's AbortController
+	// fires), kill the spawned process immediately so the tool loop
+	// unwinds instead of waiting for the process to finish naturally.
+	if (signal) {
+		const onAbort = () => {
+			try {
+				proc.kill('SIGTERM');
+			} catch {
+				// Process already exited — safe to ignore.
+			}
+		};
+		signal.addEventListener('abort', onAbort, {once: true});
+	}
 
 	let truncated = false;
 	const pump = async (stream: ReadableStream<Uint8Array>) => {

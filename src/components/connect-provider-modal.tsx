@@ -368,6 +368,10 @@ export function defaultProviderName(
  * presetConnectionCount): by default id + `(n)` suffixes, by the normalized
  * endpoint, or — for Codex — the ChatGPT-account backend. Pure, unit-tested.
  */
+function isOpenCodePreset(preset: ProviderPreset): boolean {
+	return preset.id === 'opencode-zen' || preset.id === 'opencode-go';
+}
+
 export function presetConnections(
 	preset: ProviderPreset,
 	providers?: Array<{id: string; baseUrl: string}>,
@@ -378,6 +382,28 @@ export function presetConnections(
 	const presetBase = normalize(preset.baseUrl);
 	const codexAccountBase = normalize('https://chatgpt.com/backend-api/codex');
 	return list.filter(provider => {
+		if (isOpenCodePreset(preset)) {
+			const providerBase = normalize(provider.baseUrl);
+			return (
+				provider.id.toLowerCase() === 'opencode-zen' ||
+				provider.id.toLowerCase().startsWith('opencode-zen (') ||
+				provider.id.toLowerCase() === 'opencode-go' ||
+				provider.id.toLowerCase().startsWith('opencode-go (') ||
+				providerBase === normalize('https://opencode.ai/zen/v1') ||
+				providerBase === normalize('https://opencode.ai/zen/go/v1')
+			);
+		}
+		if (isOpenCodePreset(preset)) {
+			const providerBase = normalize(provider.baseUrl);
+			return (
+				provider.id.toLowerCase() === 'opencode-zen' ||
+				provider.id.toLowerCase().startsWith('opencode-zen (') ||
+				provider.id.toLowerCase() === 'opencode-go' ||
+				provider.id.toLowerCase().startsWith('opencode-go (') ||
+				providerBase === normalize('https://opencode.ai/zen/v1') ||
+				providerBase === normalize('https://opencode.ai/zen/go/v1')
+			);
+		}
 		const id = provider.id.toLowerCase();
 		if (id === preset.id.toLowerCase()) return true;
 		if (id.startsWith(`${preset.id.toLowerCase()} (`)) return true;
@@ -764,7 +790,16 @@ export function ConnectProviderModal(props: {
 		const configured = listProviders();
 		const rows: PickerRow[] = [];
 		let lastCategory: string | null = null;
-		for (const preset of PROVIDER_PRESETS) {
+		// Zen and Go share one API-key connection. Show ONE OpenCode
+		// option here; tier/endpoint is chosen later in `/model`.
+		const pickerPresets = PROVIDER_PRESETS.filter(
+			preset => preset.id !== 'opencode-go',
+		).map(preset =>
+			preset.id === 'opencode-zen'
+				? {...preset, title: 'OpenCode', description: 'Zen + Go · one API key'}
+				: preset,
+		);
+		for (const preset of pickerPresets) {
 			if (preset.category !== lastCategory) {
 				rows.push({kind: 'header', label: preset.category});
 				lastCategory = preset.category;
@@ -866,16 +901,8 @@ export function ConnectProviderModal(props: {
 
 	const submitApiKey = (): void => {
 		setPresetKey(input().trim());
-		// OpenCode Zen / OpenCode Go share the SAME opencode.ai API key —
-		// only the endpoint differs. A new connection needs JUST the key:
-		// connect immediately with the auto name (id + `(n)` suffix for
-		// duplicates), no name step.
-		const preset = selectedPreset();
-		if (preset.id === 'opencode-zen' || preset.id === 'opencode-go') {
-			setInput('');
-			connectPreset();
-			return;
-		}
+		// OpenCode Zen/Go share one key, but each named connection still
+		// needs a user-provided name so multiple keys remain distinguishable.
 		push({kind: 'name'});
 	};
 	const connectPreset = (): void => {

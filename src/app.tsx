@@ -2298,6 +2298,7 @@ export function App() {
 											...prev,
 											[call.id]: content,
 										})),
+									signal: controller.signal,
 								}),
 							),
 						)
@@ -2456,6 +2457,7 @@ export function App() {
 						(await executeTool(call, {
 							onProgress: content =>
 								setLiveOutputs(prev => ({...prev, [call.id]: content})),
+							signal: controller.signal,
 						}));
 					if (call.arguments._malformed) {
 						// B7: malformed arguments → corrective nudge so the model

@@ -3,6 +3,7 @@ import {
 	MAX_BASH_OUTPUT_CHARS,
 	MAX_BASH_OUTPUT_LINES,
 	capOutputTail,
+	runBash,
 	stripEchoedCommand,
 } from './bash';
 
@@ -193,5 +194,17 @@ describe('stripEchoedCommand (leading echoed-command line)', () => {
 		expect(stripEchoedCommand([...echo, ...echo, 'done'], cmd)).toEqual([
 			'done',
 		]);
+	});
+});
+
+describe('runBash abort signal', () => {
+	test('kills a long-running process when the signal aborts', async () => {
+		const controller = new AbortController();
+		const started = Date.now();
+		const promise = runBash('sleep 30', undefined, controller.signal);
+		setTimeout(() => controller.abort(), 50);
+		const result = await promise;
+		expect(Date.now() - started).toBeLessThan(2000);
+		expect(result.content).toContain('EXIT_CODE:');
 	});
 });

@@ -34,6 +34,9 @@ export interface ToolResult {
 export interface ToolContext {
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
+	/** Abort signal: the turn's AbortController, so long-running tools
+	 * (bash, MCP) can be killed when the user presses Esc. */
+	signal?: AbortSignal;
 }
 
 interface ToolDef {
@@ -471,7 +474,7 @@ registerTool('execute_bash', {
 				);
 			}
 		}
-		const result = await runBash(command, ctx.onProgress);
+		const result = await runBash(command, ctx.onProgress, ctx.signal);
 		return result.content;
 	},
 });
