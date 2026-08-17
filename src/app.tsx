@@ -1911,6 +1911,10 @@ export function App() {
 				: {}),
 			...(command ? {command} : {}),
 		});
+		// Persist user message BEFORE provider/tool work. A long or interrupted
+		// turn must still appear in `/resume`; waiting for finally means a
+		// process exit or crash loses the latest prompt for several minutes.
+		persist();
 		const userMsg = {
 			role: 'user' as const,
 			content: scrubberRef.scrub(providerValue),
@@ -2918,8 +2922,11 @@ export function App() {
 		}
 		abortRef?.abort();
 		clearMessages();
+		// `startNewSession(ref)` loads asynchronously. Do not persist here:
+		// `currentSession` still points at the old conversation, so this write
+		// can overwrite its file with the just-cleared display before resume
+		// installs the target session.
 		startNewSession(ref);
-		persist();
 	};
 
 	const listSessionsInfo = () => {
