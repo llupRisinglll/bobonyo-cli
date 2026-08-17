@@ -16,10 +16,7 @@ export interface StatusRow {
  * backdrop over the chat history with a centered card listing every status
  * detail the app tracks. Esc closes; the input box stays visible below.
  */
-export function StatusModal(props: {
-	rows: StatusRow[];
-	onClose: () => void;
-}) {
+export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	// AUTO-CLOSE GUARD: ignore the opening click's mouse-UP on the backdrop.
@@ -31,7 +28,17 @@ export function StatusModal(props: {
 	const cardWidth = () => Math.min(76, Math.max(52, dims().width - 8));
 	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	const cardHeight = () => props.rows.length + 4;
+	const contentWidth = () => Math.max(1, cardWidth() - 4);
+	const labelWidth = () =>
+		Math.min(36, Math.max(20, ...props.rows.map(row => row.label.length + 2)));
+	const valueWidth = () => Math.max(1, contentWidth() - labelWidth());
+	const wrappedValue = (value: string): string[] =>
+		wrapStatusValue(value, valueWidth());
+	const cardHeight = () =>
+		props.rows.reduce(
+			(total, row) => total + wrappedValue(row.value).length,
+			0,
+		) + 4;
 	const valueFg = (kind: StatusRow['valueFg']) => {
 		switch (kind) {
 			case 'error':
@@ -105,16 +112,41 @@ export function StatusModal(props: {
 				</box>
 				<box height={1} />
 				<For each={props.rows}>
-					{(row) => (
-						<box flexDirection="row" height={1}>
-							<text width={18} fg={colors().secondary}>
-								{row.label}
-							</text>
-							<text fg={valueFg(row.valueFg)}>{row.value}</text>
-						</box>
+					{row => (
+						<For each={wrappedValue(row.value)}>
+							{(line, index) => (
+								<box flexDirection="row" height={1}>
+									<text width={labelWidth()} fg={colors().secondary}>
+										{index() === 0 ? `${row.label}:` : ''}
+									</text>
+									<text fg={valueFg(row.valueFg)}>{line}</text>
+								</box>
+							)}
+						</For>
 					)}
 				</For>
 			</box>
 		</box>
 	);
+}
+
+/** Wrap status values to the available value column, including long URLs. */
+function wrapStatusValue(value: string, width: number): string[] {
+	const lines: string[] = [];
+	for (const source of value.split('\n')) {
+		if (!source) {
+			lines.push('');
+			continue;
+		}
+		for (let start = 0; start < source.length;) {
+			let end = Math.min(source.length, start + width);
+			if (end < source.length) {
+				const breakAt = source.lastIndexOf(' ', end);
+				if (breakAt > start) end = breakAt;
+			}
+			lines.push(source.slice(start, end).trimEnd());
+			start = source[end] === ' ' ? end + 1 : end;
+		}
+	}
+	return lines.length > 0 ? lines : [''];
 }
