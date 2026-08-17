@@ -104,7 +104,7 @@ export function detailsCardHeight(
  * entries, so the user can read the information without the in-place toggle
  * confusing them. Esc / backdrop click closes; ↑/↓/PageUp/PageDn scroll.
  */
-function UsageCalendarLine(props: {line: string}) {
+function UsageCalendarLine(props: {line: string; width: number}) {
 	const cells = () =>
 		props.line
 			.slice(3)
@@ -118,6 +118,7 @@ function UsageCalendarLine(props: {line: string}) {
 				: cell === '▪'
 					? colors().secondary
 					: colors().text;
+	const cellWidth = props.width >= 112 ? 2 : 1;
 	return (
 		<box flexDirection="row" height={1}>
 			<text width={3} fg={colors().secondary}>
@@ -147,7 +148,10 @@ export function DetailsModal(props: {
 	const dims = () => terminalDimensions();
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
-	const cardWidth = () => Math.min(96, Math.max(60, dims().width - 4));
+	const cardWidth = () =>
+		props.title === 'Usage'
+			? Math.min(124, Math.max(80, dims().width - 2))
+			: Math.min(96, Math.max(60, dims().width - 4));
 	const cardHeight = () => detailsCardHeight(props.content, dims().height);
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
@@ -255,7 +259,7 @@ export function DetailsModal(props: {
 						{line =>
 							props.title === 'Usage' &&
 							/^(Su|Mo|Tu|We|Th|Fr|Sa)\s/.test(line.text) ? (
-								<UsageCalendarLine line={line.text} />
+								<UsageCalendarLine line={line.text} width={cardWidth()} />
 							) : (
 								<box flexDirection="row">
 									<For each={colorLine(line.text)}>
