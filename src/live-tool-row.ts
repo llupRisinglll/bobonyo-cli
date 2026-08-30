@@ -34,6 +34,32 @@ export function shouldRenderRunningToolMessage(
 }
 
 /**
+ * Background `agent` calls return an acknowledgement immediately. The active
+ * run owns that row, including follow-ups that reuse its id; keep the
+ * acknowledgement out of settled history while that run is retained.
+ */
+export function shouldRenderSettledAgentMessage(
+	toolName: string,
+	toolDetail: string,
+	toolOutput: string,
+	activeAgents: Iterable<{id: string; name: string; description: string}>,
+): boolean {
+	if (toolName !== 'agent') return true;
+	const normalizedDetail = toolDetail.replace(/\s+/g, ' ').trim();
+	for (const agent of activeAgents) {
+		if (toolOutput.includes(`Started background agent ${agent.id}`))
+			return false;
+		const description = agent.description.replace(/\s+/g, ' ').trim();
+		if (
+			normalizedDetail === `agent:${agent.name}(${description})` ||
+			normalizedDetail === description
+		)
+			return false;
+	}
+	return true;
+}
+
+/**
  * LIVE tool-row chunk building (pure, unit-tested).
  *
  * Running tool rows MUST NOT go through OpenTUI's `<markdown>` pipeline:

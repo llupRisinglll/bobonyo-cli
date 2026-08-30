@@ -45,6 +45,7 @@ export function SettledToolRow(props: {
 }) {
 	const dim = () => createTextAttributes({dim: true});
 	const briefed = () => Boolean(props.brief && props.brief.trim());
+	const ownsAgentGlyph = () => props.briefUnindented === true;
 	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
 	// follow the status (done = success green). The gear never turns green.
 	const glyph =
@@ -86,15 +87,15 @@ export function SettledToolRow(props: {
 				    the header must start at col 3 — width 3, NOT 2 — or the
 				    tool content sits one gap LEFT of the brief (bash parity:
 				    the bordered box indents width 3 for the same reason). */}
-				<Show when={!briefed() && !props.batchBriefed}>
+				<Show when={!briefed() && (!props.batchBriefed || ownsAgentGlyph())}>
 					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
 						{props.glyph ?? '✦'}
 					</text>
 				</Show>
-				<Show when={!briefed() && !props.batchBriefed}>
+				<Show when={!briefed() && (!props.batchBriefed || ownsAgentGlyph())}>
 					<box width={TRANSCRIPT_GLYPH_GAP} />
 				</Show>
-				<Show when={briefed() || props.batchBriefed}>
+				<Show when={briefed() || (props.batchBriefed && !ownsAgentGlyph())}>
 					<box width={TRANSCRIPT_CONTENT_COLUMN} />
 				</Show>
 				{/* ONE text renderable for the whole header, styled SPANS for

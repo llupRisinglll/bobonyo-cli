@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import {
 	liveRowSegments,
 	shouldRenderRunningToolMessage,
+	shouldRenderSettledAgentMessage,
 	splitChunksByLine,
 } from './live-tool-row';
 import {tokenizeBashRow} from './row-highlight';
@@ -59,6 +60,41 @@ describe('running agent row ownership', () => {
 		expect(shouldRenderRunningToolMessage('agent', true)).toBe(false);
 		expect(shouldRenderRunningToolMessage('agent', false)).toBe(true);
 		expect(shouldRenderRunningToolMessage('read_file', true)).toBe(true);
+	});
+
+	test('background acknowledgement yields to its active agent row', () => {
+		expect(
+			shouldRenderSettledAgentMessage(
+				'agent',
+				'agent:explore(task)',
+				'Started background agent agent:explore:1',
+				[{id: 'agent:explore:1', name: 'explore', description: 'task'}],
+			),
+		).toBe(false);
+		expect(
+			shouldRenderSettledAgentMessage(
+				'agent',
+				'agent:explore(other)',
+				'Started background agent agent:explore:1',
+				[{id: 'agent:explore:2', name: 'explore', description: 'task'}],
+			),
+		).toBe(true);
+		expect(
+			shouldRenderSettledAgentMessage(
+				'read_file',
+				'',
+				'Started background agent agent:explore:1',
+				[{id: 'agent:explore:1', name: 'explore', description: 'task'}],
+			),
+		).toBe(true);
+		expect(
+			shouldRenderSettledAgentMessage(
+				'agent',
+				'agent:explore(task)',
+				'completed result',
+				[{id: 'agent:explore:1', name: 'explore', description: 'task'}],
+			),
+		).toBe(false);
 	});
 });
 

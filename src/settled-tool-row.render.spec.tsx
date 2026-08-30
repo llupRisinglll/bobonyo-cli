@@ -39,6 +39,41 @@ function painted(frame: {
 }
 
 describe('pre-tool brief alignment (generic tool rows)', () => {
+	test('standalone agent rows keep glyph with batch marker', async () => {
+		const segments = liveRowSegments(
+			'Ran agent:explore(task) completed\n  └  result',
+			'agentrow',
+			'done',
+			colors(),
+			80,
+		);
+		const setup = await testRender(
+			() => (
+				<SettledToolRow
+					segments={segments}
+					status="done"
+					glyph="✦"
+					glyphTone="status"
+					hovered={false}
+					width={80}
+					batchBriefed
+					briefUnindented
+					md={testMd}
+				/>
+			),
+			{width: 80, height: 10},
+		);
+		try {
+			await setup.flush();
+			const rows = painted(setup.captureSpans());
+			expect(
+				rows.some(row => row.startsWith('✦') && row.includes('Ran agent:')),
+			).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test('briefed rows: header AND `└` sit at col 3, aligned with the brief text', async () => {
 		const seg = liveRowSegments(
 			'WebSearch(query)\n  └   some result tail',

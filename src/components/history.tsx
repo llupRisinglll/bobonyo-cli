@@ -68,6 +68,7 @@ import {
 import {
 	liveRowSegments,
 	shouldRenderRunningToolMessage,
+	shouldRenderSettledAgentMessage,
 	type LiveRowSegments,
 } from '../live-tool-row';
 import {stableSettledBlocks, type SettledBlock} from '../settled-block-cache';
@@ -616,6 +617,9 @@ export function History(props: HistoryProps) {
 			taskSeenInTurn = true;
 		}
 		const seenToolIds = new Set<string>();
+		const runningAgents = activeAgentRuns().filter(
+			run => run.status === 'running',
+		);
 		// Welcome block (parity: nanocoder shows a welcome message on an
 		// empty conversation instead of a blank transcript). SYSTEM logs
 		// (e.g. `Session renamed to "x"`) carry a `kind` and must NOT hide
@@ -673,6 +677,17 @@ export function History(props: HistoryProps) {
 					if (seenToolIds.has(message.toolId)) continue;
 					seenToolIds.add(message.toolId);
 				}
+				if (
+					message.tool &&
+					!message.running &&
+					!shouldRenderSettledAgentMessage(
+						message.tool.name,
+						message.tool.detail,
+						message.tool.output,
+						runningAgents,
+					)
+				)
+					continue;
 				// Row state owns placement; global running() only means model turn
 				// continues. Completed commands stay visible during Working. A live
 				// duplicate id wins, preventing simultaneous live + settled paint.
