@@ -27,6 +27,8 @@ export function SettledToolRow(props: {
 	status: RowStatus;
 	/** Row glyph (`✦` for tools, `⚙` for thoughts). */
 	glyph?: '✦' | '⚙';
+	/** User-facing rows keep glyph in normal text color. */
+	glyphTone?: 'status' | 'muted' | 'text';
 	hovered: boolean;
 	width: number;
 	/** Model brief rendered ONCE above the row (part of this tool entry). */
@@ -43,11 +45,16 @@ export function SettledToolRow(props: {
 	const briefed = () => Boolean(props.brief && props.brief.trim());
 	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
 	// follow the status (done = success green). The gear never turns green.
-	const glyph = settledGlyphColor(
-		props.glyph ?? '✦',
-		props.status,
-		themeColors(colors()),
-	);
+	const glyph =
+		props.glyphTone === 'text'
+			? themeColors(colors()).fg.text
+			: props.glyphTone === 'muted'
+				? themeColors(colors()).fg.secondary
+				: settledGlyphColor(
+						props.glyph ?? '✦',
+						props.status,
+						themeColors(colors()),
+					);
 	return (
 		<box flexDirection="column" ref={props.onRef}>
 			{/* Leading breakline: parity with the settled blank rows between

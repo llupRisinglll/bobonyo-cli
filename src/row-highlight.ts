@@ -272,6 +272,20 @@ export function tokenizeToolRow(
 	);
 }
 
+/** Human-facing task progress: muted diamond, spacing, and plain secondary text. */
+export function tokenizeTaskStatusRow(
+	text: string,
+	_colors: Colors,
+): TextChunk[] {
+	const palette = themeColors(_colors);
+	const lines = text.replace(/\n+$/, '').split('\n');
+	return emitLines(
+		lines,
+		line => [chunk(line, palette.fg.text)],
+		palette.fg.text,
+	);
+}
+
 /**
  * Triggered-command row (`✦ Triggered a Command(name)`): ONLY the word
  * `Command` is primary (the tool-name convention); the glyph, `Triggered a`,

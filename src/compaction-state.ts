@@ -348,7 +348,9 @@ export function buildCompactionStateSnapshot(
 		invokedSkills: invokedSkills(input),
 		recentFiles: recentFiles(input),
 	};
-	return `${COMPACTION_STATE_PREFIX}\n${JSON.stringify(data, null, 2)}`;
+	// Compact JSON keeps every field and exact value while avoiding thousands
+	// of whitespace tokens in long-running sessions.
+	return `${COMPACTION_STATE_PREFIX}\n${JSON.stringify(data)}`;
 }
 
 export function estimateContextTokens(

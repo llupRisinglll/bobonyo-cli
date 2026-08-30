@@ -10,6 +10,7 @@ import {
 	parseArguments,
 	parseToolCalls,
 	ProviderError,
+	projectProviderMessages,
 	setFallbackEndpoints,
 	streamChat,
 	buildSystemPrompt,
@@ -51,8 +52,10 @@ import {imageSourceContext, persistImageAttachments} from './attachments';
 import {buildMentionContext} from './mentions';
 import {
 	beginFileUndoExchange,
+	discardFileUndoFrom,
+	fileUndoExchanges,
+	rewindFileExchangeAt,
 	resetFileUndoStack,
-	undoFileExchange,
 } from './file-undo';
 import {
 	buildCommandInvocationPrompt,
@@ -1855,8 +1858,9 @@ export function App() {
 
 	const refreshContextPercent = () => {
 		const model = activeEndpoint().model;
+		const projected = projectProviderMessages(context(), model);
 		const tokens = estimateContextTokens(
-			context(),
+			projected,
 			model,
 			`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
 		);
@@ -1874,8 +1878,9 @@ export function App() {
 		)
 			return false;
 		const model = activeEndpoint().model;
+		const projected = projectProviderMessages(history, model);
 		const tokens = estimateContextTokens(
-			history,
+			projected,
 			model,
 			`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
 		);
@@ -2595,6 +2600,7 @@ export function App() {
 				},
 				retry: retryLast,
 				undo: undoLast,
+				rewind,
 				resume: resumeSession,
 				rename,
 				usage,
@@ -4064,10 +4070,8 @@ export function App() {
 		completionPopupController.cancel();
 		setMessages(keptMessages);
 		setContext(keptContext);
-		// openclaude-rewind parity: restore the files the undone exchange
-		// mutated (write/edit/delete snapshots taken before each
-		// tool ran). The transcript and the files move back together.
-		const fileUndo = undoFileExchange();
+		// `/undo` is conversation-only. `/rewind` is the explicit destructive
+		// filesystem option, so ordinary undo never changes files.
 		// opencode parity: the undone prompt comes back into the input so it
 		// can be edited and re-sent.
 		if (undonePrompt) setInput(undonePrompt);
@@ -4077,20 +4081,92 @@ export function App() {
 		// the next turn starts (runTurn clears the completion slot). Never a
 		// permanent transcript row.
 		setCompletionTone('success');
+		setCompletionMessage('Undid the last message.');
+		if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+		resumeNoticeTimer = setTimeout(() => {
+			setCompletionMessage('');
+			setCompletionTone('default');
+		}, 6000);
+	};
+
+	const rewindConversation = (userIndex: number, restoreFiles: boolean) => {
+		if (busy()) {
+			appendInfo('Cannot rewind while a turn is running.');
+			return;
+		}
+		const result = rewindExchangeAt(messages(), context(), userIndex);
+		if (!result.undonePrompt) {
+			appendInfo('Nothing to rewind yet.');
+			return;
+		}
+		completionPopupController.cancel();
+		setMessages(result.keptMessages);
+		setContext(result.keptContext);
+		let restored = 0;
+		if (restoreFiles) restored = rewindFileExchangeAt(userIndex).length;
+		else discardFileUndoFrom(userIndex);
+		if (result.undonePrompt) setInput(result.undonePrompt);
+		persist();
+		setCompletionTone('success');
 		setCompletionMessage(
-			`Undid the last message.${
-				fileUndo && fileUndo.restored.length > 0
-					? ` Restored ${fileUndo.restored.length} file${
-							fileUndo.restored.length === 1 ? '' : 's'
-						}.`
-					: ''
-			}`,
+			`Rewound conversation${restoreFiles ? ' and files' : ''}.` +
+				(restored
+					? ` Restored ${restored} file${restored === 1 ? '' : 's'}.`
+					: ''),
 		);
 		if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
 		resumeNoticeTimer = setTimeout(() => {
 			setCompletionMessage('');
 			setCompletionTone('default');
 		}, 6000);
+	};
+
+	const rewind = () => {
+		if (busy()) {
+			appendInfo('Cannot rewind while a turn is running.');
+			return;
+		}
+		const candidates = messages()
+			.map((message, index) => ({message, index}))
+			.filter(({message}) => message.role === 'user' && !message.error);
+		if (candidates.length === 0) {
+			appendInfo('Nothing to rewind yet.');
+			return;
+		}
+		const exchangePrompts = fileUndoExchanges();
+		openSettingsList(
+			'Rewind',
+			candidates.map(({message, index}, userIndex) => ({
+				label: message.content || '(empty message)',
+				value: `before message ${userIndex + 1}${exchangePrompts[userIndex]?.prompt ? ' · files tracked' : ''}`,
+				activateHint: 'select',
+				onActivate: () => {
+					setSettingsList(null);
+					setSettingsOpen(false);
+					setPendingQuestion({
+						header: 'Rewind',
+						question: `Restore conversation before: ${message.content || '(empty message)'}`,
+						options: [
+							{
+								label: 'Conversation only',
+								description: 'Leave files unchanged.',
+							},
+							{
+								label: 'Conversation + files',
+								description: 'Restore tracked files too.',
+							},
+							{label: 'Cancel'},
+						],
+						resolve: answer => {
+							if (answer === 'Conversation only')
+								rewindConversation(userIndex, false);
+							if (answer === 'Conversation + files')
+								rewindConversation(userIndex, true);
+						},
+					});
+				},
+			})),
+		);
 	};
 
 	const fork = () => {
@@ -5483,6 +5559,40 @@ export function undoExchange(
 		keptMessages,
 		keptContext,
 		undonePrompt: messages[lastUser]!.content ?? null,
+	};
+}
+
+/** Rewind immediately before selected non-error user exchange. */
+export function rewindExchangeAt(
+	messages: ChatMessage[],
+	context: ChatMessageLike[],
+	userIndex: number,
+): {
+	keptMessages: ChatMessage[];
+	keptContext: ChatMessageLike[];
+	undonePrompt: string | null;
+} {
+	const users = messages
+		.map((message, index) => ({message, index}))
+		.filter(({message}) => message.role === 'user' && !message.error);
+	const target = users[userIndex];
+	if (!target)
+		return {keptMessages: messages, keptContext: context, undonePrompt: null};
+	let ctxCut = context.length;
+	let seenUsers = 0;
+	for (let index = 0; index < context.length; index++) {
+		if (context[index]?.role !== 'user') continue;
+		if (seenUsers === userIndex) {
+			ctxCut = index;
+			break;
+		}
+		seenUsers++;
+	}
+	const keptMessages = messages.slice(0, target.index);
+	return {
+		keptMessages,
+		keptContext: healResumedContext(context.slice(0, ctxCut), keptMessages),
+		undonePrompt: target.message.content ?? null,
 	};
 }
 

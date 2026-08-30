@@ -58,6 +58,7 @@ export const BASE_COMMAND_NAMES = [
 	'schedule',
 	'update',
 	'undo',
+	'rewind',
 	'export',
 	'context-max',
 	'setup-config',
@@ -137,6 +138,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	resume: 'Resume a session',
 	retry: 'Retry the last turn',
 	undo: 'Undo the last message',
+	rewind: 'Restore conversation and/or files to an earlier point',
 	rename: 'Rename the current session',
 	sessions: 'List sessions',
 	usage: 'Show token usage',
@@ -240,6 +242,7 @@ export interface CommandContext {
 	herdrFork: (split: string) => void;
 	retry: () => void;
 	undo: () => void;
+	rewind: () => void;
 	resume: (ref?: string) => void;
 	rename: (name: string) => void;
 	usage: () => void;
@@ -420,6 +423,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'undo':
 			ctx.undo();
+			return true;
+		case 'rewind':
+			ctx.rewind();
 			return true;
 		case 'resume':
 			ctx.resume(args || undefined);

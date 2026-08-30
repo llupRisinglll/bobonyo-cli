@@ -8,6 +8,7 @@ import {
 	tokenizeFileRow,
 	tokenizeStatusRow,
 	tokenizeTaskRow,
+	tokenizeTaskStatusRow,
 	tokenizeToolRow,
 	tokenizeUserMessage,
 	tokenizeWarningRow,
@@ -37,6 +38,18 @@ function bg(c: TextChunk): string | null {
 function join(chunks: TextChunk[]): string {
 	return chunks.map(c => c.text).join('');
 }
+describe('tokenizeTaskStatusRow', () => {
+	test('keeps diamond spacing and muted non-bold text', () => {
+		const chunks = tokenizeTaskStatusRow(
+			'✦  Working on: Replace undo with rewind',
+			colors(),
+		);
+		expect(join(chunks)).toBe('✦  Working on: Replace undo with rewind');
+		expect(chunks.every(entry => rgb(entry) === themeRgb(colors().text))).toBe(
+			true,
+		);
+	});
+});
 
 /** Chunk runs per output line (chunks split on the embedded newlines). */
 function perLine(chunks: TextChunk[]): TextChunk[][] {

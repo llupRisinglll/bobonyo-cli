@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {promptHistoryFromMessages, undoExchange} from './app';
+import {promptHistoryFromMessages, rewindExchangeAt, undoExchange} from './app';
 import type {ChatMessageLike} from './client';
 import type {ChatMessage} from './state';
 
@@ -23,7 +23,9 @@ const ctxAssistant = (content: string): ChatMessageLike => ({
 describe('undoExchange (opencode-style session revert)', () => {
 	test('nothing to undo on an empty or assistant-only transcript', () => {
 		expect(undoExchange([], []).undonePrompt).toBeNull();
-		expect(undoExchange([assistant('hi')], [ctxAssistant('hi')]).undonePrompt).toBeNull();
+		expect(
+			undoExchange([assistant('hi')], [ctxAssistant('hi')]).undonePrompt,
+		).toBeNull();
 	});
 
 	test('truncates transcript AND context at the last user message', () => {
@@ -110,7 +112,11 @@ describe('undoExchange (opencode-style session revert)', () => {
 		];
 		const context: ChatMessageLike[] = [
 			ctxUser('fix the bug'),
-			{role: 'assistant', content: '', tool_calls: [{id: 'c1', name: 'bash', arguments: '{}'}]},
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [{id: 'c1', name: 'bash', arguments: '{}'}],
+			},
 			{role: 'tool', content: '✦ Bash(ls)', tool_call_id: 'c1'},
 			ctxUser('now ship it'),
 			ctxAssistant('done'),
@@ -191,6 +197,27 @@ describe('undoExchange (opencode-style session revert)', () => {
 	});
 });
 
+describe('rewindExchangeAt', () => {
+	test('rewinds to selected user exchange', () => {
+		const messages = [
+			user('one'),
+			assistant('a'),
+			user('two'),
+			assistant('b'),
+			user('three'),
+			assistant('c'),
+		];
+		const result = rewindExchangeAt(messages, messages, 1);
+		expect(result.undonePrompt).toBe('two');
+		expect(result.keptMessages).toEqual([user('one'), assistant('a')]);
+	});
+	test('invalid selection is a no-op', () => {
+		const messages = [user('one'), assistant('a')];
+		const result = rewindExchangeAt(messages, messages, 4);
+		expect(result.undonePrompt).toBeNull();
+		expect(result.keptMessages).toBe(messages);
+	});
+});
 describe('promptHistoryFromMessages (arrow-up history after resume)', () => {
 	test('collects every user prompt in order, newest last', () => {
 		const messages: ChatMessage[] = [

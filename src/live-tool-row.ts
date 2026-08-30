@@ -9,6 +9,7 @@ import {
 	tokenizeFileDiff,
 	tokenizeFileRow,
 	tokenizeTaskRow,
+	tokenizeTaskStatusRow,
 	tokenizeThought,
 	tokenizeToolRow,
 	type RowStatus,
@@ -126,6 +127,9 @@ export function liveRowSegments(
 				break;
 			case 'taskrow':
 				chunks = tokenizeTaskRow(trimmed, status, colors);
+				break;
+			case 'inforow':
+				chunks = tokenizeTaskStatusRow(trimmed, colors);
 				break;
 			case 'thought':
 				chunks = tokenizeThought(trimmed, status, colors);

@@ -170,6 +170,48 @@ export function undoFileExchange(): {
 	return {prompt: top.prompt, restored};
 }
 
+/** Return exchange prompts in oldest-to-newest order. */
+export function fileUndoExchanges(): Array<{prompt: string}> {
+	return stack.map(exchange => ({prompt: exchange.prompt}));
+}
+
+/**
+ * Restore files to the state before exchange `index`, then discard that
+ * exchange and every newer exchange. Conversation rewind owns the matching
+ * transcript truncation; this function only touches filesystem snapshots.
+ */
+export function rewindFileExchangeAt(index: number): string[] {
+	if (index < 0 || index >= stack.length) return [];
+	const entries = new Map<string, FileUndoEntry>();
+	for (
+		let exchangeIndex = index;
+		exchangeIndex < stack.length;
+		exchangeIndex++
+	) {
+		for (const entry of stack[exchangeIndex]!.files.values()) {
+			if (!entries.has(entry.path)) entries.set(entry.path, entry);
+		}
+	}
+	const restored: string[] = [];
+	for (const entry of entries.values()) {
+		try {
+			if (entry.existed) writeFileSync(entry.path, entry.content ?? '');
+			else if (existsSync(entry.path)) rmSync(entry.path);
+			restored.push(entry.path);
+		} catch {
+			// Best effort, matching ordinary file undo.
+		}
+	}
+	stack.length = index;
+	return restored;
+}
+
+/** Drop exchange `index` and all newer snapshots without touching files. */
+export function discardFileUndoFrom(index: number): void {
+	if (index < 0) return;
+	stack.length = Math.min(stack.length, index);
+}
+
 /** Number of pending file-undo exchanges (for tests/debug). */
 export function fileUndoDepth(): number {
 	return stack.length;

@@ -36,6 +36,8 @@ export function LiveToolRows(props: {
 	rows: Array<
 		LiveRowSegments & {
 			lang?: string;
+			glyph?: '✦' | '⚙';
+			glyphTone?: 'status' | 'muted' | 'text';
 			brief?: string;
 			batchBriefed?: boolean;
 			agentAggregate?: boolean;
@@ -51,6 +53,36 @@ export function LiveToolRows(props: {
 		<For each={props.rows}>
 			{row => (
 				<box flexDirection="column">
+					<Show when={row.lang === 'inforow'}>
+						<box height={1} />
+						<text
+							fg={
+								row.glyphTone === 'text'
+									? colors().text
+									: row.glyphTone === 'muted'
+										? colors().secondary
+										: settledGlyphColor(
+												row.glyph!,
+												'running',
+												themeColors(colors()),
+											)
+							}
+						>
+							{row.glyph}
+						</text>
+						<box width={TRANSCRIPT_GLYPH_GAP} />
+						<text fg={colors().text}>
+							<For each={row.header}>{chunk => chunk.text}</For>
+							<For each={row.body}>
+								{line => (
+									<>
+										{'\n'}
+										<For each={line}>{chunk => chunk.text}</For>
+									</>
+								)}
+							</For>
+						</text>
+					</Show>
 					{/* RUNNING bash rows stream INSIDE the same bordered box
 					    the settled row uses (the border is drawn by OpenTUI,
 					    so streamed/wrapped content always stays inside). */}
@@ -83,7 +115,8 @@ export function LiveToolRows(props: {
 						when={
 							row.lang !== 'bashrow' &&
 							row.lang !== 'filerow' &&
-							row.lang !== 'filediff'
+							row.lang !== 'filediff' &&
+							row.lang !== 'inforow'
 						}
 					>
 						{/* Leading breakline ONLY for the generic path: the

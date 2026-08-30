@@ -95,7 +95,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// OWN leading breakline, so the live wrapper must NOT add another
 		// before them — a double blank row appeared while running and
 		// collapsed when the row settled (the "extra breakline").
-		const beforeBash = src.slice(0, src.indexOf("row.lang === 'bashrow'"));
+		const beforeBash = src.slice(
+			src.indexOf("row.lang !== 'inforow'") + 1,
+			src.indexOf("row.lang === 'bashrow'"),
+		);
 		const bashBranch = src.slice(
 			src.indexOf("row.lang === 'bashrow'"),
 			src.indexOf("row.lang === 'filerow'"),
@@ -646,13 +649,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
-	test('/undo is wired and truncates at the last user message', () => {
+	test('/undo is conversation-only and /rewind owns file restoration', () => {
 		const app = read('./app.tsx');
 		const commands = read('./commands.ts');
 		expect(commands).toMatch(/'undo',/);
+		expect(commands).toMatch(/'rewind',/);
 		expect(commands).toMatch(/undo: 'Undo the last message'/);
+		expect(commands).toMatch(
+			/rewind: 'Restore conversation and\/or files to an earlier point'/,
+		);
 		expect(app).toMatch(/undo: undoLast/);
+		expect(app).toMatch(/rewind,/);
 		expect(app).toMatch(/export function undoExchange/);
+		expect(app).toMatch(/export function rewindExchangeAt/);
 		// The provider context must be a TRUNCATION, never a reorder/inline
 		// mutation — otherwise the cache head changes and every later turn
 		// misses the prompt cache.
@@ -668,7 +677,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// files the undone exchange mutated, and every REAL LLM turn starts a
 		// new file-undo exchange (slash commands must not — they would push a
 		// dummy entry that swallows the previous exchange's file undo).
-		expect(app).toMatch(/undoFileExchange\(\)/);
+		expect(app).not.toMatch(/undoFileExchange\(\)/);
 		expect(app).toMatch(/beginFileUndoExchange\(value\)/);
 	});
 
@@ -1246,6 +1255,27 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(state).toMatch(/compactingLabel/);
 		expect(state).toMatch(/loadingDots\(frame\)/);
 	});
+	test('task bookkeeping renders as plain progress text, not tool chrome', () => {
+		const display = read('./tool-display.ts');
+		const history = read('./components/history.tsx');
+		const live = read('./components/live-tool-rows.tsx');
+		expect(display).toMatch(/isTaskProgressTool/);
+		expect(display).toMatch(
+			/if \(isTaskProgressTool\(tool\.name\)\) return raw/,
+		);
+		expect(history).toMatch(/formatTaskStatusText\(message\.tool, status\)/);
+		expect(live).toMatch(/row\.lang === 'inforow'/);
+		expect(live).toMatch(/row\.lang !== 'inforow'/);
+		expect(live).toMatch(/row\.glyphTone === 'muted'/);
+		expect(history).toMatch(/tokenizeTaskStatusRow/);
+		expect(history).toMatch(/rowGlyph\('inforow'\)/);
+		expect(live).toMatch(/settledGlyphColor\([\s\S]*row\.glyph/);
+		expect(history).toMatch(
+			/singleToolRow[\s\S]*isTaskProgressTool\(message\.tool\.name\)/,
+		);
+		expect(history).not.toMatch(/`✦  \$\{formatTaskStatusText/);
+		expect(history).toMatch(/formatTaskStatusText\(message\.tool, status\)/);
+	});
 
 	test('the transcript scrollbox uses the opencode-style scroll speed', () => {
 		// opencode feels faster/smoother scrolling because its transcript
@@ -1680,7 +1710,7 @@ describe('regression guards (COMPLETED attention popup)', () => {
 		// New turn, /clear, /undo and /resume all cancel the popup (a stale
 		// attention modal must never survive a conversation swap).
 		const cancels = app.match(/completionPopupController\.cancel\(\)/g);
-		expect(cancels?.length).toBe(4);
+		expect(cancels?.length).toBe(5);
 		// ANY key is user activity (dismisses a visible popup / restarts the
 		// idle window) and the ROOT box tracks mouse move/down globally —
 		// "move the mouse to dismiss" works over the whole screen.

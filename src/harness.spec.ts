@@ -7,8 +7,10 @@ import {
 	buildOpenAIRequestBody,
 	buildSystemPrompt,
 	currentDateFragment,
+	projectProviderMessages,
 	type ChatMessageLike,
 } from './client';
+import {estimateTokens} from './tokenize';
 
 afterEach(() => {
 	setCavemanMode(true);
@@ -25,6 +27,161 @@ afterEach(() => {
  *      in-place mutation), so the provider's prefix cache hits.
  */
 describe('harness cache invariants (OpenAI-compatible)', () => {
+	test('provider projection shortens only old tool results', () => {
+		const old = 'old '.repeat(10_000);
+		const recent = 'recent '.repeat(10_000);
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: old, tool_call_id: 'old'},
+			{role: 'assistant', content: 'continue'},
+			{role: 'tool', content: recent, tool_call_id: 'recent'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			protectedTailMessages: 1,
+			maxHistoricalToolTokens: 100,
+		});
+		expect(projected[0]!.content).toContain('historical tool result shortened');
+		expect(projected[0]!.content.length).toBeLessThan(old.length);
+		expect(projected[2]!.content).toBe(recent);
+		expect(messages[0]!.content).toBe(old);
+	});
+
+	test('provider projection budgets old results newest-first', () => {
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: 'first '.repeat(4_000), tool_call_id: '1'},
+			{role: 'tool', content: 'second '.repeat(4_000), tool_call_id: '2'},
+			{role: 'tool', content: 'third '.repeat(4_000), tool_call_id: '3'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			protectedTailMessages: 0,
+			maxHistoricalToolTokens: 600,
+			maxHistoricalToolTotalTokens: 900,
+		});
+		expect(projected[2]!.content).toContain('historical tool result shortened');
+		expect(projected[1]!.content).toContain('historical tool result shortened');
+		expect(projected[0]!.content).toContain('historical tool result omitted');
+		expect(messages[2]!.content).not.toBe(projected[2]!.content);
+		expect(messages[0]!.content).toBe('first '.repeat(4_000));
+	});
+
+	test('projected pressure estimate drops while durable history stays large', () => {
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: 'output '.repeat(20_000), tool_call_id: 'old'},
+			{role: 'user', content: 'continue'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			protectedTailMessages: 1,
+			maxHistoricalToolTokens: 300,
+		});
+		expect(estimateTokens(projected[0]!.content, 'test-model')).toBeLessThan(
+			estimateTokens(messages[0]!.content, 'test-model'),
+		);
+		expect(messages[0]!.content.length).toBeGreaterThan(100_000);
+	});
+
+	test('provider projection stays lossless below pressure threshold', () => {
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: 'detail '.repeat(2_000), tool_call_id: 'old'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			contextWindow: 100_000,
+			projectionThresholdPercent: 75,
+		});
+		expect(projected).toBe(messages);
+	});
+
+	test('provider projection folds only older duplicate tool results', () => {
+		const duplicate = 'same result '.repeat(4_000);
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: duplicate, tool_call_id: 'old'},
+			{role: 'tool', content: duplicate, tool_call_id: 'new'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			protectedTailMessages: 0,
+			maxHistoricalToolTokens: 600,
+			maxHistoricalToolTotalTokens: 1_200,
+		});
+		expect(projected[0]!.content).toContain('duplicate historical tool result');
+		expect(projected[1]!.content).toContain(
+			'historical tool result shortened for provider context',
+		);
+		expect(projected[1]!.content).not.toContain(
+			'duplicate historical tool result',
+		);
+		expect(messages[0]!.content).toBe(duplicate);
+	});
+
+	test('duplicate folding applies even when each result fits its cap', () => {
+		const duplicate = 'same '.repeat(2_000);
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: duplicate, tool_call_id: 'old'},
+			{role: 'tool', content: duplicate, tool_call_id: 'new'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			protectedTailMessages: 0,
+			maxHistoricalToolTokens: 4_000,
+			maxHistoricalToolTotalTokens: 8_000,
+		});
+		expect(projected[0]!.content).toContain('duplicate historical tool result');
+		expect(projected[1]!.content).toBe(duplicate);
+	});
+
+	test('provider pressure counts tool calls and images', () => {
+		const messages: ChatMessageLike[] = [
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{
+						id: 'call-1',
+						name: 'execute_bash',
+						arguments: JSON.stringify({command: 'x'.repeat(20_000)}),
+					},
+				],
+			},
+			{
+				role: 'tool',
+				content: 'large output '.repeat(4_000),
+				tool_call_id: 'call-1',
+			},
+			{role: 'user', content: 'image', images: ['image.png']},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			contextWindow: 3_000,
+			projectionThresholdPercent: 1,
+			protectedTailMessages: 1,
+			maxHistoricalToolTokens: 200,
+		});
+		expect(projected[1]!.content).toContain(
+			'historical tool result shortened for provider context',
+		);
+	});
+
+	test('automatic projection preserves history when context limit is unknown', () => {
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: 'detail '.repeat(20_000), tool_call_id: 'old'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			automatic: true,
+		});
+		expect(projected).toBe(messages);
+	});
+
+	test('provider pressure includes static request overhead', () => {
+		const messages: ChatMessageLike[] = [
+			{role: 'tool', content: 'detail '.repeat(3_000), tool_call_id: 'old'},
+		];
+		const projected = projectProviderMessages(messages, 'test-model', {
+			contextWindow: 2_000,
+			projectionThresholdPercent: 75,
+			overhead: 'static system and tool catalog '.repeat(2_000),
+			protectedTailMessages: 0,
+			maxHistoricalToolTokens: 200,
+		});
+		expect(projected[0]!.content).toContain(
+			'historical tool result shortened for provider context',
+		);
+	});
+
 	test('the system prompt is byte-stable across calls in a session', () => {
 		const a = buildSystemPrompt('full');
 		const b = buildSystemPrompt('full');

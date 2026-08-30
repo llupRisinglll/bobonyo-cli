@@ -23,6 +23,7 @@ import {
 } from './opencode-limit';
 import {resolveSystemPrompt, type SystemPromptStyle} from './system-prompt';
 import {renderPersistentMemory} from './memory';
+import {estimateTokens} from './tokenize';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -268,6 +269,128 @@ export interface ChatMessageLike {
 	tool_calls?: Array<{id: string; name: string; arguments: string}>;
 }
 
+function providerMessageTokens(
+	message: ChatMessageLike,
+	model: string,
+): number {
+	const calls = (message.tool_calls ?? [])
+		.map(call => `${call.id}\n${call.name}\n${call.arguments}`)
+		.join('\n');
+	return (
+		estimateTokens(
+			`${message.role}\n${message.content ?? ''}\n${message.tool_call_id ?? ''}\n${calls}`,
+			model,
+		) +
+		4 +
+		(message.images?.length ?? 0) * 1_024
+	);
+}
+
+/**
+ * Bound only stale tool payloads sent to providers. The complete message is
+ * still retained by the caller and persisted in the session; this projection
+ * exists solely to stop one huge historical command or search result from
+ * consuming the next request's context. Recent messages remain lossless.
+ */
+export function projectProviderMessages(
+	messages: ChatMessageLike[],
+	model: string,
+	options: {
+		protectedTailMessages?: number;
+		maxHistoricalToolTokens?: number;
+		maxHistoricalToolTotalTokens?: number;
+		contextWindow?: number;
+		projectionThresholdPercent?: number;
+		foldDuplicateToolResults?: boolean;
+		automatic?: boolean;
+		overhead?: string;
+	} = {},
+): ChatMessageLike[] {
+	if (
+		options.automatic &&
+		(!options.contextWindow || options.contextWindow <= 0)
+	) {
+		return messages;
+	}
+	if (options.contextWindow && options.contextWindow > 0) {
+		const rawTokens =
+			messages.reduce(
+				(total, message) => total + providerMessageTokens(message, model),
+				0,
+			) + estimateTokens(options.overhead ?? '', model);
+		const threshold = Math.max(
+			1,
+			Math.min(99, options.projectionThresholdPercent ?? 75),
+		);
+		if (rawTokens < (options.contextWindow * threshold) / 100) {
+			return messages;
+		}
+	}
+	const protectedTail = Math.max(0, options.protectedTailMessages ?? 12);
+	const maxTokens = Math.max(256, options.maxHistoricalToolTokens ?? 4_000);
+	const totalBudget = Math.max(
+		maxTokens,
+		options.maxHistoricalToolTotalTokens ?? 16_000,
+	);
+	const historical = messages
+		.map((message, index) => ({message, index}))
+		.filter(
+			entry =>
+				entry.message.role === 'tool' &&
+				entry.index < messages.length - protectedTail,
+		)
+		.reverse();
+	const newestDuplicate = new Map<string, number>();
+	if (options.foldDuplicateToolResults !== false) {
+		for (const {message, index} of historical) {
+			const content = message.content ?? '';
+			if (!newestDuplicate.has(content)) newestDuplicate.set(content, index);
+		}
+	}
+	const budgets = new Map<number, number>();
+	let remaining = totalBudget;
+	for (const {message, index} of historical) {
+		const tokens = estimateTokens(message.content ?? '', model);
+		const budget = Math.min(tokens, maxTokens, remaining);
+		budgets.set(index, budget);
+		remaining = Math.max(0, remaining - budget);
+	}
+	return messages.map((message, index) => {
+		const budget = budgets.get(index);
+		const content = message.content ?? '';
+		if (
+			budget !== undefined &&
+			options.foldDuplicateToolResults !== false &&
+			newestDuplicate.get(content) !== index
+		) {
+			return {
+				...message,
+				content:
+					'[duplicate historical tool result; newest identical result retained]',
+			};
+		}
+		if (budget === undefined || estimateTokens(content, model) <= budget) {
+			return message;
+		}
+		if (budget < 128) {
+			return {
+				...message,
+				content: '[historical tool result omitted from provider context]',
+			};
+		}
+		let charBudget = Math.max(64, Math.floor(content.length * 0.25));
+		let shortened = '';
+		for (;;) {
+			const head = content.slice(0, Math.floor(charBudget * 0.65));
+			const tail = content.slice(-Math.floor(charBudget * 0.25));
+			shortened = `${head}\n… [historical tool result shortened for provider context] …\n${tail}`;
+			if (estimateTokens(shortened, model) <= budget || charBudget <= 64) break;
+			charBudget = Math.max(64, Math.floor(charBudget * 0.8));
+		}
+		return {...message, content: shortened};
+	});
+}
+
 /**
  * Auto-recovery for malformed tool-message sequences (legacy nanocoder
  * conversions, /undo rebuilds, resumed sessions): assistant `tool_calls`
@@ -454,6 +577,7 @@ export interface EndpointOverride {
 	baseUrl: string;
 	apiKey: string;
 	model: string;
+	contextWindow?: number;
 	effort?: string;
 	sdkProvider?: string;
 	/** Responses wire against the ChatGPT Codex backend (codex login). */
@@ -614,6 +738,14 @@ async function streamOnce(
 	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
+	// Keep durable/session history lossless, but send a bounded projection of
+	// stale tool output. This runs before wire sanitization so every provider
+	// path receives the same conservative history policy.
+	messages = projectProviderMessages(messages, endpoint.model, {
+		contextWindow: endpoint.contextWindow,
+		automatic: true,
+		overhead: `${buildSystemPrompt(toolProfile, options)}\n${JSON.stringify(tools)}`,
+	});
 	// Auto-recovery: legacy/undo/resume conversations can carry tool
 	// messages without a matching `tool_call_id` (or tool_calls with empty
 	// ids) — providers reject the body with "missing field tool_call_id".

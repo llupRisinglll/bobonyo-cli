@@ -60,6 +60,9 @@ import {
 	fence,
 	formatOutputTail,
 	formatToolEntry,
+	formatTaskStatusText,
+	isTaskProgressTool,
+	rowGlyph,
 	rowLanguage,
 } from '../tool-display';
 import {
@@ -91,6 +94,7 @@ import {
 	tokenizeStatusRow,
 	tokenizeThought,
 	tokenizeTaskRow,
+	tokenizeTaskStatusRow,
 	tokenizeToolRow,
 	tokenizeCommandRow,
 	tokenizeWarningRow,
@@ -121,6 +125,7 @@ const COMPONENT_ROW_LANGS = new Set([
 	'commandrow',
 	'filerow',
 	'filediff',
+	'inforow',
 ]);
 
 /**
@@ -323,6 +328,13 @@ export function History(props: HistoryProps) {
 				filetype: 'txt',
 				syntaxStyle: syntaxStyle(),
 				onChunks: () => tokenizeToolRow(token.text ?? '', status, colors()),
+			}),
+		inforow: (token, status) =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () => tokenizeTaskStatusRow(token.text ?? '', colors()),
 			}),
 		bashrow: (token, status) =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
@@ -631,6 +643,25 @@ export function History(props: HistoryProps) {
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
+				if (message.tool && isTaskProgressTool(message.tool.name)) {
+					if (
+						message.tool.name === 'write_tasks' &&
+						!message.running &&
+						!latestTaskMessages.has(message) &&
+						!message.brief?.trim()
+					)
+						continue;
+					const status: RowStatus = message.running ? 'running' : 'done';
+					pushBlock(
+						fence(
+							'inforow',
+							status,
+							formatTaskStatusText(message.tool, status),
+						),
+						`task-info-${i}`,
+					);
+					continue;
+				}
 				// review_changes is a fan-out coordinator. Its individual reviewer
 				// calls are materialized as real agent tool rows; never paint the
 				// coordinator's aggregate result as one fake row.
@@ -742,7 +773,7 @@ export function History(props: HistoryProps) {
 					kind: 'tool',
 					part,
 					status,
-					glyph: lang === 'thought' ? '⚙' : '✦',
+					glyph: rowGlyph(lang),
 					brief: part.brief,
 					batchBriefed: part.brief === ' ',
 					// Same tokenizer path the LIVE rows use: identical colors,
@@ -942,6 +973,8 @@ export function History(props: HistoryProps) {
 			LiveRowSegments & {
 				toolId?: string;
 				lang?: string;
+				glyph?: '✦' | '⚙';
+				glyphTone?: 'status' | 'muted' | 'text';
 				brief?: string;
 				batchBriefed?: boolean;
 				agentAggregate?: boolean;
@@ -962,6 +995,27 @@ export function History(props: HistoryProps) {
 			});
 		}
 		for (const message of messages()) {
+			if (
+				message.role === 'tool' &&
+				message.running &&
+				message.tool &&
+				isTaskProgressTool(message.tool.name)
+			) {
+				rows.push({
+					toolId: message.toolId,
+					lang: 'inforow',
+					glyph: rowGlyph('inforow'),
+					glyphTone: 'muted',
+					...liveRowSegments(
+						formatTaskStatusText(message.tool, 'running'),
+						'inforow',
+						'running',
+						colors(),
+						historyFillWidth(terminalDimensions().width ?? 80),
+					),
+				});
+				continue;
+			}
 			if (
 				message.role === 'tool' &&
 				message.running &&
@@ -1343,6 +1397,7 @@ export function History(props: HistoryProps) {
 									segments={block.segments}
 									status={block.status}
 									glyph={block.glyph}
+									glyphTone={isTaskStatusBlock(block) ? 'muted' : 'status'}
 									hovered={false}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
@@ -1874,6 +1929,9 @@ function isFileRowBlock(block: SettledBlock): boolean {
 	const lang = fenceMatch?.[1];
 	return lang === 'filerow' || lang === 'filediff';
 }
+function isTaskStatusBlock(block: SettledBlock): boolean {
+	return block.kind === 'tool' && /^```+inforow:/.test(block.part.text);
+}
 
 /** User messages are capped for display; footer opens full text. */
 const USER_PREVIEW_LINES = 12;
@@ -1916,6 +1974,13 @@ function singleToolRow(
 	compactTask = false,
 ): string {
 	if (!message.tool) return message.content;
+	if (isTaskProgressTool(message.tool.name)) {
+		return fence(
+			'inforow',
+			message.running ? 'running' : 'done',
+			formatTaskStatusText(message.tool, message.running ? 'running' : 'done'),
+		);
+	}
 	if (message.tool.name === 'agent') return agentRow(message);
 	// review_changes output already contains one agent row per reviewer; keep
 	// it in the agent tokenizer instead of generic tool grouping.

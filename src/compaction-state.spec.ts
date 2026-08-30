@@ -113,6 +113,8 @@ describe('deterministic compaction state', () => {
 			limit: 20,
 			content: 'SOURCE BODY',
 		});
+		expect(raw).not.toContain('\n  "session"');
+		expect(JSON.stringify(data)).toBe(raw.slice(raw.indexOf('\n') + 1));
 	});
 
 	test('merges prior deterministic skills and files across generations', () => {

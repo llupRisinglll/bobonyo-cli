@@ -10,11 +10,13 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
 	beginFileUndoExchange,
+	discardFileUndoFrom,
 	fileUndoBytes,
 	fileUndoDepth,
 	MAX_FILE_UNDO_BYTES,
 	MAX_FILE_UNDO_EXCHANGES,
 	mutationTargetPaths,
+	rewindFileExchangeAt,
 	resetFileUndoStack,
 	snapshotFileBeforeMutation,
 	undoFileExchange,
@@ -110,5 +112,32 @@ describe('file undo (openclaude-rewind parity)', () => {
 			cwd: '/repo',
 		});
 		expect(paths).toContain('/repo/src/new.ts');
+	});
+	test('rewind restores selected exchange and discards newer snapshots', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-rewind-'));
+		tempDirs.push(dir);
+		const path = join(dir, 'a.txt');
+		writeFileSync(path, 'base');
+		beginFileUndoExchange('first');
+		snapshotFileBeforeMutation(path);
+		writeFileSync(path, 'first');
+		beginFileUndoExchange('second');
+		snapshotFileBeforeMutation(path);
+		writeFileSync(path, 'second');
+		expect(rewindFileExchangeAt(0)).toContain(path);
+		expect(readFileSync(path, 'utf8')).toBe('base');
+		expect(fileUndoDepth()).toBe(0);
+	});
+	test('conversation-only rewind discards snapshots without changing files', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-rewind-'));
+		tempDirs.push(dir);
+		const path = join(dir, 'a.txt');
+		writeFileSync(path, 'base');
+		beginFileUndoExchange('first');
+		snapshotFileBeforeMutation(path);
+		writeFileSync(path, 'changed');
+		discardFileUndoFrom(0);
+		expect(readFileSync(path, 'utf8')).toBe('changed');
+		expect(fileUndoDepth()).toBe(0);
 	});
 });

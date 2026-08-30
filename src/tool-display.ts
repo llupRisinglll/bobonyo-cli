@@ -92,6 +92,7 @@ export function formatToolEntry(
 	if (status === 'running' && !blinkOn) {
 		raw = raw.replace(/^[✦⚙]/, ' ');
 	}
+	if (isTaskProgressTool(tool.name)) return raw;
 	return plain ? raw : fence(rowLanguage(tool.name), status, raw);
 }
 
@@ -112,6 +113,45 @@ export function rowLanguage(name: string): string {
 	if (name === 'agent' || name === 'review_changes') return 'agentrow';
 	if (name === 'write_tasks') return 'taskrow';
 	return 'toolrow';
+}
+/** Shared glyph metadata for every transcript row language. */
+export function rowGlyph(language: string): '✦' | '⚙' {
+	return language === 'thought' ? '⚙' : '✦';
+}
+
+/** Human-facing task progress, intentionally not rendered as a tool call. */
+export function formatTaskStatusText(
+	tool: ToolDisplayData,
+	status: RowStatus,
+): string {
+	const rawTitle =
+		typeof tool.args?.title === 'string' ? tool.args.title.trim() : '';
+	const outputTitle = /^\S+\s+·\s+\S+\s+·\s+(.+?)(?:\s+·|$)/.exec(
+		tool.output.split('\n', 1)[0] ?? '',
+	)?.[1];
+	const outputStatus =
+		/^\S+\s+·\s+(pending|in_progress|completed|cancelled)\s+·/.exec(
+			tool.output.split('\n', 1)[0] ?? '',
+		)?.[1];
+	const title = rawTitle || outputTitle || 'task checklist';
+	const taskRows = Array.isArray(tool.args?.tasks) ? tool.args.tasks : [];
+	const hasUnfinished = taskRows.some(
+		task =>
+			Boolean(task) &&
+			typeof task === 'object' &&
+			['pending', 'in_progress'].includes(
+				String((task as {status?: unknown}).status),
+			),
+	);
+	const working =
+		status === 'running' ||
+		(tool.args?.status ?? outputStatus) === 'in_progress' ||
+		(!tool.args?.status && hasUnfinished);
+	return `${working ? 'Working on' : 'Finished working on'}: ${title}`;
+}
+
+export function isTaskProgressTool(name: string): boolean {
+	return ['write_tasks', 'task_create', 'task_update'].includes(name);
 }
 
 function formatToolEntryText(
@@ -147,9 +187,7 @@ function formatGenericEntry(
 	if (tool.name === 'skill' || tool.name === 'check_skill') {
 		return formatSkillRow(tool, status);
 	}
-	if (tool.name === 'write_tasks') {
-		return formatTaskList(tool, status);
-	}
+	if (isTaskProgressTool(tool.name)) return formatTaskStatusText(tool, status);
 	if (tool.name === 'review_changes') return tool.output;
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
