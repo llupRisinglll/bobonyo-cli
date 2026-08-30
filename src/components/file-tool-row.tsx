@@ -1,10 +1,14 @@
 /** @jsxImportSource @opentui/solid */
-import {createTextAttributes, RGBA} from '@opentui/core';
+import {createTextAttributes} from '@opentui/core';
 import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
 import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
+import {
+	TRANSCRIPT_GLYPH_GAP,
+	TRANSCRIPT_CONTENT_COLUMN,
+} from '../transcript-layout';
 
 /**
  * FILE-WRITE / EDIT tool row (Write / Edit / diff previews).
@@ -45,8 +49,6 @@ export function FileToolRow(props: {
 		props.status,
 		themeColors(colors()),
 	);
-	const tint = RGBA.fromHex(colors().secondary);
-	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	const briefed = () => Boolean(props.brief && props.brief.trim());
 	const compactBriefTree = () =>
 		briefed() &&
@@ -56,8 +58,7 @@ export function FileToolRow(props: {
 			.replace(/^[✦⚙]\s*/, '')
 			.trimStart()
 			.startsWith('└ ');
-	const indentContent = () =>
-		(briefed() || props.batchBriefed) && !compactBriefTree();
+	const indentContent = () => briefed() || props.batchBriefed;
 	return (
 		<box flexDirection="column" ref={props.onRef}>
 			{/* Leading breakline (parity: every other tool row). */}
@@ -73,15 +74,26 @@ export function FileToolRow(props: {
 				/>
 			</Show>
 			<Show when={props.header.length > 0}>
-				<box
-					flexDirection="row"
-					backgroundColor={props.hovered ? hoverBg : undefined}
-				>
+				<box flexDirection="row">
+					<Show when={!briefed() && !props.batchBriefed}>
+						<text
+							fg={glyph}
+							attributes={props.glyph === '⚙' ? dim() : undefined}
+						>
+							{props.glyph ?? '✦'}
+						</text>
+						<box width={TRANSCRIPT_GLYPH_GAP} />
+					</Show>
 					{/* With a brief, the row indents to the brief's text
 					    column (`✦` + the 2-col gap = 3 cols) and the header
 					    chunk's own glyph is stripped — one glyph per batch. */}
-					<Show when={indentContent()}>
-						<box width={3} />
+					<Show when={indentContent() && !compactBriefTree()}>
+						<box width={TRANSCRIPT_CONTENT_COLUMN} />
+					</Show>
+					{/* Compact apply_patch trees already carry their branch lead;
+					    add one column so `└` aligns under the brief content. */}
+					<Show when={compactBriefTree()}>
+						<box width={1} />
 					</Show>
 					<text>
 						<For each={props.header}>
@@ -111,10 +123,7 @@ export function FileToolRow(props: {
 			</Show>
 			<For each={props.body}>
 				{line => (
-					<box
-						flexDirection="row"
-						backgroundColor={props.hovered ? hoverBg : undefined}
-					>
+					<box flexDirection="row">
 						<Show when={indentContent()}>
 							<box width={3} />
 						</Show>

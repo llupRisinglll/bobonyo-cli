@@ -40,6 +40,13 @@ import {
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
+import {
+	appendMemory,
+	clearMemory,
+	forgetMemory,
+	listMemoryRecords,
+	renderPersistentMemory,
+} from './memory';
 import {imageSourceContext, persistImageAttachments} from './attachments';
 import {buildMentionContext} from './mentions';
 import {
@@ -228,7 +235,11 @@ import {
 	truncateCompactionText,
 	type CompactionFailureState,
 } from './compaction-state';
-import {oneSentencePreToolBrief, toolCallBrief} from './pre-tool-brief';
+import {
+	oneSentencePreToolBrief,
+	splitPreToolText,
+	toolCallBrief,
+} from './pre-tool-brief';
 import {shouldPersistTaskCloseoutReply} from './task-closeout';
 
 const VERSION = '0.1.0';
@@ -2636,6 +2647,9 @@ export function App() {
 				contextMax,
 				setupConfigInfo,
 				setupMcpInfo,
+				remember,
+				forget,
+				preferences,
 			});
 			return;
 		}
@@ -3171,8 +3185,11 @@ export function App() {
 				// model's "I'll check X" narration BEFORE the tool box). It is
 				// attached to the FIRST tool message of the batch and renders
 				// once as part of the tool entry — never repeated per tool.
+				const preToolText = splitPreToolText(
+					scrubberRef.rehydrate(result.text),
+				);
 				const briefText = result.text.trim()
-					? oneSentencePreToolBrief(scrubberRef.rehydrate(result.text))
+					? oneSentencePreToolBrief(preToolText.brief)
 					: '';
 				const priorRoundBriefed = toolBriefActive;
 				if (briefText) toolBriefActive = true;
@@ -3180,6 +3197,16 @@ export function App() {
 				// otherwise same narration paints above tool and again below it
 				// until next streaming throttle tick.
 				setStreaming('');
+				// Keep prose after the compact pre-tool sentence as a normal
+				// assistant message. Previously every result.text attached to a
+				// tool call was collapsed into one brief, silently dropping
+				// substantive sentences between tool rounds.
+				if (preToolText.remainder) {
+					appendAssistantMessage(preToolText.remainder, {
+						reasoning: result.reasoning.trim() || undefined,
+						durationSec: thoughtDuration(),
+					});
+				}
 				const toolResults: Array<{
 					tool_call_id: string;
 					content: string;
@@ -3254,6 +3281,7 @@ export function App() {
 					? await Promise.all(
 							calls.map(call =>
 								executeTool(call, {
+									sessionId: sessionId(),
 									onProgress: content =>
 										setLiveOutputs(prev => ({
 											...prev,
@@ -3425,6 +3453,7 @@ export function App() {
 					const toolResult =
 						parallelResults?.[index] ??
 						(await executeTool(call, {
+							sessionId: sessionId(),
 							onProgress: content =>
 								setLiveOutputs(prev => ({...prev, [call.id]: content})),
 							signal: controller.signal,
@@ -3830,6 +3859,9 @@ export function App() {
 					[],
 					undefined,
 					toolProfile(),
+					undefined,
+					undefined,
+					{disableCaveman: true},
 				);
 				break;
 			} catch (error) {
@@ -4267,6 +4299,7 @@ export function App() {
 				`  └ providers: ${listProviders().length}\n` +
 				`  └ tools registered: ${listTools().length}\n` +
 				`  └ mcp servers: ${loadMCPConfig().length}\n` +
+				`  └ active memory: ${listMemoryRecords(workspaceCwd(), sessionId()).filter(record => record.status === 'active').length}\n` +
 				`  └ mode: ${mode()} · profile: ${toolProfile()}\n` +
 				`  └ non-interactive: ${process.env.NANOCODER_NONINTERACTIVE ? 'yes' : 'no'}`,
 		);
@@ -4335,6 +4368,52 @@ export function App() {
 				: `MCP servers:\n${servers.map(s => `  └ ${s.id ?? s.command}`).join('\n')}`,
 		);
 	};
+	const remember = (args: string) => {
+		const text = args.trim();
+		if (!text) {
+			appendInfo('Usage: /remember [user|project|session] <guidance>');
+			return;
+		}
+		const match = text.match(/^(user|project|session)\s+(.+)$/i);
+		const scope =
+			(match?.[1]?.toLowerCase() as 'user' | 'project' | 'session') ??
+			'project';
+		const guidance = match?.[2] ?? text;
+		const path = appendMemory(guidance, scope, workspaceCwd(), sessionId());
+		appendInfo(`Remembered ${scope} guidance in ${path}`);
+	};
+	const forget = (args: string) => {
+		const selector = args.trim().toLowerCase();
+		if (!selector) {
+			appendInfo('Usage: /forget <memory-id|user|project|session>');
+			return;
+		}
+		if (
+			selector === 'user' ||
+			selector === 'project' ||
+			selector === 'session'
+		) {
+			const path = clearMemory(selector, workspaceCwd(), sessionId());
+			appendInfo(`Cleared ${selector} memory: ${path}`);
+			return;
+		}
+		try {
+			const count = forgetMemory(selector, workspaceCwd(), sessionId());
+			appendInfo(
+				count ? `Forgot memory ${selector}.` : `Memory not found: ${selector}`,
+			);
+		} catch (error) {
+			appendInfo(
+				`Forget failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	};
+	const preferences = () =>
+		openInfoModal(
+			'Preferences',
+			renderPersistentMemory(workspaceCwd(), sessionId()) ||
+				'No persistent memory saved.',
+		);
 
 	const usage = () => {
 		const history = usageHistory();

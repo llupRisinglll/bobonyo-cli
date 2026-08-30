@@ -74,7 +74,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('history renders running tool rows ONLY via LiveToolRows', () => {
 		const src = read('./components/history.tsx');
-		expect(src).toMatch(/<LiveToolRows rows=\{liveToolRows\(\)\}[^>]*\/>/);
+		expect(src).toMatch(
+			/<LiveToolRows[\s\S]*?rows=\{liveToolRows\(\)\}[\s\S]*?\/>/,
+		);
 		// The live rows memo builds segments through the shared util.
 		expect(src).toMatch(/liveRowSegments/);
 	});
@@ -131,9 +133,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// Same handle budget rule as the live rows: per-line <text> with
 		// styled spans, never a per-cell <text>.
 		expect(component).toMatch(/<span\s+style=\{\{/);
-		// Hover must be a per-row BACKGROUND (settings-row parity), with the
-		// header excluded by construction (the bg is only on body rows).
-		expect(component).toMatch(/backgroundColor/);
+		// Hover belongs to History's full-row wrapper. Child rows stay content-only
+		// so Bash and other entries never paint nested/double backgrounds.
+		expect(component).not.toMatch(/backgroundColor/);
+		expect(history).toMatch(/block\.parts\[0\]\?\.key === hoveredBlock\(\)/);
 	});
 
 	test('the Worked-for completion line never auto-expires on a timer', () => {
@@ -827,6 +830,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/entry\.start \+ Math\.max\(0, entry\.rows - 1\)/);
 	});
 
+	test('hover keeps later tool and markdown entries distinct', () => {
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/entryForEvent/);
+		expect(history).toMatch(/pickHoveredEntry\(blockRefs, event\.y\)/);
+		expect(history).toMatch(/blockRefs\.find\(item => item\.block === block\)/);
+		expect(history).toMatch(/key: key \?\? `entry-\$\{anonymousBlock\+\+\}`/);
+	});
+
 	test('settled block refs survive memo recomputes (resume hover parity)', () => {
 		// stableSettledBlocks reuses UNCHANGED block objects, so Solid's For
 		// keeps their elements WITHOUT re-firing the ref callback. Resetting
@@ -1282,7 +1293,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {
 		const reply = read('./components/transcript-reply.tsx');
 		// Shared parent/child reply row owns a real two-column spacer.
-		expect(reply).toMatch(/<box width=\{2\} \/>/);
+		expect(reply).toMatch(/TRANSCRIPT_GLYPH_GAP/);
 		expect(reply).not.toMatch(/✦\{' '\}/);
 	});
 
@@ -1750,13 +1761,13 @@ describe('regression guards (brief gap + COMPLETED modal only-when-idle)', () =>
 		// a real spacer box (trailing spaces get trimmed by the renderer).
 		const brief = read('./components/markdown-brief.tsx');
 		expect(brief).toMatch(/<text fg=\{props\.glyph as never\}>✦<\/text>/);
-		expect(brief).toMatch(/<box width=\{2\} \/>/);
+		expect(brief).toMatch(/TRANSCRIPT_GLYPH_GAP/);
 		expect(brief).not.toMatch(/✦ <\/text>/);
 		// The bordered tool box (bash) and the file row indent to the NEW
 		// text column (`✦` + 2-col gap = 3 cols) so the border still lines
 		// up under the brief text.
 		expect(read('./components/bash-tool-row.tsx')).toMatch(
-			/<box width=\{3\} \/>/,
+			/TRANSCRIPT_CONTENT_COLUMN/,
 		);
 		const fileRow = read('./components/file-tool-row.tsx');
 		expect(fileRow).toMatch(/<box width=\{3\} \/>/);

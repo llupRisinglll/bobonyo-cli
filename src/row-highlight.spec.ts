@@ -483,6 +483,17 @@ describe('tokenizeUserMessage', () => {
 		}
 	});
 
+	test('continuation lines keep message content indentation', () => {
+		const chunks = tokenizeUserMessage(
+			'❯ first line\n* second line\n* third line',
+			colors(),
+			0,
+		);
+		const lines = perLine(chunks);
+		expect(lines[1]?.map(chunk => chunk.text).join('')).toBe('  * second line');
+		expect(lines[2]?.map(chunk => chunk.text).join('')).toBe('  * third line');
+	});
+
 	test('colors KNOWN commands and REAL attachment tokens in the content', () => {
 		const chunks = tokenizeUserMessage(
 			'❯ check /status and [Image #1]',

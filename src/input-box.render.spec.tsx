@@ -318,6 +318,25 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 		}
 	});
 
+	test('a leading space after Shift+Enter stays on the new line with the caret', async () => {
+		const setup = await mountInput();
+		try {
+			const {mockInput} = setup;
+			await mockInput.typeText('hi');
+			mockInput.pressEnter({shift: true});
+			await setup.flush();
+			await mockInput.typeText(' ');
+			await setup.flush();
+			expect(input()).toBe('hi\n ');
+			const frame = setup.captureSpans();
+			const hits = caretSpans(frame);
+			expect(hits).toHaveLength(1);
+			expect(hits[0]).toMatchObject({line: 2, col: 5, width: 1});
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
 	test('hidden blink phase keeps the caret CELL and the hint column (no line shift, square never disappears)', async () => {
 		setInput('');
 		setSpinnerFrame(0);

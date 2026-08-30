@@ -55,8 +55,6 @@ export interface ToolDisplayData {
 	args?: Record<string, unknown>;
 	/** Pre-tool narration owns glyph; grouped file labels become branches. */
 	briefed?: boolean;
-	/** Task-only title derived from pre-tool narration. */
-	briefTitle?: string;
 	/** Task-only compact form for superseded checklist snapshots. */
 	compactTask?: boolean;
 }
@@ -161,7 +159,7 @@ function formatGenericEntry(
 }
 
 /**
- * Task list (parity: nanocoder's TaskListDisplay), `✦ Tasks (N done, M in
+ * Task list (parity: nanocoder's TaskListDisplay), `✦ <title> (N done, M in
  * progress, K open)` header + `›/◆/·` status icons per task, colored by
  * state. Reads the LIVE task signal so a running row shows progress.
  */
@@ -181,12 +179,12 @@ function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
 	const cancelled = list.filter(task => task.status === 'cancelled').length;
 	const open = list.length - done - running - cancelled;
 	const suffix = ` (${done} done, ${running} in progress, ${open} open)`;
-	const briefTitle = compactTaskTitle(tool.briefTitle ?? '');
-	const title = briefTitle || displayToolName(tool.name);
+	const title =
+		typeof tool.args?.title === 'string' && tool.args.title.trim()
+			? tool.args.title.trim()
+			: displayToolName(tool.name);
 	if (tool.compactTask) {
-		const content = briefTitle
-			? `✦ ${briefTitle}\n  └ ${displayToolName(tool.name)}${suffix}`
-			: `✦ ${displayToolName(tool.name)}${suffix}`;
+		const content = `✦ ${title}${suffix}`;
 		return fence('taskrow', status, content);
 	}
 	const lines = list.map((task, index) => {
@@ -209,20 +207,6 @@ function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
 		status,
 		`✦ ${title}${suffix}${lines.length ? `\n${lines.join('\n')}` : ''}`,
 	);
-}
-
-/** One-line, few-word task title from model narration. */
-function compactTaskTitle(value: string): string {
-	const plain = value
-		.replace(/[`*_#]/g, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-	if (!plain) return '';
-	const words = plain.split(' ');
-	const limited = words.slice(0, 7).join(' ');
-	const clipped =
-		limited.length > 48 ? limited.slice(0, 45).trimEnd() : limited;
-	return words.length > 7 || limited.length > 48 ? `${clipped}...` : clipped;
 }
 
 /**

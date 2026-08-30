@@ -10,6 +10,7 @@ import {createMemo} from 'solid-js';
 import type {JSX} from 'solid-js';
 import {colors} from '../theme';
 import {markdownSyntaxStyleFor} from '../syntax';
+import {TRANSCRIPT_GLYPH_GAP} from '../transcript-layout';
 
 /** Shared assistant-reply row used by main and child transcripts. */
 export function TranscriptReply(props: {
@@ -39,7 +40,7 @@ export function TranscriptReply(props: {
 				<text fg={colors().secondary} attributes={dim()}>
 					✦
 				</text>
-				<box width={2} />
+				<box width={TRANSCRIPT_GLYPH_GAP} />
 				<box flexGrow={1} minWidth={0}>
 					<markdown
 						ref={props.onRef}

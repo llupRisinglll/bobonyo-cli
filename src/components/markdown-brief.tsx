@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import {
-	RGBA,
 	type Renderable,
 	type RenderNodeContext,
 	type SyntaxStyle,
 	type TreeSitterClient,
 } from '@opentui/core';
 import {colors} from '../theme';
+import {TRANSCRIPT_GLYPH_GAP} from '../transcript-layout';
 
 /**
  * The markdown renderer bits a tool row needs to render its pre-tool brief
@@ -48,20 +48,15 @@ export function MarkdownBrief(props: {
 	hovered: boolean;
 	md: MarkdownBriefRenderer;
 }) {
-	const tint = RGBA.fromHex(colors().secondary);
-	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	return (
-		<box
-			flexDirection="row"
-			backgroundColor={props.hovered ? hoverBg : undefined}
-		>
+		<box flexDirection="row">
 			<text fg={props.glyph as never}>✦</text>
 			{/* REAL 2-column gap after the diamond (reply parity: the reply
 			    container pads its content 2 columns after `✦`). A trailing
 			    space inside the text cell gets trimmed by the renderer, so
 			    the gap is a real spacer box — `✦ ` (one trailing space)
 			    rendered the text ONE column too close to the diamond. */}
-			<box width={2} />
+			<box width={TRANSCRIPT_GLYPH_GAP} />
 			<box flexGrow={1} minWidth={0}>
 				<markdown
 					content={props.text}

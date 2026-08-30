@@ -1,8 +1,16 @@
 import {describe, expect, test} from 'bun:test';
-import {mkdirSync, rmSync, unlinkSync, writeFileSync} from 'node:fs';
+import {
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from 'node:fs';
 import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {
 	buildResponsesInput,
+	buildSystemPrompt,
 	looksLikeToolCallText,
 	openAIToolBlocks,
 	parseToolCalls,
@@ -11,7 +19,30 @@ import {
 	sanitizeToolCallIds,
 	streamChat,
 } from './client';
+import {appendMemory} from './memory';
 import {setActiveEndpoint} from './state';
+
+test('system prompt injects persistent memory, compaction prompt can omit Caveman', () => {
+	const originalConfig = process.env.BOBONYO_CONFIG_DIR;
+	const originalCwd = process.cwd();
+	const root = mkdtempSync(join(tmpdir(), 'bobonyo-client-memory-'));
+	try {
+		process.env.BOBONYO_CONFIG_DIR = join(root, 'config');
+		process.chdir(root);
+		appendMemory('Never commit unless explicitly asked.', 'user');
+		const normal = buildSystemPrompt();
+		const compact = buildSystemPrompt(undefined, {disableCaveman: true});
+		expect(normal).toContain('Never commit unless explicitly asked.');
+		expect(normal).toContain('CAVEMAN MODE');
+		expect(compact).toContain('Never commit unless explicitly asked.');
+		expect(compact).not.toContain('CAVEMAN MODE');
+	} finally {
+		process.chdir(originalCwd);
+		if (originalConfig === undefined) delete process.env.BOBONYO_CONFIG_DIR;
+		else process.env.BOBONYO_CONFIG_DIR = originalConfig;
+		rmSync(root, {recursive: true, force: true});
+	}
+});
 
 describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () => {
 	test('well-formed sequences pass through unchanged', () => {

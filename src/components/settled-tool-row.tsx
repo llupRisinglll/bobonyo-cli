@@ -1,11 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import {createTextAttributes, RGBA} from '@opentui/core';
+import {createTextAttributes} from '@opentui/core';
 import {For, Show} from 'solid-js';
 import type {LiveRowSegments} from '../live-tool-row';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
 import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
+import {
+	TRANSCRIPT_GLYPH_GAP,
+	TRANSCRIPT_CONTENT_COLUMN,
+} from '../transcript-layout';
 
 /**
  * SETTLED tool/thought row — rendered as plain OpenTUI components (boxes +
@@ -37,7 +41,6 @@ export function SettledToolRow(props: {
 }) {
 	const dim = () => createTextAttributes({dim: true});
 	const briefed = () => Boolean(props.brief && props.brief.trim());
-	const aligned = () => briefed() && !props.briefUnindented;
 	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
 	// follow the status (done = success green). The gear never turns green.
 	const glyph = settledGlyphColor(
@@ -45,8 +48,6 @@ export function SettledToolRow(props: {
 		props.status,
 		themeColors(colors()),
 	);
-	const tint = RGBA.fromHex(colors().secondary);
-	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	return (
 		<box flexDirection="column" ref={props.onRef}>
 			{/* Leading breakline: parity with the settled blank rows between
@@ -66,26 +67,23 @@ export function SettledToolRow(props: {
 			    header carries the SAME hover background as the body (the
 			    whole bordered Bash entry is ONE hoverable/clickable region);
 			    text colors stay untouched so readability is preserved. */}
-			<box
-				flexDirection="row"
-				width={props.width}
-				backgroundColor={props.hovered ? hoverBg : undefined}
-			>
+			<box flexDirection="row" width={props.width}>
 				{/* With a brief, the brief line carries the entry's single
 				    glyph; the header indents to the brief's text column.
 				    The brief renders `✦` + a 2-col gap (text at col 3), so
 				    the header must start at col 3 — width 3, NOT 2 — or the
 				    tool content sits one gap LEFT of the brief (bash parity:
 				    the bordered box indents width 3 for the same reason). */}
-				<Show
-					when={(!briefed() || props.briefUnindented) && !props.batchBriefed}
-				>
+				<Show when={!briefed() && !props.batchBriefed}>
 					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
-						{(props.glyph ?? '✦') + ' '}
+						{props.glyph ?? '✦'}
 					</text>
 				</Show>
-				<Show when={aligned() || props.batchBriefed}>
-					<box width={3} />
+				<Show when={!briefed() && !props.batchBriefed}>
+					<box width={TRANSCRIPT_GLYPH_GAP} />
+				</Show>
+				<Show when={briefed() || props.batchBriefed}>
+					<box width={TRANSCRIPT_CONTENT_COLUMN} />
 				</Show>
 				{/* ONE text renderable for the whole header, styled SPANS for
 				    the per-chunk colors. A per-cell <text> would give every
@@ -113,20 +111,14 @@ export function SettledToolRow(props: {
 			    settings rows highlight the WHOLE row, not just the text). */}
 			<For each={props.segments.body}>
 				{line => (
-					<box
-						flexDirection="row"
-						width={props.width}
-						backgroundColor={props.hovered ? hoverBg : undefined}
-					>
+					<box flexDirection="row" width={props.width}>
 						{/* Briefed rows: shift the body to the brief's text
 						    column too. The body chunks carry their OWN
 						    2-space container lead (`  └`), so the indent box
 						    is 1 wide — the `└` lands at col 3, aligned with
 						    the header text AND the brief text (non-briefed:
 						    `└` at col 2 = the header text col 2). */}
-						<Show when={aligned() || props.batchBriefed}>
-							<box width={1} />
-						</Show>
+						<box width={TRANSCRIPT_CONTENT_COLUMN - 2} />
 						<text>
 							<For each={line}>
 								{c => (

@@ -1,5 +1,9 @@
 import {expect, test} from 'bun:test';
-import {oneSentencePreToolBrief, toolCallBrief} from './pre-tool-brief';
+import {
+	oneSentencePreToolBrief,
+	splitPreToolText,
+	toolCallBrief,
+} from './pre-tool-brief';
 
 test('pre-tool brief keeps only first sentence', () => {
 	expect(
@@ -13,6 +17,16 @@ test('pre-tool brief flattens one sentence to one line', () => {
 	expect(
 		oneSentencePreToolBrief('Inspect task\nrendering before patching'),
 	).toBe('Inspect task rendering before patching');
+});
+test('pre-tool text preserves prose after brief sentence', () => {
+	expect(
+		splitPreToolText(
+			'Inspect files first. I found the likely bug and will fix it.',
+		),
+	).toEqual({
+		brief: 'Inspect files first.',
+		remainder: 'I found the likely bug and will fix it.',
+	});
 });
 
 test('later tool rounds inherit the brief batch indentation marker', () => {

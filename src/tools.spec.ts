@@ -25,11 +25,41 @@ import {
 	resetSessionPermissionGrants,
 	searchDeferredTools,
 } from './tools';
+import {loadPersistentMemory} from './memory';
 import {
 	beginFileUndoExchange,
 	resetFileUndoStack,
 	undoFileExchange,
 } from './file-undo';
+
+test('remember tool persists explicit session guidance', async () => {
+	const root = mkdtempSync(join(tmpdir(), 'bobonyo-remember-'));
+	const originalConfig = process.env.BOBONYO_CONFIG_DIR;
+	const originalData = process.env.BOBONYO_DATA_DIR;
+	try {
+		process.env.BOBONYO_CONFIG_DIR = join(root, 'config');
+		process.env.BOBONYO_DATA_DIR = join(root, 'data');
+		const result = await executeTool(
+			{
+				id: 'remember-1',
+				name: 'remember',
+				arguments: {text: 'Keep responses concise.', scope: 'session'},
+				rawArguments: '',
+			},
+			{cwd: root, sessionId: 'session-1'},
+		);
+		expect(result.content).toMatch(/Remembered session guidance/);
+		expect(loadPersistentMemory(root, 'session-1').session).toContain(
+			'Keep responses concise.',
+		);
+	} finally {
+		if (originalConfig === undefined) delete process.env.BOBONYO_CONFIG_DIR;
+		else process.env.BOBONYO_CONFIG_DIR = originalConfig;
+		if (originalData === undefined) delete process.env.BOBONYO_DATA_DIR;
+		else process.env.BOBONYO_DATA_DIR = originalData;
+		rmSync(root, {recursive: true, force: true});
+	}
+});
 
 /**
  * Delete tool: the harness hook point for file deletions (approval in
@@ -484,6 +514,7 @@ describe('write_tasks explicit lifecycle', () => {
 				id: 'tasks-1',
 				name: 'write_tasks',
 				arguments: {
+					title: 'Implement requested changes',
 					tasks: [
 						{title: 'Inspect code', status: 'completed'},
 						{

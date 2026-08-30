@@ -18,7 +18,7 @@ describe('repeated tool guard', () => {
 					{
 						name: 'write_tasks',
 						arguments: {
-							tasks: [{content: 'Continue work', status: 'in_progress'}],
+							tasks: [{title: 'Continue work', status: 'in_progress'}],
 						},
 					},
 				],

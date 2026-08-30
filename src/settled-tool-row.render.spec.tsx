@@ -130,7 +130,7 @@ describe('pre-tool brief alignment (generic tool rows)', () => {
 		settled.renderer.destroy();
 	});
 
-	test('non-briefed rows keep the glyph cell + content at col 2 (untouched)', async () => {
+	test('non-briefed rows keep two gap columns after the glyph', async () => {
 		const seg = liveRowSegments(
 			'WebSearch(query)\n  └   tail',
 			'toolrow',
@@ -146,9 +146,9 @@ describe('pre-tool brief alignment (generic tool rows)', () => {
 		await new Promise(resolve => setTimeout(resolve, 50));
 		const liveRows = painted(live.captureSpans());
 		// Blink frame may show ✦ or a space at col 0; either way the header
-		// content starts at col 2 (glyph cell + its space).
+		// content starts at col 3: glyph plus two explicit gap columns.
 		const header = liveRows.find(r => r.includes('WebSearch'));
-		expect(header?.indexOf('WebSearch')).toBe(2);
+		expect(header?.indexOf('WebSearch')).toBe(3);
 		live.renderer.destroy();
 	});
 });

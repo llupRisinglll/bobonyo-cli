@@ -1,11 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import {createTextAttributes, RGBA} from '@opentui/core';
+import {createTextAttributes} from '@opentui/core';
 import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
 import {glyphBlinkOn, spinnerFrame} from '../state';
 import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
+import {
+	TRANSCRIPT_GLYPH_GAP,
+	TRANSCRIPT_CONTENT_COLUMN,
+} from '../transcript-layout';
 
 /**
  * BASH tool row — the entire execution renders as ONE bordered entry:
@@ -32,6 +36,8 @@ export function BashToolRow(props: {
 	brief?: string;
 	/** Batch marker: this box is part of a briefed batch (share the glyph). */
 	batchBriefed?: boolean;
+	/** Full transcript width used for whole-entry hover painting. */
+	width?: number;
 	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
 	md: MarkdownBriefRenderer;
 	onRef?: (element: unknown) => void;
@@ -42,90 +48,93 @@ export function BashToolRow(props: {
 		props.status,
 		themeColors(colors()),
 	);
-	const tint = RGBA.fromHex(colors().secondary);
-	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	return (
-		<box flexDirection="column" ref={props.onRef}>
+		<box flexDirection="column" ref={props.onRef} width={props.width ?? '100%'}>
 			<box height={1} />
-			{/* Pre-tool brief, integrated with the tool entry: `✦ I will
+			<box flexDirection="column" width="100%">
+				{/* Pre-tool brief, integrated with the tool entry: `✦ I will
 			    check X` above the box — part of the SAME block, so hover/
 			    click cover it too. */}
-			<Show when={props.brief && props.brief.trim()}>
-				<MarkdownBrief
-					text={props.brief ?? ''}
-					glyph={glyph}
-					hovered={props.hovered}
-					md={props.md}
-				/>
-			</Show>
-			<box flexDirection="row">
-				{/* Glyph OUTSIDE the border (blinks live, status-colored done). */}
-				<Show when={!props.brief && !props.batchBriefed}>
-					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
-						{(props.status === 'running'
-							? glyphBlinkOn(spinnerFrame())
-								? props.glyph
-								: ' '
-							: props.glyph) + ' '}
-					</text>
+				<Show when={props.brief && props.brief.trim()}>
+					<MarkdownBrief
+						text={props.brief ?? ''}
+						glyph={glyph}
+						hovered={props.hovered}
+						md={props.md}
+					/>
 				</Show>
-				{/* With a brief, the box indents to the brief's text column
+				<box flexDirection="row" width="100%">
+					{/* Glyph OUTSIDE the border (blinks live, status-colored done). */}
+					<Show when={!props.brief && !props.batchBriefed}>
+						<text
+							fg={glyph}
+							attributes={props.glyph === '⚙' ? dim() : undefined}
+						>
+							{props.status === 'running'
+								? glyphBlinkOn(spinnerFrame())
+									? props.glyph
+									: ' '
+								: props.glyph}
+						</text>
+						<box width={TRANSCRIPT_GLYPH_GAP} />
+					</Show>
+					{/* With a brief, the box indents to the brief's text column
 				    (`✦` + the 2-col gap = 3 cols) so the border lines up
 				    under the brief text. */}
-				<Show when={props.brief || props.batchBriefed}>
-					<box width={3} />
-				</Show>
-				{/* The bordered box: border + title drawn by OpenTUI, so all
+					<Show when={props.brief || props.batchBriefed}>
+						<box width={TRANSCRIPT_CONTENT_COLUMN} />
+					</Show>
+					{/* The bordered box: border + title drawn by OpenTUI, so all
 				    wrapped content stays inside by construction. */}
-				<box
-					flexGrow={1}
-					flexShrink={1}
-					minWidth={0}
-					border
-					borderStyle="rounded"
-					borderColor={colors().secondary}
-					backgroundColor={props.hovered ? hoverBg : undefined}
-				>
-					{/* Command line: the header chunks carry `$ ` + the
+					<box
+						flexGrow={1}
+						flexShrink={1}
+						minWidth={0}
+						border
+						borderStyle="rounded"
+						borderColor={colors().secondary}
+					>
+						{/* Command line: the header chunks carry `$ ` + the
 					    bash-highlighted command. */}
-					<box flexDirection="row">
-						<text>
-							<For each={props.header}>
-								{c => (
-									<span
-										style={{
-											fg: c.fg as never,
-											attributes: c.attributes,
-										}}
-									>
-										{c.text}
-									</span>
-								)}
-							</For>
-						</text>
-					</box>
-					{/* Output lines: secondary, never competes with the
+						<box flexDirection="row">
+							<text>
+								<For each={props.header}>
+									{c => (
+										<span
+											style={{
+												fg: c.fg as never,
+												attributes: c.attributes,
+											}}
+										>
+											{c.text}
+										</span>
+									)}
+								</For>
+							</text>
+						</box>
+						{/* Output lines: secondary, never competes with the
 					    command. */}
-					<For each={props.body}>
-						{line => (
-							<box flexDirection="row">
-								<text>
-									<For each={line}>
-										{c => (
-											<span
-												style={{
-													fg: c.fg as never,
-													attributes: c.attributes,
-												}}
-											>
-												{c.text}
-											</span>
-										)}
-									</For>
-								</text>
-							</box>
-						)}
-					</For>
+						<For each={props.body}>
+							{line => (
+								<box flexDirection="row">
+									<text>
+										<For each={line}>
+											{c => (
+												<span
+													style={{
+														fg: c.fg as never,
+														attributes: c.attributes,
+													}}
+												>
+													{c.text}
+												</span>
+											)}
+										</For>
+									</text>
+								</box>
+							)}
+						</For>
+					</box>
 				</box>
 			</box>
 		</box>

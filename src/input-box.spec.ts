@@ -33,6 +33,12 @@ describe('wrapText', () => {
 	test('splits explicit newlines into separate lines', () => {
 		expect(wrapText('line1\nline2', 20)).toEqual(['line1', 'line2']);
 	});
+	test('preserves a whitespace-only line after an explicit newline', () => {
+		expect(wrapTextDetailed('hi\n ', 20)).toEqual([
+			{text: 'hi', start: 0},
+			{text: ' ', start: 3},
+		]);
+	});
 
 	test('hard-splits a single over-long word', () => {
 		const lines = wrapText('abcdefghij', 4);
@@ -351,6 +357,9 @@ describe('cursorPosition', () => {
 	test('puts a cursor after a newline on the new row', () => {
 		expect(cursorPosition('a\nb', 2, 20)).toEqual({line: 1, column: 0});
 		expect(cursorPosition('a\nb', 3, 20)).toEqual({line: 1, column: 1});
+	});
+	test('keeps the cursor after a leading space on the new row', () => {
+		expect(cursorPosition('hi\n ', 4, 20)).toEqual({line: 1, column: 1});
 	});
 
 	test('clamps out-of-range cursors', () => {

@@ -611,13 +611,13 @@ test('apply_patch renders add, update, and delete rows as one DiffView', async (
 		// Test Markdown stub paints only brief glyph. Native action starts at
 		// brief text column; no duplicate aggregate header or second glyph.
 		expect(rows[0]).toBe('✦');
-		expect(rows).toContain('  └ Create new.txt (+1 -0)');
-		expect(rows).toContain('    1   new');
-		expect(rows).toContain('  └ Edit old.txt (+1 -1)');
-		expect(rows).toContain('    2 - old');
-		expect(rows).toContain('    2 + changed');
-		expect(rows).toContain('  └ Delete gone.txt (+0 -1)');
-		expect(rows).toContain('    1 - gone');
+		expect(rows).toContain('   └ Create new.txt (+1 -0)');
+		expect(rows).toContain('       1   new');
+		expect(rows).toContain('     └ Edit old.txt (+1 -1)');
+		expect(rows).toContain('       2 - old');
+		expect(rows).toContain('       2 + changed');
+		expect(rows).toContain('     └ Delete gone.txt (+0 -1)');
+		expect(rows).toContain('       1 - gone');
 	} finally {
 		setup.renderer.destroy();
 	}

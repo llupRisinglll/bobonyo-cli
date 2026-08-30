@@ -36,6 +36,48 @@ function allRows(frame: CapturedFrame): string[] {
 }
 
 describe('bash box renders the command ONCE (echoed-command dedup)', () => {
+	test('hover highlight starts at column zero and spans full row', async () => {
+		const raw = formatToolEntry(
+			{
+				name: 'execute_bash',
+				detail: 'echo hover',
+				output: 'EXIT_CODE: 0\nhover',
+				args: {command: 'echo hover'},
+			},
+			false,
+			'done',
+			true,
+			true,
+			84,
+		);
+		const seg = liveRowSegments(raw, 'bashrow', 'done', colors(), 84);
+		const setup = await testRender(
+			() => (
+				<BashToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={true}
+					width={84}
+					md={testMd}
+				/>
+			),
+			{width: 84, height: 20},
+		);
+		await setup.flush();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const frame = setup.captureSpans();
+		const painted = frame.lines.filter(line =>
+			line.spans.some(span => span.bg !== undefined),
+		);
+		expect(painted.length).toBeGreaterThan(0);
+		for (const line of painted) {
+			expect(line.spans[0]?.bg).toBeDefined();
+		}
+		setup.renderer.destroy();
+	});
+
 	test('a settled row whose output echoes the command paints it once', async () => {
 		const cmd = 'cd /tmp/bobonyo-link && echo hi';
 		// Exactly the persisted shape from the user's session (doubled).
@@ -60,6 +102,7 @@ describe('bash box renders the command ONCE (echoed-command dedup)', () => {
 					glyph="✦"
 					hovered={false}
 					md={testMd}
+					width={84}
 				/>
 			),
 			{width: 100, height: 20},
@@ -107,6 +150,7 @@ describe('bash box renders the command ONCE (echoed-command dedup)', () => {
 					glyph="✦"
 					hovered={false}
 					md={testMd}
+					width={84}
 				/>
 			),
 			{width: 100, height: 20},
@@ -146,6 +190,7 @@ describe('bash box renders the command ONCE (echoed-command dedup)', () => {
 					glyph="✦"
 					hovered={false}
 					md={testMd}
+					width={84}
 				/>
 			),
 			{width: 100, height: 20},

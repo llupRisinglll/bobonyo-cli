@@ -62,6 +62,9 @@ export const BASE_COMMAND_NAMES = [
 	'context-max',
 	'setup-config',
 	'setup-mcp',
+	'remember',
+	'forget',
+	'preferences',
 ] as const;
 
 /** `/mock:<name>` preview scenarios, only registered in preview mode. */
@@ -171,6 +174,9 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'context-max': 'Context cap',
 	'setup-config': 'Config dir',
 	'setup-mcp': 'MCP wizard',
+	remember: 'Save durable guidance',
+	forget: 'Forget memory by id or clear a scope',
+	preferences: 'Show durable memory',
 };
 
 /**
@@ -297,6 +303,9 @@ export interface CommandContext {
 	contextMax: () => void;
 	setupConfigInfo: () => void;
 	setupMcpInfo: () => void;
+	remember: (args: string) => void;
+	forget: (args: string) => void;
+	preferences: () => void;
 }
 
 let customCommandsCache: ReturnType<typeof loadCustomCommands> | null = null;
@@ -532,6 +541,15 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		case 'setup-mcp':
 			ctx.setupMcpInfo();
 			return true;
+		case 'remember':
+			ctx.remember(args);
+			return true;
+		case 'forget':
+			ctx.forget(args);
+			return true;
+		case 'preferences':
+			ctx.preferences();
+			return true;
 		default:
 			// One slash namespace: built-ins, then custom commands, then skills.
 			// `/skill:name` remains as a compatibility alias, but suggestions and
@@ -580,6 +598,9 @@ export const HELP_TEXT = [
 	'/prs       , open captured PRs (alias for /tool:open-prs)',
 	'/mock:<name>, preview scenarios (bash md thoughtrun tools mixed confirm agents …)',
 	'/exit      , quit (Esc / Ctrl+C also quit)',
+	'/remember [user|project|session] <text>, save durable guidance',
+	'/forget <memory-id|user|project|session>, forget memory',
+	'/preferences, show durable memory',
 	'',
 	'!<command> , run a shell command directly (Executed Bash)',
 ].join('\n');

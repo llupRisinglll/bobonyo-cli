@@ -22,6 +22,7 @@ import {
 	parseOpenCodeLimitError,
 } from './opencode-limit';
 import {resolveSystemPrompt, type SystemPromptStyle} from './system-prompt';
+import {renderPersistentMemory} from './memory';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -83,7 +84,11 @@ const SYSTEM_PROMPT =
 	'When you run `git commit`, use exactly ONE `-m` with a single-line ' +
 	'subject and NEVER add AI-attribution lines (Co-authored-by:, Generated ' +
 	'by:, or any credit to an LLM). When you run `gh pr create`, never ' +
-	'credit an LLM in the title or body.';
+	'credit an LLM in the title or body. Use `remember` when the user ' +
+	'explicitly asks to retain a preference or instruction; use `session` for ' +
+	'this conversation, `project` for this repository, and `user` across ' +
+	'projects. Use `forget` only when asked. Do not store temporary task ' +
+	'details as durable memory.';
 const NANO_SYSTEM_PROMPT =
 	'You are BoboNyo, a terminal coding agent. Be concise. ' +
 	'Be blunt and a little snobbish, never sycophantic: honesty matters more than pleasing the user. ' +
@@ -94,7 +99,10 @@ const NANO_SYSTEM_PROMPT =
 	'message) saying what you are about to do and why; never fire a tool ' +
 	'with no text unless it continues the goal you already explained. ' +
 	'Keep `git commit` messages to ONE single-line `-m` with no AI ' +
-	'attribution, and never credit an LLM in `gh pr create`.';
+	'attribution, and never credit an LLM in `gh pr create`. Use `remember` ' +
+	'for explicit durable preferences and instructions; use `session`, ' +
+	'`project`, or `user` scope appropriately. Do not store temporary task ' +
+	'details.';
 
 const SUBAGENT_GUIDANCE =
 	'## Delegating work\n' +
@@ -159,12 +167,13 @@ function buildVolatileSystemInfo(): string {
 					.join('\n') +
 				`\nWhen the user asks to run one of these commands now or later, invoke the command tool at the requested stage. Read its returned guidance, reconcile it with the user's request and repository state, then perform only the adapted applicable steps.`
 			: '';
+	const memory = renderPersistentMemory(cwd, sessionId());
 	return (
 		`## SYSTEM INFORMATION\n` +
 		`Current Working Directory: ${cwd}\n` +
 		'Bash commands start in this directory. Do not prepend `cd` unless ' +
 		'you intentionally need a different directory.\n' +
-		`${agents}${skillsBlock}${commandsBlock}`
+		`${agents}${skillsBlock}${commandsBlock}${memory ? `\n\n${memory}` : ''}`
 	);
 }
 
@@ -187,12 +196,22 @@ export function currentDateFragment(date = new Date()): string {
  * coding-practices/constraints sections). The profile must not change
  * mid-session, so the cache head stays stable.
  */
-export function buildSystemPrompt(toolProfile?: string): string {
-	const {stable, volatile} = buildSystemParts(toolProfile);
+export interface SystemPromptOptions {
+	disableCaveman?: boolean;
+}
+
+export function buildSystemPrompt(
+	toolProfile?: string,
+	options?: SystemPromptOptions,
+): string {
+	const {stable, volatile} = buildSystemParts(toolProfile, options);
 	return volatile ? `${stable}\n\n${volatile}` : stable;
 }
 
-export function buildSystemParts(toolProfile?: string): {
+export function buildSystemParts(
+	toolProfile?: string,
+	options?: SystemPromptOptions,
+): {
 	stable: string;
 	volatile: string;
 } {
@@ -207,7 +226,8 @@ export function buildSystemParts(toolProfile?: string): {
 	// instructions are part of the STABLE block so the cache head stays
 	// byte-identical per session; toggling the setting is a legitimate head
 	// change (same class as switching tool profile), never a per-turn one.
-	const caveman = cavemanMode() ? builtinCavemanSkill() : null;
+	const caveman =
+		!options?.disableCaveman && cavemanMode() ? builtinCavemanSkill() : null;
 	const stable = caveman
 		? `${base}\n\n## CAVEMAN MODE\n${caveman.body.trim()}`
 		: base;
@@ -385,13 +405,14 @@ export function buildOpenAIRequestBody(
 	},
 	toolProfile?: string,
 	sessionIdValue = sessionId(),
+	options?: SystemPromptOptions,
 ): Record<string, unknown> {
 	const toolBlocks = openAIToolBlocks(tools);
 	const body: Record<string, unknown> = {
 		model: endpoint.model,
 		stream: true,
 		messages: [
-			{role: 'system', content: buildSystemPrompt(toolProfile)},
+			{role: 'system', content: buildSystemPrompt(toolProfile, options)},
 			...messages.map(({role, content, tool_call_id, tool_calls}) => ({
 				role,
 				content,
@@ -480,6 +501,7 @@ export async function streamChat(
 	onFallback?: (endpoint: EndpointOverride) => void,
 	/** Optional isolated-subagent endpoint; string keeps active provider. */
 	subagentOverride?: string | EndpointOverride,
+	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const active = activeEndpoint();
 	const isolated =
@@ -504,6 +526,7 @@ export async function streamChat(
 				candidate,
 				streamGuard,
 				toolProfile,
+				options,
 			);
 			if (index > 0 && onFallback && candidate) {
 				onFallback(candidate);
@@ -528,6 +551,7 @@ async function streamOnceWithRetries(
 	endpointOverride?: EndpointOverride,
 	streamGuard?: StreamGuard,
 	toolProfile?: string,
+	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const attempts = {rate: 0, stall: 0};
 	for (;;) {
@@ -540,6 +564,7 @@ async function streamOnceWithRetries(
 				endpointOverride,
 				streamGuard,
 				toolProfile,
+				options,
 			);
 			setRetryingAttempt(0);
 			return result;
@@ -586,6 +611,7 @@ async function streamOnce(
 	endpointOverride?: EndpointOverride,
 	streamGuard?: StreamGuard,
 	toolProfile?: string,
+	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
 	// Auto-recovery: legacy/undo/resume conversations can carry tool
@@ -602,6 +628,7 @@ async function streamOnce(
 			endpoint,
 			toolProfile,
 			streamGuard,
+			options,
 		);
 	}
 	if (endpoint.sdkProvider === 'responses') {
@@ -613,9 +640,17 @@ async function streamOnce(
 			endpoint,
 			toolProfile,
 			streamGuard,
+			options,
 		);
 	}
-	const body = buildOpenAIRequestBody(messages, tools, endpoint, toolProfile);
+	const body = buildOpenAIRequestBody(
+		messages,
+		tools,
+		endpoint,
+		toolProfile,
+		sessionId(),
+		options,
+	);
 	const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
 		method: 'POST',
 		headers: {
@@ -991,11 +1026,13 @@ async function anthropicStreamOnce(
 	endpointOverride?: EndpointOverride,
 	toolProfile?: string,
 	streamGuard?: StreamGuard,
+	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
 	const {system, anthropicMessages} = buildAnthropicMessages(
 		messages,
 		toolProfile,
+		options,
 	);
 	const toolBlocks = anthropicToolBlocks(tools);
 	const response = await fetch(`${endpoint.baseUrl}/v1/messages`, {
@@ -1286,9 +1323,10 @@ async function responsesStreamOnce(
 	endpointOverride?: EndpointOverride,
 	toolProfile?: string,
 	streamGuard?: StreamGuard,
+	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
-	const {stable, volatile} = buildSystemParts(toolProfile);
+	const {stable, volatile} = buildSystemParts(toolProfile, options);
 	const instructions = volatile ? `${stable}\n\n${volatile}` : stable;
 	const {bearer, accountId} = resolveResponsesAuth(endpoint);
 	const body: Record<string, unknown> = {
@@ -1554,13 +1592,14 @@ async function responsesStreamOnce(
 export function buildAnthropicMessages(
 	messages: ChatMessageLike[],
 	toolProfile?: string,
+	options?: SystemPromptOptions,
 ): {
 	system: unknown[];
 	anthropicMessages: unknown[];
 } {
 	// B1/B24: breakpoint on the STABLE block only; the volatile tail (cwd,
 	// date, AGENTS.md) is excluded so per-session changes never invalidate it.
-	const {stable, volatile} = buildSystemParts(toolProfile);
+	const {stable, volatile} = buildSystemParts(toolProfile, options);
 	const system = [
 		{
 			type: 'text',

@@ -43,6 +43,7 @@ import {
 	tasks,
 } from './state';
 import {snapshotFileBeforeMutation, snapshotMutationTargets} from './file-undo';
+import {appendMemory, clearMemory, forgetMemory} from './memory';
 import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
 import {runBashPostHooks, runBashPreHooks, runHooks} from './hooks';
 import {loadSettings} from './settings';
@@ -86,6 +87,8 @@ export interface ToolResult {
 }
 
 export interface ToolContext {
+	/** Current session id for session-scoped persistence. */
+	sessionId?: string;
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
 	/** Parent tool-call id, used by fan-out tools for child rows. */
@@ -367,6 +370,8 @@ const NANO_TOOLS = new Set([
 	'execute_bash',
 	'web_search',
 	'command',
+	'remember',
+	'forget',
 ]);
 
 const MINIMAL_TOOLS = new Set([
@@ -378,6 +383,8 @@ const MINIMAL_TOOLS = new Set([
 	'web_search',
 	'agent',
 	'command',
+	'remember',
+	'forget',
 ]);
 
 export function resolveProfile(
@@ -702,7 +709,11 @@ export async function executeTool(
 			toolCallId: call.id,
 		});
 		if (canonicalName === 'write_tasks') {
-			displayArgs = {tasks: tasks().map(task => ({...task}))};
+			displayArgs = {
+				title:
+					typeof effectiveArgs.title === 'string' ? effectiveArgs.title : '',
+				tasks: tasks().map(task => ({...task})),
+			};
 		}
 		if (canonicalName !== 'execute_bash') {
 			await runHooks({
@@ -878,6 +889,89 @@ registerTool('lsp', {
 			line: Number(args.line) || undefined,
 			character: Number(args.character) || undefined,
 		});
+	},
+});
+
+registerTool('remember', {
+	description:
+		'Save durable user, project, or current-session guidance. Use only for explicit preferences, corrections, or instructions that should survive later turns.',
+	parameters: {
+		type: 'object',
+		properties: {
+			text: {type: 'string', description: 'Guidance to remember.'},
+			category: {
+				type: 'string',
+				description:
+					'Optional preference category. Same-category active records are superseded.',
+			},
+			scope: {
+				type: 'string',
+				enum: ['user', 'project', 'session'],
+				description: 'Persistence scope. Default: session.',
+			},
+		},
+		required: ['text'],
+	},
+	readOnly: false,
+	execute: (args, ctx) => {
+		const text = typeof args.text === 'string' ? args.text.trim() : '';
+		if (!text) return 'Error: remember requires non-empty text.';
+		const rawScope = typeof args.scope === 'string' ? args.scope : 'session';
+		if (!['user', 'project', 'session'].includes(rawScope)) {
+			return 'Error: remember scope must be user, project, or session.';
+		}
+		const path = appendMemory(
+			text,
+			rawScope as 'user' | 'project' | 'session',
+			ctx.cwd ?? process.cwd(),
+			ctx.sessionId,
+			{
+				category: typeof args.category === 'string' ? args.category : undefined,
+				source: 'model',
+			},
+		);
+		ctx.onStateChange?.();
+		return `Remembered ${rawScope} guidance in ${path}`;
+	},
+});
+
+registerTool('forget', {
+	description:
+		'Forget one durable memory record by id, or clear an entire user, project, or current session scope. Use only when explicitly asked.',
+	parameters: {
+		type: 'object',
+		properties: {
+			id: {
+				type: 'string',
+				description: 'Exact memory id to mark forgotten.',
+			},
+			scope: {
+				type: 'string',
+				enum: ['user', 'project', 'session'],
+			},
+		},
+		required: [],
+	},
+	readOnly: false,
+	execute: (args, ctx) => {
+		const id = typeof args.id === 'string' ? args.id.trim() : '';
+		const scope = typeof args.scope === 'string' ? args.scope : '';
+		if (!id && !['user', 'project', 'session'].includes(scope)) {
+			return 'Error: forget requires an exact memory id or a user, project, or session scope.';
+		}
+		if (id && scope) return 'Error: forget accepts id or scope, not both.';
+		if (id) {
+			const count = forgetMemory(id, ctx.cwd ?? process.cwd(), ctx.sessionId);
+			ctx.onStateChange?.();
+			return count ? `Forgot memory ${id}.` : `Memory not found: ${id}`;
+		}
+		const path = clearMemory(
+			scope as 'user' | 'project' | 'session',
+			ctx.cwd ?? process.cwd(),
+			ctx.sessionId,
+		);
+		ctx.onStateChange?.();
+		return `Cleared ${scope} memory: ${path}`;
 	},
 });
 
@@ -2213,7 +2307,7 @@ export function normalizeTaskList(value: unknown): Array<{
 			}
 			if (!item || typeof item !== 'object') return null;
 			const row = item as Record<string, unknown>;
-			const title = String(row.title ?? row.content ?? '').trim();
+			const title = String(row.title ?? '').trim();
 			if (!title) return null;
 			const activeForm =
 				typeof row.activeForm === 'string' && row.activeForm.trim()
@@ -2268,10 +2362,14 @@ registerTool('write_tasks', {
 		'can strike them through. Include only work the agent must perform. Never ' +
 		'add user-owned actions such as waiting for user input, approval, manual ' +
 		'verification, or confirmation. Mention those outside the checklist. Use ' +
-		'title/content as imperative text and activeForm as present-continuous text.',
+		'title as a concise imperative task-list title, task titles as imperative text, and activeForm as present-continuous text. Both titles must be supplied by the model; never derive either from pre-tool narration.',
 	parameters: {
 		type: 'object',
 		properties: {
+			title: {
+				type: 'string',
+				description: 'Concise title for this task list, shown in the header.',
+			},
 			tasks: {
 				type: 'array',
 				items: {
@@ -2279,7 +2377,6 @@ registerTool('write_tasks', {
 					properties: {
 						id: {type: 'string'},
 						title: {type: 'string'},
-						content: {type: 'string'},
 						activeForm: {type: 'string'},
 						status: {
 							type: 'string',
@@ -2288,14 +2385,19 @@ registerTool('write_tasks', {
 						dependsOn: {type: 'array', items: {type: 'string'}},
 						owner: {type: 'string'},
 					},
-					required: ['status'],
+					required: ['title', 'status'],
 				},
 			},
 		},
-		required: ['tasks'],
+		required: ['title', 'tasks'],
 	},
 	execute(args) {
 		const next = normalizeTaskList(args.tasks);
+		const title = typeof args.title === 'string' ? args.title.trim() : '';
+		if (!title) return 'Error: write_tasks requires a non-empty title.';
+		if (Array.isArray(args.tasks) && next.length !== args.tasks.length) {
+			return 'Error: every task must provide a non-empty title and valid status.';
+		}
 		setTasks(next);
 		if (next.length === 0) return 'Tasks updated: no tasks.';
 		const icons: Record<TaskStatus, string> = {
@@ -2312,7 +2414,7 @@ registerTool('write_tasks', {
 			task => task.status === 'pending' || task.status === 'in_progress',
 		).length;
 		return (
-			`Tasks updated (${unfinished} remaining):\n${lines.join('\n')}\n` +
+			`${title} updated (${unfinished} remaining):\n${lines.join('\n')}\n` +
 			(unfinished > 0
 				? 'Continue with the in-progress task and update this list immediately after each status change.'
 				: 'All tasks completed.')

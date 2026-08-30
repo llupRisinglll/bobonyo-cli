@@ -9,6 +9,10 @@ import {FileToolRow} from './file-tool-row';
 import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
 import {themeColors} from '../highlight';
 import {settledGlyphColor} from '../row-highlight';
+import {
+	TRANSCRIPT_GLYPH_GAP,
+	TRANSCRIPT_CONTENT_COLUMN,
+} from '../transcript-layout';
 
 /**
  * FOOLPROOF live tool-row renderer — the ONLY way running tool rows render.
@@ -39,6 +43,7 @@ export function LiveToolRows(props: {
 	>;
 	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
 	md: MarkdownBriefRenderer;
+	width?: number;
 }) {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
@@ -59,6 +64,7 @@ export function LiveToolRows(props: {
 							brief={row.brief}
 							batchBriefed={row.batchBriefed}
 							md={props.md}
+							width={props.width}
 						/>
 					</Show>
 					<Show when={row.lang === 'filerow' || row.lang === 'filediff'}>
@@ -111,8 +117,9 @@ export function LiveToolRows(props: {
 								}
 							>
 								<text fg={colors().secondary} attributes={dim()}>
-									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
+									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}
 								</text>
+								<box width={TRANSCRIPT_GLYPH_GAP} />
 							</Show>
 							{/* Briefed/batch rows indent to the brief's text
 							    column (col 3: `✦` + 2-col gap) — width 3, the
@@ -122,7 +129,7 @@ export function LiveToolRows(props: {
 									(row.brief && row.lang !== 'agentrow') || row.batchBriefed
 								}
 							>
-								<box width={3} />
+								<box width={TRANSCRIPT_CONTENT_COLUMN} />
 							</Show>
 							{/* ONE text renderable per header/body line,
 							    styled SPANS for the per-chunk colors. The
@@ -151,16 +158,10 @@ export function LiveToolRows(props: {
 						<For each={row.body}>
 							{line => (
 								<box flexDirection="row">
-									{/* Body shifts with the brief too: the
-									    chunks carry their own 2-space lead, so
-									    the box is 1 wide (settled parity). */}
-									<Show
-										when={
-											(row.brief && row.lang !== 'agentrow') || row.batchBriefed
-										}
-									>
-										<box width={1} />
-									</Show>
+									{/* Body chunks carry a two-column branch lead;
+									    one fixed spacer keeps its visible content at
+									    the same column as every row header. */}
+									<box width={TRANSCRIPT_CONTENT_COLUMN - 2} />
 									<text>
 										<Show
 											when={

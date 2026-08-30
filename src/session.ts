@@ -24,6 +24,7 @@ import {displayToolName, toolArgsSummary} from './tools';
 import type {ChatMessageLike, MockToolCall} from './client';
 import type {ActiveAgentRun, ChatMessage, SessionTask} from './state';
 import type {LoopJob, SessionGoal} from './goal-loop';
+import {copySessionMemory} from './memory';
 
 export interface SessionMeta {
 	id: string;
@@ -262,6 +263,7 @@ export function forkSession(data: SessionData): SessionData {
 		tasks: structuredClone(data.tasks ?? []),
 	};
 	saveSession(forked);
+	copySessionMemory(data.id, forked.id);
 	return forked;
 }
 export function saveSession(data: SessionData): void {

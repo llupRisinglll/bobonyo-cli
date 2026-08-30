@@ -149,6 +149,22 @@ export function hitTestBlock(
 	);
 }
 
+/** Pick deepest matching entry when native bounds overlap during layout. */
+export function pickHoveredEntry<
+	T extends {ref: {screenY: number; height?: number} | null; key: string},
+>(entries: T[], y: number): T | null {
+	let picked: T | null = null;
+	for (const entry of entries) {
+		if (
+			hitTestBlock({...entry, start: 0, rows: Number.MAX_SAFE_INTEGER}, y) ===
+			null
+		)
+			continue;
+		if (!picked || entry.ref!.screenY >= picked.ref!.screenY) picked = entry;
+	}
+	return picked;
+}
+
 type RenderToken = {type: string; text?: string; lang?: string};
 
 /**
@@ -230,6 +246,13 @@ export function History(props: HistoryProps) {
 	// view clears stale session/compaction entries instead of retaining full
 	// tool output and reasoning in a process-global map forever.
 	const compactDetails = new Map<string, string>();
+	const hoverTint = RGBA.fromHex(colors().secondary);
+	const hoverBackground = RGBA.fromValues(
+		hoverTint.r,
+		hoverTint.g,
+		hoverTint.b,
+		0.24,
+	);
 	const dim = () => createTextAttributes({dim: true});
 	const replyWidth = () =>
 		props.width === undefined ? undefined : Math.max(1, props.width - 3);
@@ -507,6 +530,7 @@ export function History(props: HistoryProps) {
 		ref: {screenY: number; height?: number} | null;
 		start: number;
 		rows: number;
+		key: string;
 		/** The stable block this entry maps to (carry-over refs across memo
 		 *  recomputes — see the memo below). */
 		block?: SettledBlock;
@@ -539,6 +563,7 @@ export function History(props: HistoryProps) {
 			kind: 'md' | 'reply';
 			brief?: string;
 		}> = [];
+		let anonymousBlock = 0;
 		const pushBlock = (
 			text: string,
 			key?: string,
@@ -556,7 +581,7 @@ export function History(props: HistoryProps) {
 					(_match, fenceChar, kind, status) =>
 						`${fenceChar}${kind}${status}:w${fillWidth}`,
 				),
-				key,
+				key: key ?? `entry-${anonymousBlock++}`,
 				kind,
 				brief,
 			});
@@ -820,6 +845,10 @@ export function History(props: HistoryProps) {
 			blockRefs.push({
 				ref: prevRefsByBlock.get(stableBlocks[groupIndex]!) ?? null,
 				start,
+				key:
+					group.kind === 'tool'
+						? (group.part.key ?? `entry-${groupIndex}`)
+						: (group.parts[0]?.key ?? `entry-${groupIndex}`),
 				// Replies render a leading blank row (breakline before the
 				// response) and tool blocks too (breakline before the block),
 				// so those blocks are one row taller.
@@ -957,7 +986,6 @@ export function History(props: HistoryProps) {
 						...message.tool,
 						output,
 						briefed: Boolean(message.brief && message.brief.trim()),
-						briefTitle: message.brief,
 					},
 					false,
 					'running',
@@ -968,8 +996,7 @@ export function History(props: HistoryProps) {
 				rows.push({
 					toolId: message.toolId,
 					lang: rowLanguage(message.tool.name),
-					brief:
-						message.tool.name === 'write_tasks' ? undefined : message.brief,
+					brief: message.brief,
 					batchBriefed: message.brief === ' ',
 					agentAggregate: message.tool.name === 'review_changes',
 					...liveRowSegments(
@@ -1049,6 +1076,14 @@ export function History(props: HistoryProps) {
 			}
 		}
 		return -1;
+	};
+	const entryForEvent = (
+		event: MouseEvent,
+	): {key: string; row: number} | null => {
+		const entry = pickHoveredEntry(blockRefs, event.y);
+		if (!entry) return null;
+		const row = hitTestBlock(entry, event.y);
+		return row === null ? null : {key: entry.key, row};
 	};
 
 	/**
@@ -1149,20 +1184,14 @@ export function History(props: HistoryProps) {
 			cancelPendingClick();
 		}
 		if (anyModalOpen()) return;
-		const row = rowForEvent(event);
+		const entry = entryForEvent(event);
+		const row = entry?.row ?? rowForEvent(event);
 		if (row < 0) return;
 		if (row !== hoverRow()) setHoverRow(row);
-		// The CONTAINER under the cursor (drift-tolerant) drives the
-		// persistent background highlight.
-		const block =
-			[row - 1, row, row + 1]
-				.map(r =>
-					blockRanges.find(
-						candidate => r >= candidate.start && r <= candidate.end,
-					),
-				)
-				.find(candidate => candidate && candidate.key !== 'live') ?? null;
-		const key = block?.key ?? null;
+		// Every settled entry has its own ref and bounds. Do not derive hover
+		// from expandable markdown ranges: plain text blocks have no range,
+		// and grouped tool ranges make later calls resolve to the first call.
+		const key = entry?.key ?? null;
 		if (key !== hoveredBlockRef) {
 			hoveredBlockRef = key;
 			setHoveredBlock(key);
@@ -1233,7 +1262,8 @@ export function History(props: HistoryProps) {
 			<For each={settledBlocks()}>
 				{(block, index) => {
 					const setRef = (element: unknown): void => {
-						blockRefs[index()]!.ref = element as never;
+						const entry = blockRefs.find(item => item.block === block);
+						if (entry) entry.ref = element as never;
 					};
 					// TOOL/THOUGHT blocks render as PLAIN COMPONENTS: the
 					// hover highlight is a per-row background INSIDE the row
@@ -1249,17 +1279,27 @@ export function History(props: HistoryProps) {
 							isBashBlock(block)
 						) {
 							return (
-								<BashToolRow
-									onRef={setRef}
-									header={block.segments.header}
-									body={block.segments.body}
-									status={block.status}
-									glyph={block.glyph}
-									hovered={block.part.key === hoveredBlock()}
-									brief={block.brief}
-									batchBriefed={block.batchBriefed}
-									md={briefMarkdown}
-								/>
+								<box
+									ref={setRef}
+									width={historyFillWidth(terminalDimensions().width ?? 80)}
+									backgroundColor={
+										block.part.key === hoveredBlock()
+											? hoverBackground
+											: undefined
+									}
+								>
+									<BashToolRow
+										header={block.segments.header}
+										body={block.segments.body}
+										status={block.status}
+										glyph={block.glyph}
+										hovered={false}
+										brief={block.brief}
+										batchBriefed={block.batchBriefed}
+										width={historyFillWidth(terminalDimensions().width ?? 80)}
+										md={briefMarkdown}
+									/>
+								</box>
 							);
 						}
 						// File-write/edit rows (Write / Edit / diff previews):
@@ -1267,55 +1307,90 @@ export function History(props: HistoryProps) {
 						// never glue under the previous message.
 						if (block.status !== undefined && isFileRowBlock(block)) {
 							return (
-								<FileToolRow
-									onRef={setRef}
-									header={block.segments.header}
-									body={block.segments.body}
-									status={block.status}
-									glyph={block.glyph}
-									hovered={block.part.key === hoveredBlock()}
-									brief={block.brief}
-									batchBriefed={block.batchBriefed}
-									md={briefMarkdown}
-								/>
+								<box
+									ref={setRef}
+									width={historyFillWidth(terminalDimensions().width ?? 80)}
+									backgroundColor={
+										block.part.key === hoveredBlock()
+											? hoverBackground
+											: undefined
+									}
+								>
+									<FileToolRow
+										header={block.segments.header}
+										body={block.segments.body}
+										status={block.status}
+										glyph={block.glyph}
+										hovered={false}
+										brief={block.brief}
+										batchBriefed={block.batchBriefed}
+										md={briefMarkdown}
+									/>
+								</box>
 							);
 						}
 						return (
-							<SettledToolRow
-								onRef={setRef}
-								segments={block.segments}
-								status={block.status}
-								glyph={block.glyph}
-								hovered={block.part.key === hoveredBlock()}
-								brief={block.brief}
-								batchBriefed={block.batchBriefed}
-								briefUnindented={block.segments.header.some(chunk =>
-									chunk.text.includes('agent:'),
-								)}
-								md={briefMarkdown}
+							<box
+								ref={setRef}
 								width={historyFillWidth(terminalDimensions().width ?? 80)}
-							/>
+								backgroundColor={
+									block.part.key === hoveredBlock()
+										? hoverBackground
+										: undefined
+								}
+							>
+								<SettledToolRow
+									segments={block.segments}
+									status={block.status}
+									glyph={block.glyph}
+									hovered={false}
+									brief={block.brief}
+									batchBriefed={block.batchBriefed}
+									briefUnindented={block.segments.header.some(chunk =>
+										chunk.text.includes('agent:'),
+									)}
+									md={briefMarkdown}
+									width={historyFillWidth(terminalDimensions().width ?? 80)}
+								/>
+							</box>
 						);
 					}
 					const contentFor = () =>
 						block.parts.map(part => part.text).join('\n\n');
 					if (block.kind === 'reply') {
 						return (
-							<TranscriptReply
-								content={contentFor()}
-								renderNode={renderNode}
-								treeSitter={treeSitter}
-								onRef={setRef}
-							/>
+							<box
+								ref={setRef}
+								width={historyFillWidth(terminalDimensions().width ?? 80)}
+								backgroundColor={
+									block.parts[0]?.key === hoveredBlock()
+										? hoverBackground
+										: undefined
+								}
+							>
+								<TranscriptReply
+									content={contentFor()}
+									renderNode={renderNode}
+									treeSitter={treeSitter}
+								/>
+							</box>
 						);
 					}
 					return (
-						<box flexDirection="column">
+						<box
+							ref={setRef}
+							width={historyFillWidth(terminalDimensions().width ?? 80)}
+							flexDirection="column"
+							backgroundColor={
+								block.parts[0]?.key === hoveredBlock()
+									? hoverBackground
+									: undefined
+							}
+						>
 							{/* Structural gap: every generic history entry owns one blank
 							    row above it. Markdown never owns spacing. */}
 							<box height={1} />
 							<markdown
-								ref={setRef}
 								content={contentFor()}
 								streaming={false}
 								fg={colors().text}
@@ -1359,7 +1434,11 @@ export function History(props: HistoryProps) {
 			    same syntax colors/spacing as settled rows, ZERO re-parse
 			    flicker, and each row carries the settled leading breakline. */}
 			<Show when={liveToolRows().length > 0}>
-				<LiveToolRows rows={liveToolRows()} md={briefMarkdown} />
+				<LiveToolRows
+					rows={liveToolRows()}
+					md={briefMarkdown}
+					width={historyFillWidth(terminalDimensions().width ?? 80)}
+				/>
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a
 			    settled reply, so the indentation and markdown formatting are
@@ -1734,7 +1813,6 @@ export function renderToolRun(
 						{
 							...message.tool,
 							output: liveOutput(message),
-							briefTitle: message.brief,
 							compactTask,
 						},
 						true,
@@ -1749,7 +1827,7 @@ export function renderToolRun(
 				{
 					text: singleToolRow(message, key, width, compactTask),
 					blockKey: key,
-					brief: message.tool?.name === 'write_tasks' ? undefined : brief,
+					brief,
 				},
 			];
 		}
@@ -1763,7 +1841,10 @@ export function renderToolRun(
 				.map(message =>
 					message.tool
 						? formatToolEntry(
-								{...message.tool, output: liveOutput(message)},
+								{
+									...message.tool,
+									output: liveOutput(message),
+								},
 								true,
 								'done',
 								true,
@@ -1859,7 +1940,6 @@ function singleToolRow(
 			...message.tool,
 			output: liveOutput(message),
 			briefed: Boolean(message.brief && message.brief.trim()),
-			briefTitle: message.brief,
 			compactTask,
 		},
 		expandedBlocks()[key] ?? toolsExpanded(),

@@ -30,6 +30,17 @@ export function wrapTextDetailed(
 		const segment = text.slice(i, segmentEnd);
 		if (segment === '') {
 			lines.push({text: '', start: i});
+		} else if (!segment.trim()) {
+			// A space typed immediately after an explicit newline is still a
+			// real line. Dropping whitespace-only segments collapses that line,
+			// sending the caret back to the previous row until another character
+			// arrives.
+			for (let offset = 0; offset < segment.length; offset += safe) {
+				lines.push({
+					text: segment.slice(offset, offset + safe),
+					start: i + offset,
+				});
+			}
 		} else {
 			let lineStart = i;
 			let current = '';

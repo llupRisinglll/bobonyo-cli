@@ -1062,9 +1062,16 @@ export function tokenizeUserMessage(
 					line.length,
 				);
 			}
+			// User message continuation lines sit under message content, not
+			// column zero. Keep the two-column lead explicit so Markdown-like
+			// bullets cannot look like a new transcript entry.
+			const lead = index > 0 ? '  ' : '';
 			return fill(
-				contentChunks(line).map(c => ({...c, bg})),
-				line.length,
+				[chunk(lead, palette.fg.text), ...contentChunks(line)].map(c => ({
+					...c,
+					bg,
+				})),
+				lead.length + line.length,
 			);
 		},
 		palette.fg.text,

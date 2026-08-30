@@ -7,7 +7,7 @@ import {setTasks} from './state';
 afterEach(() => setTasks([]));
 
 function taskTool(
-	briefTitle?: string,
+	title = 'Implement durable memory',
 	compactTask = false,
 	status: 'running' | 'done' = 'running',
 ): string {
@@ -16,7 +16,7 @@ function taskTool(
 			name: 'write_tasks',
 			detail: '',
 			output: 'Tasks updated.',
-			briefTitle,
+			args: {title},
 			compactTask,
 		},
 		false,
@@ -24,20 +24,23 @@ function taskTool(
 	);
 }
 
-function savedTaskTool(tasks: Array<Record<string, unknown>>): string {
+function savedTaskTool(
+	tasks: Array<Record<string, unknown>>,
+	title = 'Finish implementation',
+): string {
 	return formatToolEntry(
 		{
 			name: 'write_tasks',
 			detail: '',
 			output: 'Tasks updated.',
-			args: {tasks},
+			args: {title, tasks},
 		},
 		false,
 		'done',
 	);
 }
 
-test('task rows branch from header and pre-tool text replaces Tasks', () => {
+test('task rows render explicit list title and task titles', () => {
 	setTasks([
 		{id: '1', title: 'Check production build status', status: 'completed'},
 		{
@@ -47,24 +50,21 @@ test('task rows branch from header and pre-tool text replaces Tasks', () => {
 			status: 'in_progress',
 		},
 	]);
-	const rendered = taskTool('This is a task pretool text');
+	const rendered = taskTool('Review memory implementation');
 	expect(rendered).toContain(
-		'✦ This is a task pretool text (1 done, 1 in progress, 0 open)',
+		'✦ Review memory implementation (1 done, 1 in progress, 0 open)',
 	);
 	expect(rendered).toContain('  └ ◆ Check production build status');
 	expect(rendered).toContain('    › Deploying release');
-	expect(rendered).not.toContain('✦ Tasks (');
+	expect(rendered).toContain('Check production build status');
 });
 
-test('task pre-tool title is one line and ellipsized after a few words', () => {
+test('task row does not derive list title from pre-tool text', () => {
 	setTasks([{id: '1', title: 'Inspect code', status: 'pending'}]);
-	const rendered = taskTool(
-		'This is an excessively verbose task pretool explanation that should not flood chat',
-	);
+	const rendered = taskTool('Inspect implementation');
 	expect(rendered).toContain(
-		'✦ This is an excessively verbose task pretool... (',
+		'✦ Inspect implementation (0 done, 0 in progress, 1 open)',
 	);
-	expect(rendered).not.toContain('\nexplanation');
 });
 
 test('superseded task snapshot collapses to title plus summary', () => {
@@ -73,15 +73,19 @@ test('superseded task snapshot collapses to title plus summary', () => {
 			name: 'write_tasks',
 			detail: '',
 			output: 'Tasks updated.',
-			briefTitle: 'Update project files',
 			compactTask: true,
-			args: {tasks: [{id: '1', title: 'Inspect code', status: 'completed'}]},
+			args: {
+				title: 'Review completed work',
+				tasks: [{id: '1', title: 'Inspect code', status: 'completed'}],
+			},
 		},
 		false,
 		'done',
 	);
-	expect(rendered).toContain('✦ Update project files');
-	expect(rendered).toContain('  └ Tasks (1 done, 0 in progress, 0 open)');
+	expect(rendered).toContain(
+		'✦ Review completed work (1 done, 0 in progress, 0 open)',
+	);
+	expect(rendered).not.toContain('Update project files');
 	expect(rendered).not.toContain('Inspect code');
 });
 
@@ -118,7 +122,9 @@ test('settled task snapshots with saved args keep their own group', () => {
 	const rendered = savedTaskTool([
 		{id: 'old', title: 'Old completed group', status: 'completed'},
 	]);
-	expect(rendered).toContain('✦ Tasks (1 done, 0 in progress, 0 open)');
+	expect(rendered).toContain(
+		'✦ Finish implementation (1 done, 0 in progress, 0 open)',
+	);
 	expect(rendered).toContain('Old completed group');
 	expect(rendered).not.toContain('New unrelated task');
 });

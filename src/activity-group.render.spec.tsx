@@ -37,10 +37,10 @@ test('activity group paints connected chronological rows', async () => {
 			)
 			.filter(Boolean);
 		expect(rows).toEqual([
-			'✦ Explored',
-			'  ├ Read src/a.ts',
-			'  ├ Search renderToolRun',
-			'  └ Glob src/**/*.tsx',
+			'✦  Explored',
+			'   ├ Read src/a.ts',
+			'   ├ Search renderToolRun',
+			'   └ Glob src/**/*.tsx',
 		]);
 	} finally {
 		setup.renderer.destroy();
