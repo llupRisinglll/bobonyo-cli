@@ -129,6 +129,12 @@ export function buildSandboxCommand(
 		'--tmpfs',
 		'/var/tmp',
 	];
+	// Some hosts ship systemd-managed SSH snippets as symlinks owned by a
+	// container/runtime user. OpenSSH rejects that config before it ever reads
+	// ~/.ssh/config (`Bad owner or permissions`). The root filesystem remains
+	// read-only, but hiding this optional snippet directory lets SSH use the
+	// user's config and keys normally inside the sandbox.
+	if (settings.network) argv.push('--tmpfs', '/etc/ssh/ssh_config.d');
 	if (!settings.network) argv.push('--unshare-net');
 	for (const path of [...writable].sort(
 		(left, right) => left.length - right.length,

@@ -37,6 +37,21 @@ describe('sandbox command', () => {
 		expect(built.argv).toContain(root);
 	});
 
+	test('network sandbox masks invalid system SSH snippets', () => {
+		const built = buildSandboxCommand(
+			'ssh -T git@github.com',
+			root,
+			{mode: 'workspace-write', network: true, writablePaths: []},
+			true,
+		);
+		const tmpfsIndex = built.argv.findIndex(
+			(arg, index) =>
+				arg === '--tmpfs' && built.argv[index + 1] === '/etc/ssh/ssh_config.d',
+		);
+		expect(tmpfsIndex).toBeGreaterThan(-1);
+		expect(built.argv[tmpfsIndex + 1]).toBe('/etc/ssh/ssh_config.d');
+	});
+
 	test('read-only mode never adds writable binds', () => {
 		const built = buildSandboxCommand(
 			'true',
