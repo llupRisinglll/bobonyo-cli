@@ -896,7 +896,11 @@ export function History(props: HistoryProps) {
 					// two extra rows (the border is part of the entry).
 					(group.kind === 'tool' && isBashBlock(group) ? 2 : 0) +
 					// The model brief (when present) is one rendered line.
-					(group.kind === 'tool' && group.brief && group.brief.trim() ? 1 : 0),
+					(group.kind === 'tool' && group.brief && group.brief.trim() ? 1 : 0) +
+					// Grouped activity rows add one blank line after their brief.
+					(group.kind === 'tool' && isGroupedBlock(group) && group.brief?.trim()
+						? 1
+						: 0),
 				block: stableBlocks[groupIndex],
 			});
 		});
@@ -1401,6 +1405,7 @@ export function History(props: HistoryProps) {
 									hovered={false}
 									brief={block.brief}
 									batchBriefed={block.batchBriefed}
+									grouped={isGroupedBlock(block)}
 									briefUnindented={block.segments.header.some(chunk =>
 										chunk.text.includes('agent:'),
 									)}
@@ -1931,6 +1936,10 @@ function isFileRowBlock(block: SettledBlock): boolean {
 }
 function isTaskStatusBlock(block: SettledBlock): boolean {
 	return block.kind === 'tool' && /^```+inforow:/.test(block.part.text);
+}
+
+function isGroupedBlock(block: SettledBlock): boolean {
+	return block.kind === 'tool' && /^```+grouprow:/.test(block.part.text);
 }
 
 /** User messages are capped for display; footer opens full text. */

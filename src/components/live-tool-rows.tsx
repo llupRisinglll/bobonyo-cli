@@ -83,6 +83,9 @@ export function LiveToolRows(props: {
 							</For>
 						</text>
 					</Show>
+					<Show when={row.lang === 'grouprow' && row.brief?.trim()}>
+						<box height={1} />
+					</Show>
 					{/* RUNNING bash rows stream INSIDE the same bordered box
 					    the settled row uses (the border is drawn by OpenTUI,
 					    so streamed/wrapped content always stays inside). */}

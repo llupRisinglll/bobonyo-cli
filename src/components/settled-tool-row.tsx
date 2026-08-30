@@ -35,6 +35,8 @@ export function SettledToolRow(props: {
 	brief?: string;
 	/** Batch marker: part of a briefed batch (share the glyph/indent). */
 	batchBriefed?: boolean;
+	/** Activity-group row gets a blank line after its pre-tool brief. */
+	grouped?: boolean;
 	/** Render brief, but keep aggregate agent rows at normal columns. */
 	briefUnindented?: boolean;
 	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
@@ -69,6 +71,9 @@ export function SettledToolRow(props: {
 					hovered={props.hovered}
 					md={props.md}
 				/>
+			</Show>
+			<Show when={props.grouped && briefed()}>
+				<box height={1} />
 			</Show>
 			{/* HEADER line: status-colored glyph + name/detail chunks. The
 			    header carries the SAME hover background as the body (the

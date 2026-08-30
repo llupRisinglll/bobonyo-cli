@@ -46,3 +46,51 @@ test('activity group paints connected chronological rows', async () => {
 		setup.renderer.destroy();
 	}
 });
+
+test('grouped brief gets one blank line before activity tree', async () => {
+	const raw = formatActivityTree(activityGroupForTool('read_file')!, [
+		{name: 'read_file', detail: 'src/a.ts'},
+	]);
+	const segments = liveRowSegments(raw, 'grouprow', 'done', colors(), 80);
+	const baseline = await testRender(
+		() => <LiveToolRows rows={[{...segments, lang: 'grouprow'}]} md={md} />,
+		{width: 80, height: 12},
+	);
+	const setup = await testRender(
+		() => (
+			<LiveToolRows
+				rows={[
+					{
+						...segments,
+						lang: 'grouprow',
+						brief: 'Trace existing launcher conventions.',
+					},
+				]}
+				md={md}
+			/>
+		),
+		{width: 80, height: 12},
+	);
+	try {
+		await baseline.flush();
+		await setup.flush();
+		const baselineRows = baseline.captureSpans().lines;
+		const rows = setup.captureSpans().lines.map(line =>
+			line.spans
+				.map(span => span.text)
+				.join('')
+				.trimEnd(),
+		);
+		const treeIndex = rows.findIndex(row => row.includes('Explored'));
+		const baselineTreeIndex = baselineRows.findIndex(line =>
+			line.spans
+				.map(span => span.text)
+				.join('')
+				.includes('Explored'),
+		);
+		expect(treeIndex).toBe(baselineTreeIndex + 2);
+	} finally {
+		baseline.renderer.destroy();
+		setup.renderer.destroy();
+	}
+});
