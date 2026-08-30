@@ -14,7 +14,7 @@ function frameHas(frame: CapturedFrame, needle: string): boolean {
 }
 
 describe('ActivityIndicator', () => {
-	test('shows active goal beside background and agent stats', async () => {
+	test('hides zero-valued categories while showing active goal', async () => {
 		const setup = await testRender(
 			() => (
 				<ActivityIndicator
@@ -29,14 +29,15 @@ describe('ActivityIndicator', () => {
 		try {
 			await setup.flush();
 			const frame = setup.captureSpans();
-			expect(frameHas(frame, 'bg: 0 · agents: 2 · goal: active')).toBe(true);
+			expect(frameHas(frame, 'agents: 2 · goal: active')).toBe(true);
+			expect(frameHas(frame, 'bg: 0')).toBe(false);
 			expect(frameHas(frame, '/ps · click')).toBe(true);
 		} finally {
 			setup.renderer.destroy();
 		}
 	});
 
-	test('omits goal label when no goal is active', async () => {
+	test('shows only nonzero categories when no goal is active', async () => {
 		const setup = await testRender(
 			() => (
 				<ActivityIndicator
@@ -51,7 +52,8 @@ describe('ActivityIndicator', () => {
 		try {
 			await setup.flush();
 			const frame = setup.captureSpans();
-			expect(frameHas(frame, 'bg: 1 · agents: 0')).toBe(true);
+			expect(frameHas(frame, 'bg: 1')).toBe(true);
+			expect(frameHas(frame, 'agents: 0')).toBe(false);
 			expect(frameHas(frame, 'goal: active')).toBe(false);
 		} finally {
 			setup.renderer.destroy();
