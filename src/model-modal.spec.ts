@@ -12,10 +12,30 @@ import {
 	providerDisplayName,
 	providerGroupKey,
 	providerHeaderParts,
+	effortLevelsForModel,
 	sameProviderGroup,
 } from './components/model-modal';
 
 type Row = {kind: string; isCurrent?: boolean};
+
+describe('effortLevelsForModel', () => {
+	test('adds xhigh for GPT-5 and Codex models', () => {
+		expect(effortLevelsForModel('gpt-5.4')).toContain('xhigh');
+		expect(effortLevelsForModel('gpt-5-codex')).toContain('xhigh');
+	});
+
+	test('adds max only for GPT-5.6', () => {
+		expect(effortLevelsForModel('gpt-5.6')).toEqual([
+			'minimal',
+			'low',
+			'medium',
+			'high',
+			'xhigh',
+			'max',
+		]);
+		expect(effortLevelsForModel('gpt-4.1')).not.toContain('xhigh');
+	});
+});
 
 const provider = (name: string) => ({
 	id: name,

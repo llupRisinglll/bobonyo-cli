@@ -32,6 +32,30 @@ const read = (rel: string): string =>
 		.replace(/^\s*\/\/.*$/gm, '');
 
 describe('regression guards (foolproof live rows + hover)', () => {
+	test('MCP subprocesses have an application-shutdown cleanup path', () => {
+		const app = read('./app.tsx');
+		const mcp = read('./mcp.ts');
+		expect(mcp).toMatch(/export async function closeMCPServers/);
+		expect(mcp).toMatch(/activeClients\.clear\(\)/);
+		expect(app).toMatch(/void closeMCPServers\(\)/);
+	});
+	test('memory-heavy transcript caches are session-bounded', () => {
+		const history = read('./components/history.tsx');
+		const detailsDeclaration = history.indexOf(
+			'const compactDetails = new Map<string, string>()',
+		);
+		expect(detailsDeclaration).toBeGreaterThan(
+			history.indexOf('function History'),
+		);
+		expect(history).toMatch(/compactDetails\.clear\(\)/);
+		const cache = read('./settled-block-cache.ts');
+		expect(cache).toMatch(
+			/if \(!activeKeys\.has\(key\)\) cache\.delete\(key\)/,
+		);
+		const app = read('./app.tsx');
+		expect(app).toMatch(/setRetrySnapshot\(null\)/);
+		expect(app).toMatch(/resetFileUndoStack\(\)/);
+	});
 	test('LiveToolRows renders plain text cells, never markdown (brief is exempt)', () => {
 		const src = read('./components/live-tool-rows.tsx');
 		// MarkdownBrief is the brief-specific wrapper (not the full markdown
@@ -53,6 +77,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(src).toMatch(/<LiveToolRows rows=\{liveToolRows\(\)\}[^>]*\/>/);
 		// The live rows memo builds segments through the shared util.
 		expect(src).toMatch(/liveRowSegments/);
+	});
+
+	test('active subagent owns its live row; generic Agent row is suppressed', () => {
+		const history = read('./components/history.tsx');
+		const rows = read('./live-tool-row.ts');
+		expect(history).toMatch(/shouldRenderRunningToolMessage/);
+		expect(rows).toMatch(/toolName !== 'agent' \|\| !hasRunningAgent/);
 	});
 
 	test('every live tool row keeps the settled leading breakline', () => {
@@ -77,17 +108,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(beforeBash).not.toMatch(/<box height=\{1\} \/>/);
 	});
 
-	test('the live streaming reply keeps the settled leading breakline', () => {
+	test('the live streaming reply uses the shared reply row with its breakline', () => {
 		const history = read('./components/history.tsx');
-		// The settled reply renders a blank row before the response; the LIVE
-		// reply must too, or the streaming text glues to the user message and
-		// visibly shifts down by one row when it settles.
-		const start = history.indexOf('<Show when={liveReplyText()}>');
+		const reply = read('./components/transcript-reply.tsx');
+		const start = history.indexOf('<Show when={visibleLiveReplyText()}>');
 		const section = history.slice(start, history.indexOf('</Show>', start));
-		expect(section).toMatch(/<box height=\{1\} \/>/);
-		expect(section.indexOf('<box height={1} />')).toBeLessThan(
-			section.indexOf('<box flexDirection="row">'),
-		);
+		expect(section).toMatch(/<TranscriptReply/);
+		expect(reply).toMatch(/<box height=\{1\} \/>/);
 	});
 
 	test('settled tool rows render as components; overlay/buffer-tint gone', () => {
@@ -210,7 +237,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const modal = read('./components/model-modal.tsx');
 		expect(modal).toMatch(/Select effort/);
 		expect(modal).toMatch(/setEffortStep\(/);
-		expect(modal).toMatch(/EFFORT_OPTIONS/);
+		expect(modal).toMatch(/effortOptions\(/);
 		expect(modal).toMatch(/Default \(\$\{catalog\}\)/);
 	});
 
@@ -219,7 +246,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(commands).toMatch(/case 'effort':\n\s*ctx\.setEffort\(args\)/);
 		const app = read('./app.tsx');
 		expect(app).toMatch(/const switchEffort = \(args: string\) =>/);
-		expect(app).toMatch(/EFFORT_LEVELS\.includes/);
+		expect(app).toMatch(/effortLevelsForModel\(endpoint\.model\)/);
 		expect(read('./config.ts')).toMatch(
 			/modelEfforts\?: Record<string, string>/,
 		);
@@ -265,12 +292,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The migration runs wherever project dirs resolve (config/custom/
 		// subagents), so Hilinga-style project agents/commands/skills move.
 		expect(read('./config.ts')).toMatch(/migrateProjectDir\(/);
-		expect(read('./custom.ts')).toMatch(
-			/migrateProjectDir\(process\.cwd\(\)\)/,
-		);
-		expect(read('./subagents.ts')).toMatch(
-			/migrateProjectDir\(process\.cwd\(\)\)/,
-		);
+		// All project-local discovery now flows through shared configSearchDirs;
+		// custom loaders consume that resolver instead of duplicating migration.
+		expect(read('./custom.ts')).toMatch(/configSearchDirs\(/);
+		expect(read('./subagents.ts')).toMatch(/configSearchDirs\(/);
 	});
 
 	test('the DeepSeek preset seeds the CURRENT v4 catalog', () => {
@@ -474,13 +499,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// after tool-heavy turns, so the head change stays a one-time
 		// summary instead of a per-turn miss.
 		const app = read('./app.tsx');
-		expect(app).toMatch(/shouldAutoCompact/);
-		expect(app).toMatch(
-			/context\(\)\.length >= maxMessages\(\) - AUTO_COMPACT_MESSAGE_MARGIN/,
-		);
-		expect(app).toMatch(/if \(shouldAutoCompact\(\)\) triggerAutoCompact\(\)/);
+		expect(app).toMatch(/shouldAutoCompactHistory/);
+		expect(app).toMatch(/shouldAutoCompactContext\(\{/);
+		expect(app).toMatch(/messageCount: history\.length/);
+		expect(app).toMatch(/messageCap: maxMessages\(\)/);
+		expect(app).toMatch(/messageMargin: AUTO_COMPACT_MESSAGE_MARGIN/);
+		expect(app).toMatch(/history = await tryAutoCompactHistory\(history\)/);
+		expect(app).toMatch(/await tryAutoCompactHistory\(context\(\)\)/);
 		const settings = read('./settings.ts');
-		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 75\}/);
+		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 80\}/);
 	});
 
 	test('the monitor tool is removed (background completion reports instead)', () => {
@@ -652,9 +679,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// Character insertion (the path `k`/`j`/`h`/`l`/any letter takes):
 		// preventDefault must sit between the guarded branch and the insert.
 		expect(input).toMatch(
-			/if \(char && !event\.ctrl && !event\.meta\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}insertAtCursor\(char\);/,
+			/if \(event\.name === 'escape'\) \{[\s\S]{0,120}event\.preventDefault\(\);/,
 		);
-		// Space, backspace/delete, navigation, Tab and Return are claimed too.
+		// Escape removes only active @ token, preserving text before/after it.
+		expect(input).toMatch(
+			/setInputAt\(\s*at >= 0 \? input\(\)\.slice\(0, at\) \+ input\(\)\.slice\(cursor\) : input\(\),?\s*\)/,
+		);
 		expect(input).toMatch(
 			/if \(event\.name === 'space'\) \{[\s\S]{0,80}event\.preventDefault\(\);/,
 		);
@@ -675,10 +705,6 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		// Popup escape branches claim the key too: without preventDefault the
 		// App's global Esc handler would ALSO see it and arm the exit
-		// confirmation while the popup is open.
-		expect(input).toMatch(
-			/if \(event\.name === 'escape'\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}setInputAt\(input\(\)\.replace\(\/@\[\^\\s\]\*\$\/, ''\)\);/,
-		);
 		expect(input).toMatch(
 			/if \(event\.name === 'escape'\) \{[\s\S]{0,120}event\.preventDefault\(\);[\s\S]{0,80}setInputAt\(''\);/,
 		);
@@ -703,18 +729,49 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(cache).toMatch(/block\.part\.text/);
 	});
 
-	test('bash calls render STANDALONE, never compacted into a ×N tally', () => {
-		// `✦ Ran Bash ×2` hides the actual commands — the command line IS the
-		// useful content. Every bash call must keep its own `✦ Bash(cmd)`
-		// row (same rule as file-write tools and agents).
+	test('bash calls render STANDALONE, never enter an activity group', () => {
+		// Bash has no activity group, so every call keeps its own bordered
+		// command row. Only exploration, web, and MCP tools group.
 		const history = read('./components/history.tsx');
 		const groupToolRun = history.slice(
 			history.indexOf('function groupToolRun'),
 			history.indexOf('function groupToolRun') + 1400,
 		);
-		expect(groupToolRun).toMatch(/name === 'execute_bash'/);
-		expect(groupToolRun).toMatch(/name === 'execute_bash:user'/);
+		expect(groupToolRun).toMatch(/activityGroupForTool\(name\)/);
+		expect(groupToolRun).toMatch(/if \(!activity\)/);
 		expect(groupToolRun).toMatch(/blocks\.push\(\[message\]\);/);
+		const activity = read('./activity-groups.ts');
+		expect(activity).not.toContain("'execute_bash'");
+	});
+
+	test('selective tool groups render chronological activity trees, never ×N tallies', () => {
+		const history = read('./components/history.tsx');
+		const activity = read('./activity-groups.ts');
+		expect(history).toMatch(/activityGroupForTool/);
+		expect(history).toMatch(/formatActivityMessages/);
+		expect(history).not.toMatch(/function compactToolBlock/);
+		expect(activity).toMatch(/title: 'Explored'/);
+		expect(activity).toMatch(/title: 'Navigated Web'/);
+		expect(activity).toMatch(/mcpServerTitle\(mcp\[1\]/);
+		expect(activity).toMatch(/replace\(\/\(\?:\^\|_\)mcp\$\/i, ''\)/);
+		expect(activity).toMatch(/final \? '└' : '├'/);
+	});
+
+	test('apply_patch captures pre-mutation rows and renders them through DiffView', () => {
+		const tools = read('./tools.ts');
+		const app = read('./app.tsx');
+		const display = read('./tool-display.ts');
+		expect(tools).toMatch(/applyPatchDisplayChanges/);
+		expect(tools).toMatch(/displayArgs/);
+		expect(app).toMatch(/toolResult\.displayArgs \?\? message\.tool!\.args/);
+		expect(display).toMatch(/_applyPatchDisplay/);
+		expect(display).toMatch(/row\.kind === 'add'/);
+		expect(display).toMatch(/row\.kind === 'remove'/);
+		expect(display).toMatch(/fence\(\s*'filediff'/);
+		expect(display).toMatch(/changeIndex === 0 \? '✦ ' : ''/);
+		expect(display).toMatch(/\? `\$\{changeIndex === 0 \? '✦ ' : ''\}  └ `/);
+		expect(display).not.toMatch(/Edited \$\{changes\.length\} file/);
+		expect(display).not.toMatch(/✦ ApplyPatch/);
 	});
 
 	test('bash command/body wrap to the REAL render width, never a fixed 72', () => {
@@ -729,8 +786,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(display).not.toMatch(/COMMAND_WRAP_WIDTH/);
 		const history = read('./components/history.tsx');
 		// Settled rows thread the real width through the tool formatter.
-		expect(history).toMatch(/renderToolRun\(run, fillWidth\)/);
-		expect(history).toMatch(/singleToolRow\(block\[0\]!, key, width\)/);
+		expect(history).toMatch(/renderToolRun\(\s*run,\s*fillWidth,/);
+		expect(history).toMatch(/singleToolRow\(\s*message,\s*key,\s*width,/);
 		// The LIVE path passes the same render width.
 		expect(history).toMatch(
 			/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\),/,
@@ -795,7 +852,38 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/for \(let round = 0; ; round\+\+\)/);
 		expect(app).not.toMatch(/round < MAX_TURN_ROUNDS/);
 		expect(app).not.toMatch(/MAX_TURN_ROUNDS/);
-		expect(app).toMatch(/MAX_REPEATED_TOOL_CALLS/);
+		expect(app).toMatch(/evaluateRepeatedToolCalls/);
+		const repeatedGuard = read('./repeated-tool-guard.ts');
+		expect(repeatedGuard).toMatch(/MAX_REPEATED_TOOL_CALLS/);
+		expect(repeatedGuard).toMatch(/BOOKKEEPING_TOOLS/);
+	});
+
+	test('task closeout never deletes the streamed Markdown reply', () => {
+		const app = read('./app.tsx');
+		const closeout = app.slice(
+			app.indexOf('if (unfinishedTasks.length > 0'),
+			app.indexOf(
+				'completionSummary =',
+				app.indexOf('if (unfinishedTasks.length > 0'),
+			),
+		);
+		expect(closeout).toMatch(/appendAssistantMessage\(/);
+		expect(closeout.indexOf('appendAssistantMessage(')).toBeLessThan(
+			closeout.indexOf("setStreaming('')"),
+		);
+	});
+
+	test('post-task final text survives even when it repeats the closeout draft', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('taskToolRanAfterCloseoutDraft = true');
+		expect(app).toContain('shouldPersistTaskCloseoutReply(');
+	});
+
+	test('task closeout never fabricates completion after ignored nudges', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('const remainingUnfinishedTasks = unfinishedTasks');
+		expect(app).not.toContain('toolId: `task-closeout-${Date.now()}`');
+		expect(app).toContain('remainingUnfinishedTasks.length === 0');
 	});
 
 	test('tool rows hold their RUNNING state for a visible floor (MCP parity)', () => {
@@ -814,6 +902,27 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 	});
 
+	test('live pre-tool narration has one visual owner', () => {
+		const app = read('./app.tsx');
+		const history = read('./components/history.tsx');
+		// Once provider text becomes tool.brief, clear streaming source and
+		// suppress throttle residue while live tool row is visible.
+		expect(app).toMatch(/const briefText[\s\S]{0,300}setStreaming\(''\)/);
+		expect(history).toMatch(/const visibleLiveReplyText = createMemo/);
+		expect(history).toMatch(
+			/liveToolRows\(\)\.length > 0 \? '' : liveReplyText\(\)/,
+		);
+		expect(history).toMatch(/<Show when=\{visibleLiveReplyText\(\)\}>/);
+	});
+
+	test('command workflow bodies stay model-only, never render Triggered blocks', () => {
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(
+			/commandVisibleText\(message\.command, message\.content\)/,
+		);
+		expect(history).not.toMatch(/renderCommandBlock\(message\.command/);
+		expect(history).not.toContain('✦ Triggered a Command');
+	});
 	test('the model brief before a tool call is rendered, never dropped', () => {
 		// claude code / openclaude render the model's "I'll check X"
 		// narration BEFORE the tool box, INTEGRATED with the tool entry.
@@ -826,12 +935,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			app.indexOf('const assistantToolMsg: ChatMessageLike'),
 		);
 		expect(toolTurn).toMatch(/result\.text\.trim\(\)/);
-		expect(toolTurn).toMatch(
-			/callIndex === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/,
+		expect(toolTurn).toContain(
+			'toolCallBrief(briefText, callIndex, priorRoundBriefed)',
 		);
-		expect(toolTurn).toMatch(
-			/index === 0[\s\S]{0,40}\? briefText[\s\S]{0,30}: ' '/,
+		expect(toolTurn).toContain(
+			'toolCallBrief(briefText, index, priorRoundBriefed)',
 		);
+		expect(toolTurn).toContain('if (briefText) toolBriefActive = true');
 		expect(toolTurn).not.toMatch(
 			/appendAssistantMessage\(scrubberRef\.rehydrate\(result\.text\)\)/,
 		);
@@ -839,6 +949,38 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const row = read('./components/bash-tool-row.tsx');
 		expect(row).toMatch(
 			/<Show when=\{props\.brief && props\.brief\.trim\(\)\}>/,
+		);
+	});
+
+	test('completed tools stay visible while global turn keeps Working', () => {
+		const history = read('./components/history.tsx');
+		// Row.running owns placement. Global running() describes whole model
+		// turn and must never hide an already completed row.
+		expect(history).toMatch(/const liveToolIds = createMemo/);
+		expect(history).toMatch(
+			/message\.running \|\|[\s\S]{0,100}liveToolIds\(\)\.has/,
+		);
+		expect(history).not.toMatch(/running\(\) && message\.toolId/);
+		// Adjacent live rows must not leak into a settled run.
+		expect(history).toMatch(/!all\[i \+ 1\]\?\.running/);
+		// Both live and settled paths suppress duplicate call ids.
+		const dedupes = history.match(/seenToolIds\.has\(message\.toolId\)/g) ?? [];
+		expect(dedupes.length).toBe(2);
+	});
+
+	test('/usage remains width-safe after terminal resize', () => {
+		const app = read('./app.tsx');
+		const modal = read('./components/details-modal.tsx');
+		// Pages are canonical narrow chunks, not frozen from stdout.columns at
+		// open time. Card and cell widths read reactive terminal dimensions.
+		expect(app).toMatch(/12 - index/);
+		expect(app).toMatch(/Math\.min\(months, 12 - start\)/);
+		expect(app).not.toMatch(/process\.stdout\.columns/);
+		expect(modal).toMatch(/detailsCardWidth\(props\.title, dims\(\)\.width\)/);
+		expect(modal).toMatch(/usageCalendarCellWidth\(props\.width\)/);
+		expect(modal).toMatch(/usageVariantIndex\(cardWidth\(\), variants\)/);
+		expect(modal).toMatch(
+			/detailsCardHeight\(visibleContent\(\), dims\(\)\.height\)/,
 		);
 	});
 
@@ -850,10 +992,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// brief after the first tool message of the run (the "Wait more."
 		// narration vanished once the next bash box settled).
 		const history = read('./components/history.tsx');
-		const settled = history.slice(
-			history.indexOf('for (const row of renderToolRun(run, fillWidth))'),
-			history.indexOf('for (const row of renderToolRun(run, fillWidth))') + 400,
-		);
+		const start = history.indexOf('for (const row of renderToolRun(');
+		const settled = history.slice(start, start + 600);
 		expect(settled).toMatch(
 			/pushBlock\(row\.text, row\.blockKey, 'md', row\.brief\)/,
 		);
@@ -1051,7 +1191,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// Idle gate: tip shows only while running() and nothing is live.
 		expect(history).toMatch(/const idle =/);
 		expect(history).toMatch(/!liveToolRows\(\)\.length/);
-		expect(history).toMatch(/!liveReplyText\(\)/);
+		expect(history).toMatch(/!visibleLiveReplyText\(\)/);
 		// Only 'show' mode renders live thought; hidden/line leave the
 		// history idle so the tip may take the stage.
 		expect(history).toMatch(
@@ -1065,19 +1205,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The "Compacting context (LLM summary)…" status must NOT be a
 		// permanent chat-history info row (appendInfo): it renders as a
 		// centered row inside the transcript with a leading breakline,
-		// animated dots and the secondary color, and disappears the moment
+		// animated dots and the warning color, and disappears the moment
 		// the summarization settles (success, error or empty summary).
 		const app = read('./app.tsx');
 		// The permanent info row is GONE; the signal wraps the summarization.
 		expect(app).not.toMatch(/appendInfo\('Compacting context \(LLM summary\)/);
 		const compact = app.slice(
-			app.indexOf('const compact = '),
+			app.indexOf('const compactHistory = '),
 			app.indexOf('const retryLast'),
 		);
 		expect(compact).toMatch(/setCompacting\(true\)/);
 		expect(compact).toMatch(/setCompacting\(false\)/);
 		expect(compact).toMatch(/finally/);
-		expect(compact).toMatch(/summarizeContext\(ctx\)/);
+		expect(compact).toMatch(/partitionCompactionHistory\(ctx\)/);
+		expect(compact).toMatch(/summarizeContext\(\s*partition\.summarize/);
 		// The completion notice stays a permanent info row (the RESULT of the
 		// compaction is chat content — only the in-progress status is transient).
 		expect(compact).toMatch(/Context compacted via LLM summary/);
@@ -1086,7 +1227,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(/compactingLabel\(spinnerFrame\(\)\)/);
 		expect(history).toMatch(/justifyContent="center"/);
 		expect(history).toMatch(/<box height=\{1\} \/>/);
-		expect(history).toMatch(/colors\(\)\.secondary/);
+		expect(history).toMatch(/colors\(\)\.warning/);
 		// The animated dots come from the shared loading cadence helper, not a
 		// hard-coded "…" (a fixed ellipsis would double the animated tail).
 		expect(history).not.toMatch(/compactingLabel\([^)]*\)\s*\+\s*['"]…['"]/);
@@ -1139,12 +1280,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('replies keep a REAL gap after the ✦ glyph (never `✦The`)', () => {
-		const history = read('./components/history.tsx');
-		// The reply content box owns its left padding; the glyph is its own
-		// cell. A regression to `✦{' '}` (trailing space, trimmed by the
-		// renderer) glues the first word to the glyph.
-		expect(history).toMatch(/<box flexGrow=\{1\} paddingLeft=\{2\}>/);
-		expect(history).not.toMatch(/✦\{' '\}/);
+		const reply = read('./components/transcript-reply.tsx');
+		// Shared parent/child reply row owns a real two-column spacer.
+		expect(reply).toMatch(/<box width=\{2\} \/>/);
+		expect(reply).not.toMatch(/✦\{' '\}/);
 	});
 
 	test('Ran tally/agent headers split colors even WITHOUT the glyph', () => {
@@ -1156,6 +1295,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(\.\*\)\$/);
 	});
 
+	test('agents modal manages models and confirms custom-agent deletion', () => {
+		const agents = read('./components/agents-modal.tsx');
+		const subagents = read('./subagents.ts');
+		expect(agents).toMatch(/Select model for/);
+		expect(agents).toMatch(/saveSubagentModel/);
+		expect(agents).toMatch(/Delete agent/);
+		expect(agents).toMatch(/confirmingDelete/);
+		expect(agents).toMatch(/Shift\+D|D delete custom/);
+		expect(subagents).toMatch(/unlinkSync\(agent\.path\)/);
+		expect(subagents).toMatch(/agentModels/);
+	});
 	test('provider connect is a MODAL — the input-box wizard must not return', () => {
 		// The old /connect flow asked questions in the chat input row
 		// (`setPendingPrompt`); it was replaced by the opencode-style modal.
@@ -1201,15 +1351,43 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		}
 	});
 
+	test('git wrappers stay removed; bounded glob and grep stay first-class', () => {
+		const tools = read('./tools.ts');
+		const client = read('./client.ts');
+		for (const name of [
+			'find_files',
+			'search_file_contents',
+			'list_directory',
+			'git_status',
+			'git_log',
+			'git_diff',
+			'git_add',
+			'git_push',
+			'git_pull',
+			'git_branch',
+			'git_commit',
+			'git_stash',
+			'git_reset',
+			'git_pr',
+		]) {
+			expect(tools).not.toContain(`registerTool('${name}'`);
+			expect(client).not.toMatch(new RegExp(`^[\t ]*${name}:`, 'm'));
+		}
+		expect(tools).toMatch(/registerTool\('execute_bash'/);
+		expect(tools).toMatch(/registerTool\('glob'/);
+		expect(tools).toMatch(/registerTool\('grep'/);
+		expect(tools).toMatch(/globWorkspace/);
+		expect(tools).toMatch(/grepWorkspace/);
+	});
+
 	test('git commit / gh pr messages stay ONE line with no AI attribution', () => {
 		// The bash tool refuses violating commands before they run.
 		const tools = read('./tools.ts');
 		expect(tools).toMatch(/gitCommitMessagesViolation/);
 		expect(tools).toMatch(/ghPrMessagesViolation/);
 		expect(tools).toMatch(/REFUSED to run/);
-		// git_commit carries the rule in its model-facing description.
-		expect(tools).toMatch(/registerTool\('git_commit'/);
-		expect(tools).toMatch(/SINGLE line with exactly/);
+		// Git operations use execute_bash; no redundant dedicated git tools.
+		expect(tools).not.toMatch(/registerTool\('git_/);
 		// The default system prompt states the rule too.
 		const client = read('./client.ts');
 		expect(client).toMatch(/git commit`/);
@@ -1231,6 +1409,16 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(header).not.toMatch(/\{'  '\}\s*\(/);
 	});
 
+	test('configured provider context limits beat discovered model metadata', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/effectiveContextWindow\(\s*provider\.contextWindow,\s*modelWindows\(\)\[provider\.id\]\?\.\[sessionModel\],\s*\)/,
+		);
+		expect(app).toMatch(
+			/effectiveContextWindow\(\s*provider\.contextWindow,\s*modelWindows\(\)\[providerId\]\?\.\[model\],\s*\)/,
+		);
+	});
+
 	test('switching models/accounts never clears the conversation context (cache head)', () => {
 		// `selectModel` must ONLY swap the active endpoint: the context and
 		// the provider cache head stay untouched, so a same-provider account
@@ -1243,6 +1431,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(select).toMatch(/setActiveEndpoint/);
 		expect(select).not.toMatch(/clearMessages/);
 		expect(select).not.toMatch(/setContext\(\[\]\)/);
+		// Save chosen provider/model into current session immediately; global
+		// preferences alone make /resume restore stale pre-switch metadata.
+		expect(select).toMatch(/persist\(\)/);
 		// The model modal drives the account switch via the connection
 		// picker and marks same-provider swaps to skip the resend confirm.
 		const modal = read('./components/model-modal.tsx');
@@ -1594,5 +1785,22 @@ describe('regression guards (brief gap + COMPLETED modal only-when-idle)', () =>
 		expect(app).toMatch(
 			/fg=\{colors\(\)\.secondary\}>\{completionMessage\(\)\}/,
 		);
+	});
+});
+
+describe('regression guards (shared parent/subagent transcript renderer)', () => {
+	test('/ps subagent details reuse History instead of hand-rendering rows', () => {
+		const modal = read('./components/background-jobs-modal.tsx');
+		expect(modal).toMatch(/import \{History\} from '\.\/history'/);
+		expect(modal).toMatch(
+			/<History[\s\S]*?embedded[\s\S]*?messages=\{agentMessages\}/,
+		);
+		expect(modal).not.toMatch(/<For each=\{detailAgent\(\)\?\.transcript/);
+		const history = read('./components/history.tsx');
+		expect(history).toMatch(/messages\?: \(\) => ChatMessage\[\]/);
+		expect(history).toMatch(
+			/const messages = props\.messages \?\? globalMessages/,
+		);
+		expect(history).toMatch(/<TranscriptReply/);
 	});
 });

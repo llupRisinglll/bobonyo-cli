@@ -121,7 +121,7 @@ describe('resumeCwd (codex ResumeCwdMode parity)', () => {
 describe('autoCompact default (cache-head protection)', () => {
 	test('defaults ON so long conversations compact before the cap trims', () => {
 		expect(loadSettings().autoCompact.enabled).toBe(true);
-		expect(loadSettings().autoCompact.threshold).toBe(75);
+		expect(loadSettings().autoCompact.threshold).toBe(80);
 	});
 
 	test('an explicit off is respected', () => {
@@ -153,5 +153,44 @@ describe('resumeCwdDecision (which directory a resumed session uses)', () => {
 	test('a missing session directory always keeps the current one', () => {
 		expect(resumeCwdDecision('session', '/a', undefined)).toBe('current');
 		expect(resumeCwdDecision('ask', '/a', undefined)).toBe('current');
+	});
+});
+
+describe('model fallback default', () => {
+	test('defaults OFF and respects explicit ON', () => {
+		expect(loadSettings().modelFallback).toBe(false);
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({modelFallback: true}),
+		);
+		expect(loadSettings().modelFallback).toBe(true);
+	});
+});
+
+describe('command sandbox defaults', () => {
+	test('defaults to portable workspace-write isolation with network', () => {
+		expect(loadSettings().sandbox).toEqual({
+			mode: 'auto',
+			network: true,
+			writablePaths: [],
+		});
+	});
+
+	test('validates mode and writable path entries', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({
+				sandbox: {
+					mode: 'bogus',
+					network: false,
+					writablePaths: ['/cache', 7, ''],
+				},
+			}),
+		);
+		expect(loadSettings().sandbox).toEqual({
+			mode: 'auto',
+			network: false,
+			writablePaths: ['/cache'],
+		});
 	});
 });

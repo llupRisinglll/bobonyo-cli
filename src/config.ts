@@ -8,7 +8,13 @@
  * configured provider wins. The legacy `NANOCODER_*` env vars still work.
  */
 
-import {existsSync, readFileSync, writeFileSync, mkdirSync, renameSync} from 'node:fs';
+import {
+	existsSync,
+	readFileSync,
+	writeFileSync,
+	mkdirSync,
+	renameSync,
+} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
@@ -137,7 +143,10 @@ export function modelsDevContextWindow(
 	// Legacy shape keyed directly by model id.
 	const legacy = catalog[model];
 	if (legacy && !legacy.models) {
-		const window = pick({limit: undefined, context_window: legacy.context_window});
+		const window = pick({
+			limit: undefined,
+			context_window: legacy.context_window,
+		});
 		if (window) return window;
 	}
 	return undefined;
@@ -160,6 +169,19 @@ export async function resolveContextWindow(
 	} catch {
 		return undefined;
 	}
+}
+
+/** Provider config is authoritative; discovery only fills missing limits. */
+export function effectiveContextWindow(
+	declared?: number,
+	discovered?: number,
+	fallback = 128_000,
+): number {
+	return declared && declared > 0
+		? declared
+		: discovered && discovered > 0
+			? discovered
+			: fallback;
 }
 
 export function configDir(): string {
@@ -190,9 +212,10 @@ function builtinDefault(): AppConfig {
 }
 
 /** Split `string | {name, effort}` model entries into names + effort map. */
-export function normalizeModels(
-	models: ProviderConfig['models'],
-): {names: string[]; efforts: Record<string, string>} {
+export function normalizeModels(models: ProviderConfig['models']): {
+	names: string[];
+	efforts: Record<string, string>;
+} {
 	const names: string[] = [];
 	const efforts: Record<string, string> = {};
 	for (const entry of models ?? []) {
@@ -246,8 +269,7 @@ function normalize(config: AppConfig): AppConfig {
 			// `GET /v1/models` (same live-discover story as DeepSeek), so the
 			// static `models` list becomes optional. Other providers only
 			// discover when the config explicitly sets `modelDiscoveryUrl`.
-			...(isMiMoTokenPlanHost(provider.baseUrl) &&
-			!provider.modelDiscoveryUrl
+			...(isMiMoTokenPlanHost(provider.baseUrl) && !provider.modelDiscoveryUrl
 				? {
 						modelDiscoveryUrl: `${substituteEnv(provider.baseUrl).replace(
 							/\/+$/,
@@ -269,8 +291,7 @@ export function loadConfig(): AppConfig {
 	);
 	// Highest precedence: providers from env (BOBONYO_*, legacy NANOCODER_*).
 	const envProviders =
-		process.env.BOBONYO_PROVIDERS ??
-		process.env.NANOCODER_PROVIDERS;
+		process.env.BOBONYO_PROVIDERS ?? process.env.NANOCODER_PROVIDERS;
 	if (envProviders) {
 		try {
 			// NOTE: parse the whole AppConfig and take `.providers`, the old
@@ -304,7 +325,9 @@ export function loadConfig(): AppConfig {
 function findClosestProjectConfig(startDir: string): ProviderConfig[] | null {
 	let dir = startDir;
 	for (;;) {
-		const providers = readProvidersFile(join(dir, '.bobonyo', 'providers.json'));
+		const providers = readProvidersFile(
+			join(dir, '.bobonyo', 'providers.json'),
+		);
 		if (providers) return providers;
 		// Legacy project layout: `.nanocoder` still works for existing repos.
 		const legacyProviders = readProvidersFile(
@@ -356,7 +379,11 @@ function mergeProviders(
 
 export function saveConfig(config: AppConfig): void {
 	mkdirSync(configDir(), {recursive: true});
-	writeFileSync(configFilePath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+	writeFileSync(
+		configFilePath(),
+		`${JSON.stringify(config, null, 2)}\n`,
+		'utf8',
+	);
 }
 
 export function listProviders(): ResolvedProvider[] {
@@ -394,7 +421,9 @@ export function resolveProvider(id?: string): ResolvedProvider {
 		);
 	}
 	if (providers.length === 0) {
-		throw new Error('No providers configured. Add a provider or create providers.json.');
+		throw new Error(
+			'No providers configured. Add a provider or create providers.json.',
+		);
 	}
 	return providers[0]!;
 }
@@ -402,6 +431,10 @@ export function resolveProvider(id?: string): ResolvedProvider {
 export interface Preferences {
 	lastProvider?: string;
 	lastModel?: string;
+	/** Per-agent model overrides; `inherit` removes an override. */
+	agentModels?: Record<string, string>;
+	/** Provider paired with each per-agent model override. */
+	agentProviders?: Record<string, string>;
 	/**
 	 * Per-model reasoning-effort overrides, keyed
 	 * `${providerId}\u0000${model}` (set by `/effort` and the model modal's
@@ -469,8 +502,7 @@ export function applyProviderDeletion(
 		),
 	};
 	const nextPrefs =
-		prefs.lastProvider &&
-		prefs.lastProvider.toLowerCase() === id.toLowerCase()
+		prefs.lastProvider && prefs.lastProvider.toLowerCase() === id.toLowerCase()
 			? {...prefs, lastProvider: undefined, lastModel: undefined}
 			: prefs;
 	return {config: nextConfig, prefs: nextPrefs};
@@ -528,7 +560,9 @@ function saveModelCatalogCache(
  * to the last known disk catalog, then to the static list — a stale list
  * beats losing the models entirely.
  */
-export async function discoverModels(provider: ResolvedProvider): Promise<string[]> {
+export async function discoverModels(
+	provider: ResolvedProvider,
+): Promise<string[]> {
 	const discoveryUrl = provider.modelDiscoveryUrl;
 	if (!discoveryUrl) return provider.models;
 	const now = Date.now();
@@ -544,19 +578,18 @@ export async function discoverModels(provider: ResolvedProvider): Promise<string
 		return freshDisk.models;
 	}
 	try {
-		const response = await fetch(
-			discoveryUrl.replace(/\/+$/, ''),
-			{
-				headers: provider.apiKeyResolved
-					? {authorization: `Bearer ${provider.apiKeyResolved}`}
-					: {},
-			},
-		);
+		const response = await fetch(discoveryUrl.replace(/\/+$/, ''), {
+			headers: provider.apiKeyResolved
+				? {authorization: `Bearer ${provider.apiKeyResolved}`}
+				: {},
+		});
 		if (!response.ok) throw new Error(`discovery ${response.status}`);
 		const body = (await response.json()) as {
 			data?: Array<{id?: string}>;
 		};
-		const ids = (body.data ?? []).map(item => item.id).filter(Boolean) as string[];
+		const ids = (body.data ?? [])
+			.map(item => item.id)
+			.filter(Boolean) as string[];
 		if (ids.length === 0) return provider.models;
 		discoveryCache.set(discoveryUrl, {at: now, models: ids});
 		disk.entries[discoveryUrl] = {models: ids, at: now};
@@ -627,9 +660,7 @@ export async function discoverCodexAccountModels(
 			headers: {
 				accept: 'application/json',
 				authorization: `Bearer ${auth.accessToken}`,
-				...(auth.accountId
-					? {'chatgpt-account-id': auth.accountId}
-					: {}),
+				...(auth.accountId ? {'chatgpt-account-id': auth.accountId} : {}),
 				originator: 'bobonyo',
 			},
 		});

@@ -4,6 +4,7 @@ import {For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {themeColors} from '../highlight';
 import {settledGlyphColor, type RowStatus} from '../row-highlight';
+import {glyphBlinkOn, spinnerFrame} from '../state';
 import {MarkdownBrief, type MarkdownBriefRenderer} from './markdown-brief';
 
 /**
@@ -61,7 +62,11 @@ export function BashToolRow(props: {
 				{/* Glyph OUTSIDE the border (blinks live, status-colored done). */}
 				<Show when={!props.brief && !props.batchBriefed}>
 					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
-						{(props.glyph ?? '✦') + ' '}
+						{(props.status === 'running'
+							? glyphBlinkOn(spinnerFrame())
+								? props.glyph
+								: ' '
+							: props.glyph) + ' '}
 					</text>
 				</Show>
 				{/* With a brief, the box indents to the brief's text column

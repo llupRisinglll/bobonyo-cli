@@ -1,6 +1,8 @@
 import {describe, expect, test} from 'bun:test';
 import {
 	atomicTokens,
+	bashDisplayValue,
+	bashModeIndicatorRows,
 	completionMessageRows,
 	computeInputBoxHeight,
 	cursorPosition,
@@ -15,6 +17,8 @@ import {
 	tokenStartingAt,
 	lineTickerVisible,
 	workingLabel,
+	isBashMode,
+	typedInputChar,
 } from './components/input-box';
 import {wrapText, wrapTextDetailed} from './text-wrap';
 
@@ -44,6 +48,22 @@ describe('workingLabel (thinking-mode indicator phase)', () => {
 		expect(workingLabel('line', true)).toBe('Thinking');
 		expect(workingLabel('line', false)).toBe('Working');
 		expect(workingLabel('show', false)).toBe('Working');
+	});
+});
+
+describe('bash mode input helpers', () => {
+	test('leading bang enters bash mode and becomes UI prompt, not command text', () => {
+		expect(isBashMode('!')).toBe(true);
+		expect(isBashMode('!bun test')).toBe(true);
+		expect(isBashMode(' bun test')).toBe(false);
+		expect(bashDisplayValue('!bun test')).toBe('bun test');
+		expect(bashDisplayValue('hello')).toBe('hello');
+		expect(bashModeIndicatorRows('!')).toBe(1);
+		expect(bashModeIndicatorRows('hello')).toBe(0);
+	});
+	test('normalizes terminal Shift+1 event to bang', () => {
+		expect(typedInputChar({name: '1', shift: true})).toBe('!');
+		expect(typedInputChar({name: '1'})).toBe('1');
 	});
 });
 
@@ -317,6 +337,15 @@ describe('cursorPosition', () => {
 			line: 1,
 			column: 5,
 		});
+	});
+
+	test('maps offsets between consecutive newlines to blank visual rows', () => {
+		const text = 'Line 1\n\nLine 3\n\nLine 4';
+		expect(cursorPosition(text, 7, 80)).toEqual({line: 1, column: 0});
+		expect(cursorPosition(text, 8, 80)).toEqual({line: 2, column: 0});
+		const wrapped = wrapTextDetailed(text, 80);
+		expect(offsetForLine(wrapped, 1, 0)).toBe(7);
+		expect(offsetForLine(wrapped, 3, 0)).toBe(15);
 	});
 
 	test('puts a cursor after a newline on the new row', () => {

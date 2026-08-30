@@ -7,6 +7,7 @@ import {
 	codexClientVersion,
 	discoverCodexAccountModels,
 	discoverModels,
+	effectiveContextWindow,
 	listProviders,
 	MODEL_CATALOG_TTL_MS,
 	modelCatalogCachePath,
@@ -23,7 +24,8 @@ const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
 afterEach(() => {
 	if (ORIGINAL_PROVIDERS === undefined) delete process.env.NANOCODER_PROVIDERS;
 	else process.env.NANOCODER_PROVIDERS = ORIGINAL_PROVIDERS;
-	if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+	if (ORIGINAL_CONFIG_DIR === undefined)
+		delete process.env.NANOCODER_CONFIG_DIR;
 	else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
 });
 
@@ -58,7 +60,11 @@ describe('applyProviderDeletion (manage-step / /provider delete)', () => {
 		providers: [
 			{id: 'codex', name: 'codex', baseUrl: 'https://api.openai.com/v1'},
 			{id: 'DeepSeek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com'},
-			{id: 'xiaomi', name: 'Xiaomi', baseUrl: 'https://token-plan-sgp.xiaomimimo.com'},
+			{
+				id: 'xiaomi',
+				name: 'Xiaomi',
+				baseUrl: 'https://token-plan-sgp.xiaomimimo.com',
+			},
 		],
 	});
 
@@ -153,6 +159,17 @@ describe('modelsDevContextWindow (models.dev size lookup)', () => {
 		expect(modelsDevContextWindow(catalog, 'deepseek', 'gpt-5')).toBe(
 			undefined,
 		);
+	});
+});
+
+describe('effectiveContextWindow', () => {
+	test('declared provider limit wins over discovered model metadata', () => {
+		expect(effectiveContextWindow(400_000, 1_048_576)).toBe(400_000);
+	});
+
+	test('uses discovery only when provider limit is missing', () => {
+		expect(effectiveContextWindow(undefined, 1_048_576)).toBe(1_048_576);
+		expect(effectiveContextWindow(undefined, undefined)).toBe(128_000);
 	});
 });
 
@@ -344,10 +361,9 @@ describe('discoverModels (full-URL contract)', () => {
 	test('a successful fetch persists the catalog to the disk cache', async () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = (async () =>
-			new Response(
-				JSON.stringify({data: [{id: 'mimo-v2.5'}]}),
-				{status: 200},
-			)) as unknown as typeof fetch;
+			new Response(JSON.stringify({data: [{id: 'mimo-v2.5'}]}), {
+				status: 200,
+			})) as unknown as typeof fetch;
 		try {
 			await discoverModels({
 				id: 'xiaomi',
@@ -362,8 +378,7 @@ describe('discoverModels (full-URL contract)', () => {
 				readFileSync(modelCatalogCachePath(), 'utf8'),
 			) as {entries: Record<string, {models: string[]; at: number}>};
 			const savedModels =
-				saved.entries['https://api.together.xyz/v1/models']
-					?.models;
+				saved.entries['https://api.together.xyz/v1/models']?.models;
 			expect(savedModels).toEqual(['mimo-v2.5']);
 		} finally {
 			globalThis.fetch = originalFetch;

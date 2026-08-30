@@ -42,6 +42,44 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		);
 	});
 
+	test('custom commands are advertised for model-timed invocation', () => {
+		const prompt = buildSystemPrompt('full');
+		// Catalog may be empty in isolated tests, but the instruction and tool
+		// contract must exist whenever project commands are loaded.
+		expect(toolCatalog().some(tool => tool.name === 'command')).toBe(true);
+		expect(
+			toolCatalog().find(tool => tool.name === 'command')?.description,
+		).toMatch(/now or later/);
+	});
+	test('the Herdr skill is advertised to the model and loadable by exact name', () => {
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).toMatch(/- herdr \([^\n]+\/skills\/herdr\.md\):/);
+		expect(prompt).toContain('Use the skill tool to load a skill');
+	});
+	test('loaded skills are reused until compaction removes their instructions', () => {
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).toContain('Do not call the skill tool again');
+		expect(prompt).toContain('still present in conversation context');
+		expect(prompt).toContain('after context compaction removes');
+		const skill = toolCatalog().find(tool => tool.name === 'skill');
+		const check = toolCatalog().find(tool => tool.name === 'check_skill');
+		expect(skill?.description).toContain(
+			'reuse them and do not call this tool again',
+		);
+		expect(check?.description).toContain('Do not call routinely');
+	});
+	test('the model proactively delegates suitable work without duplicating it', () => {
+		const prompt = buildSystemPrompt('full');
+		expect(prompt).toContain('## Delegating work');
+		expect(prompt).toMatch(/Use the `agent` tool proactively/);
+		expect(prompt).toMatch(/broad codebase exploration/);
+		expect(prompt).toMatch(/independent read-only investigations in parallel/);
+		expect(prompt).toMatch(/do not delegate tiny tasks/i);
+		expect(prompt).toMatch(/Do not duplicate work already assigned/);
+		expect(prompt).toMatch(
+			/already a delegated subagent.*do not delegate again/i,
+		);
+	});
 	test('caveman instructions are injected into the stable prompt when enabled', () => {
 		setCavemanMode(true);
 		const prompt = buildSystemPrompt('full');
@@ -78,6 +116,15 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 				t => t.function.name,
 			),
 		).toEqual(['execute_bash', 'read_file']);
+	});
+
+	test('OpenAI request carries selected reasoning effort', () => {
+		const body = buildOpenAIRequestBody([{role: 'user', content: 'hi'}], [], {
+			id: 'openai',
+			model: 'gpt-5.4',
+			effort: 'xhigh',
+		});
+		expect(body.reasoning_effort).toBe('xhigh');
 	});
 
 	test('the tool head is byte-identical regardless of registration order', () => {

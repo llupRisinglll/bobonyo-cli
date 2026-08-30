@@ -5,38 +5,110 @@
  * errors without crashing the loop.
  */
 
-import {readFileSync, statSync, unlinkSync} from 'node:fs';
+import {readFileSync, realpathSync, statSync, unlinkSync} from 'node:fs';
+import {dirname, isAbsolute, relative, resolve} from 'node:path';
 import {
 	streamChat,
 	type ChatMessageLike,
 	type MockToolCall,
 	type ToolCatalogEntry,
 } from './client';
-import {runBash} from './bash';
+import {normalizeBashCommand, runBash, waitForBackgroundTask} from './bash';
 import {
-	commitMessagesFromArgs,
 	commitMessagesFromCommand,
 	gitCommitMessagesViolation,
 	ghPrMessagesViolation,
 } from './commit-guard';
-import {lintBody, loadSkills} from './custom';
-import {loadSubagents, subagentModel, subagentSystemPrompt} from './subagents';
-import {activeEndpoint, appendInfo, setActiveAgents, setTasks} from './state';
-import {snapshotMutationTargets} from './file-undo';
+import {
+	buildCommandInvocationPrompt,
+	expandCommandPrompt,
+	lintBody,
+	loadCustomCommands,
+	loadSkills,
+	parseCommandArguments,
+} from './custom';
+import {
+	loadSubagents,
+	subagentEndpoint,
+	subagentSystemPrompt,
+} from './subagents';
+import {
+	activeAgentRuns,
+	activeEndpoint,
+	appendInfo,
+	appendMessage,
+	setActiveAgents,
+	setActiveAgentRuns,
+	setTasks,
+	tasks,
+} from './state';
+import {snapshotFileBeforeMutation, snapshotMutationTargets} from './file-undo';
 import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
+import {runBashPostHooks, runBashPreHooks, runHooks} from './hooks';
+import {loadSettings} from './settings';
+import {
+	listMCPResources,
+	listMCPResourceTemplates,
+	readMCPResource,
+} from './mcp';
+import {projectRoot} from './project-paths';
+import {pathInsideWorkspace} from './bash-removal-guard';
+import {
+	enterWorktree,
+	exitWorktree,
+	inspectWorktrees,
+	removeWorktree,
+} from './worktree-tools';
+import {executeLspOperation} from './lsp-tool';
+import {fetchPublicText} from './public-web-fetch';
+import {validateToolArguments} from './tool-schema';
+import {
+	applyPatchDisplayChanges,
+	applyPatchPaths,
+	executeApplyPatch,
+} from './apply-patch';
+import {globWorkspace, grepWorkspace} from './search-tools';
+import {inspectWorkspaceImage} from './vision';
+import {
+	persistentProcessStatus,
+	startPersistentProcess,
+	stopPersistentProcess,
+	writePersistentProcess,
+} from './persistent-process';
 import type {Mode, ToolProfile} from './settings';
+import type {SessionTask, TaskStatus} from './state';
 
 export interface ToolResult {
 	tool_call_id: string;
 	content: string;
+	/** Display-only arguments; never sent back to model. */
+	displayArgs?: Record<string, unknown>;
 }
 
 export interface ToolContext {
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
+	/** Parent tool-call id, used by fan-out tools for child rows. */
+	toolCallId?: string;
 	/** Abort signal: the turn's AbortController, so long-running tools
 	 * (bash, MCP) can be killed when the user presses Esc. */
 	signal?: AbortSignal;
+	/** Workspace CWD used by shell tools. */
+	cwd?: string;
+	/** Stable sandbox boundary. Unlike cwd, shell `cd` never changes it. */
+	workspaceRoot?: string;
+	/** Called when a shell command changes its working directory. */
+	onCwdChange?: (cwd: string) => void;
+	/** Owner used to clean up autonomous background work safely. */
+	backgroundOwner?: 'user' | 'goal' | 'loop';
+	/** Harness-backed user interaction for model-facing question tools. */
+	askUser?: (
+		question: string,
+		options?: Array<{label: string; description?: string}>,
+		multiple?: boolean,
+	) => Promise<string>;
+	/** Persist asynchronous state changes such as background-agent progress. */
+	onStateChange?: () => void;
 }
 
 interface ToolDef {
@@ -50,12 +122,79 @@ interface ToolDef {
 	description?: string;
 	/** Model-facing JSON schema for the arguments (empty schema by default). */
 	parameters?: Record<string, unknown>;
+	/** Registration owner for collision diagnostics. */
+	source?: 'builtin' | 'custom' | 'mcp' | 'runtime';
+	/** Force approval even if tool is otherwise classified read-only. */
+	approvalRequired?: boolean;
 }
 
 const toolRegistry = new Map<string, ToolDef>();
+const activatedDeferredTools = new Set<string>();
+const sessionPermissionGrants = new Set<string>();
+const sessionExternalWriteGrants = new Set<string>();
+const NON_PARALLEL_TOOLS = new Set([
+	'question',
+	'request_permissions',
+	'agent',
+	'agent_message',
+	'agent_cancel',
+]);
+const activeAgentControllers = new Map<string, AbortController>();
+const activeAgentMessages = new Map<string, string[]>();
+const agentStatusWaiters = new Map<string, Set<() => void>>();
+/** Cancel every delegated agent shown in `/ps` Agents tab. */
+export function cancelActiveAgents(): number {
+	const controllers = [...activeAgentControllers.values()];
+	for (const controller of controllers) controller.abort();
+	return controllers.length;
+}
+/** Cancel one delegated agent by stable run id. */
+export function cancelActiveAgent(id: string): boolean {
+	const controller = activeAgentControllers.get(id);
+	if (!controller) return false;
+	controller.abort();
+	return true;
+}
+function notifyAgentStatus(id: string): void {
+	for (const wake of agentStatusWaiters.get(id) ?? []) wake();
+	agentStatusWaiters.delete(id);
+}
+function queueAgentMessage(id: string, message: string): void {
+	activeAgentMessages.set(id, [
+		...(activeAgentMessages.get(id) ?? []),
+		message,
+	]);
+	notifyAgentStatus(id);
+}
+function drainAgentMessages(id: string): string[] {
+	const messages = activeAgentMessages.get(id) ?? [];
+	activeAgentMessages.delete(id);
+	return messages;
+}
+function agentSignal(id: string, parent?: AbortSignal): AbortSignal {
+	const controller = new AbortController();
+	activeAgentControllers.set(id, controller);
+	if (parent?.aborted) controller.abort();
+	else
+		parent?.addEventListener('abort', () => controller.abort(), {once: true});
+	return controller.signal;
+}
 
-export function registerTool(name: string, def: ToolDef): void {
-	toolRegistry.set(name, def);
+export function registerTool(
+	name: string,
+	def: ToolDef,
+	options: {replace?: boolean} = {},
+): void {
+	if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(name)) {
+		throw new Error(`Invalid tool name: ${name}`);
+	}
+	const existing = toolRegistry.get(name);
+	if (existing && !options.replace) {
+		throw new Error(
+			`Tool name collision: ${name} (${existing.source ?? 'builtin'} vs ${def.source ?? 'runtime'})`,
+		);
+	}
+	toolRegistry.set(name, {...def, source: def.source ?? 'runtime'});
 }
 
 export function listTools(): string[] {
@@ -76,20 +215,73 @@ export function toolCatalog(): ToolCatalogEntry[] {
 	}));
 }
 
+export function searchDeferredTools(
+	query: string,
+	limit = 10,
+): ToolCatalogEntry[] {
+	const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+	return [...toolRegistry.entries()]
+		.filter(([, def]) => def.source === 'custom' || def.source === 'mcp')
+		.map(([name, def]) => ({
+			name,
+			description: def.description ?? '',
+			parameters: def.parameters,
+			score: terms.reduce(
+				(total, term) =>
+					total +
+					(name.toLowerCase().includes(term) ? 3 : 0) +
+					((def.description ?? '').toLowerCase().includes(term) ? 1 : 0),
+				0,
+			),
+		}))
+		.filter(tool => terms.length === 0 || tool.score > 0)
+		.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+		.slice(0, Math.max(1, Math.min(50, limit)))
+		.map(({score: _score, ...tool}) => tool);
+}
+
+export function resetDeferredToolActivation(): void {
+	activatedDeferredTools.clear();
+}
+export function resetSessionPermissionGrants(): void {
+	sessionPermissionGrants.clear();
+	sessionExternalWriteGrants.clear();
+}
+/** OpenCode-style model capability gate for patch-oriented GPT models. */
+export function modelUsesApplyPatch(model: string): boolean {
+	const id = model.toLowerCase();
+	return id.includes('gpt-') && !id.includes('oss') && !id.includes('gpt-4');
+}
+/** Model-facing catalog: eligible GPT models get apply_patch instead of overlapping edit/write tools. */
+export function toolCatalogForModel(model: string): ToolCatalogEntry[] {
+	const usePatch = modelUsesApplyPatch(model);
+	return toolCatalog().filter(tool => {
+		const def = toolRegistry.get(tool.name);
+		if (
+			(def?.source === 'custom' || def?.source === 'mcp') &&
+			!activatedDeferredTools.has(tool.name)
+		)
+			return false;
+		if (tool.name === 'apply_patch') return usePatch;
+		if (['string_replace', 'diff_edit'].includes(tool.name)) return false;
+		if (usePatch && ['edit_file', 'write_file'].includes(tool.name))
+			return false;
+		return true;
+	});
+}
+
 /** Mutation tools require approval in `normal` mode (B16). */
 const READ_ONLY_TOOLS = new Set([
 	'read_file',
-	'find_files',
-	'list_directory',
-	'search_file_contents',
-	'git_status',
-	'git_log',
-	'git_diff',
+	'glob',
+	'grep',
 	'web_search',
 	'fetch_url',
 	'skill',
+	'command',
 	'check_skill',
 	'agent',
+	'request_permissions',
 ]);
 
 export function requiresApproval(
@@ -100,10 +292,13 @@ export function requiresApproval(
 	if (mode === 'yolo' || mode === 'auto-accept') return false;
 	if (
 		alwaysAllow.includes(name) ||
-		alwaysAllow.includes(resolveToolName(name))
+		alwaysAllow.includes(resolveToolName(name)) ||
+		sessionPermissionGrants.has(name) ||
+		sessionPermissionGrants.has(resolveToolName(name))
 	) {
 		return false;
 	}
+	if (toolRegistry.get(resolveToolName(name))?.approvalRequired) return true;
 	if (READ_ONLY_TOOLS.has(name)) return false;
 	if (toolRegistry.get(name)?.readOnly) return false;
 	return true;
@@ -117,29 +312,33 @@ export function isReadOnlyTool(name: string): boolean {
 		toolRegistry.get(canonical)?.readOnly === true
 	);
 }
+/** Interactive/session tools execute sequentially even when read-only. */
+export function isParallelSafeTool(name: string): boolean {
+	return !NON_PARALLEL_TOOLS.has(resolveToolName(name));
+}
 
 /** Plan mode excludes mutation tools (D3 MODE_EXCLUDED_TOOLS). */
 const PLAN_EXCLUDED = new Set([
 	'write_file',
+	'edit_file',
 	'string_replace',
 	'diff_edit',
+	'apply_patch',
 	'delete_file',
-	'file_op',
 	'execute_bash',
+	'process_start',
+	'process_input',
+	'process_stop',
+	'enter_worktree',
+	'exit_worktree',
+	'remove_worktree',
 	'write_tasks',
-	'git_add',
-	'git_commit',
-	'git_pr',
+	'task_create',
+	'task_update',
 ]);
 
 const sleep = (ms: number): Promise<void> =>
 	new Promise(resolve => setTimeout(resolve, ms));
-
-/**
- * Stream a tool result line-by-line through onProgress so the running row
- * animates (parity: the original mocks reveal output progressively). The
- * settled result still returns the full content.
- */
 async function streamLines(
 	content: string,
 	ctx: ToolContext,
@@ -149,35 +348,36 @@ async function streamLines(
 	if (lines.length <= 1) return content;
 	let acc = '';
 	for (const line of lines) {
+		if (ctx.signal?.aborted) {
+			throw new DOMException('Aborted', 'AbortError');
+		}
 		acc = acc ? `${acc}\n${line}` : line;
 		ctx.onProgress?.(acc);
 		await sleep(delayMs);
 	}
 	return content;
 }
-
 /** Tool profiles (D7): nano = 7, minimal = 10 core tools. */
 const NANO_TOOLS = new Set([
 	'read_file',
-	'diff_edit',
+	'edit_file',
+	'apply_patch',
 	'write_file',
 	'delete_file',
 	'execute_bash',
 	'web_search',
-	'search_file_contents',
+	'command',
 ]);
 
 const MINIMAL_TOOLS = new Set([
 	'execute_bash',
 	'read_file',
 	'write_file',
-	'string_replace',
-	'diff_edit',
+	'edit_file',
 	'delete_file',
-	'search_file_contents',
-	'find_files',
 	'web_search',
 	'agent',
+	'command',
 ]);
 
 export function resolveProfile(
@@ -200,6 +400,22 @@ export function toolAvailability(
 	if (mode === 'plan' && PLAN_EXCLUDED.has(name)) {
 		return {available: false, reason: 'not available in plan mode'};
 	}
+	const usePatch = modelUsesApplyPatch(model);
+	if (name === 'apply_patch' && !usePatch) {
+		return {
+			available: false,
+			reason: 'is only available to supported GPT models',
+		};
+	}
+	if (
+		usePatch &&
+		['write_file', 'edit_file', 'string_replace', 'diff_edit'].includes(name)
+	) {
+		return {
+			available: false,
+			reason: 'is replaced by apply_patch for this GPT model',
+		};
+	}
 	const resolved = resolveProfile(profile, model);
 	if (resolved === 'nano' && !NANO_TOOLS.has(name)) {
 		return {available: false, reason: `not available in nano profile`};
@@ -221,6 +437,64 @@ export function isSingleToolProfile(
 function text(args: Record<string, unknown>, key: string): string {
 	return typeof args[key] === 'string' ? (args[key] as string) : '';
 }
+function pathWithinWorkspace(path: string, cwd: string): boolean {
+	const rel = relative(resolve(cwd), resolve(path));
+	return (
+		rel === '' ||
+		(rel !== '..' &&
+			!rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
+			!isAbsolute(rel))
+	);
+}
+
+function externalGrantRoot(path: string): string {
+	const target = resolve(path);
+	const parent = dirname(target);
+	const gitRoot = projectRoot(parent);
+	return pathWithinWorkspace(target, gitRoot) ? gitRoot : dirname(target);
+}
+
+async function requestExternalWriteAccess(
+	path: string,
+	ctx: ToolContext,
+): Promise<string | null> {
+	const target = resolve(path);
+	const workspaceRoot = resolve(ctx.workspaceRoot || ctx.cwd || process.cwd());
+	if (pathWithinWorkspace(target, workspaceRoot)) return workspaceRoot;
+	for (const granted of sessionExternalWriteGrants) {
+		if (pathWithinWorkspace(target, granted)) return granted;
+	}
+	if (!ctx.askUser || process.env.NANOCODER_NONINTERACTIVE) return null;
+	const folder = externalGrantRoot(target);
+	const answer = await ctx.askUser(
+		`Allow edits in external folder?\n${folder}`,
+		[
+			{label: 'Allow once', description: 'Allow this operation only.'},
+			{
+				label: 'Allow for session',
+				description: 'Allow later edits under this folder until session ends.',
+			},
+			{label: 'Deny', description: 'Keep folder read-only.'},
+		],
+	);
+	if (answer === 'Allow for session') sessionExternalWriteGrants.add(folder);
+	return answer === 'Allow once' || answer === 'Allow for session'
+		? folder
+		: null;
+}
+
+export function readonlyFailurePath(content: string): string | null {
+	const patterns = [
+		/read-only file system, (?:open|rename|mkdir|unlink) ['"]([^'"]+)['"]/i,
+		/(?:cannot (?:create|touch|open|move|remove)[^'"\n]*):?\s*['"]([^'"]+)['"]\s*:\s*Read-only file system/i,
+		/['"]([^'"]+)['"]\s*:\s*Read-only file system/i,
+	];
+	for (const pattern of patterns) {
+		const match = pattern.exec(content);
+		if (match?.[1]) return match[1];
+	}
+	return null;
+}
 
 /**
  * Display name for a tool call (parity flavor of nanocoder's formatter
@@ -233,18 +507,39 @@ const CLAUDE_CODE_NAMES: Record<string, string> = {
 	'execute_bash:user': 'Executed Bash',
 	read_file: 'Read',
 	write_file: 'Write',
+	edit_file: 'Edit',
 	string_replace: 'Edit',
 	diff_edit: 'Edit',
+	apply_patch: 'ApplyPatch',
 	delete_file: 'Delete',
-	find_files: 'Find',
-	search_file_contents: 'Grep',
-	list_directory: 'LS',
+	glob: 'Glob',
+	grep: 'Grep',
 	web_search: 'WebSearch',
 	fetch_url: 'WebFetch',
 	agent: 'agent',
+	agent_message: 'AgentMessage',
+	agent_status: 'AgentStatus',
+	agent_wait: 'AgentWait',
+	agent_cancel: 'AgentCancel',
+	question: 'Question',
+	request_permissions: 'RequestPermissions',
+	process_start: 'ProcessStart',
+	process_input: 'ProcessInput',
+	process_status: 'ProcessStatus',
+	process_stop: 'ProcessStop',
+	lsp: 'LSP',
+	enter_worktree: 'EnterWorktree',
+	exit_worktree: 'ExitWorktree',
+	list_worktrees: 'ListWorktrees',
+	remove_worktree: 'RemoveWorktree',
 	skill: 'Skill',
+	command: 'Command',
 	check_skill: 'Skill',
 	write_tasks: 'Tasks',
+	task_create: 'TaskCreate',
+	task_list: 'TaskList',
+	task_get: 'TaskGet',
+	task_update: 'TaskUpdate',
 };
 
 export function displayToolName(name: string): string {
@@ -264,42 +559,16 @@ export function resolveToolName(name: string): string {
 }
 
 /**
- * Related-tool families for compacted tool groups (mirrors nanocoder's
- * TOOL_GROUP_FAMILIES). Tools in the same family share ONE compacted block;
- * everything else is standalone (same-name standalone calls still tally,
- * e.g. `✦ Ran Bash ×3`).
- */
-const TOOL_GROUP_FAMILIES: Record<string, string> = {
-	web_search: 'web',
-	fetch_url: 'web',
-	read_file: 'file-read',
-	list_directory: 'file-read',
-	find_files: 'search',
-	search_file_contents: 'search',
-	git_status: 'git',
-	git_diff: 'git',
-	git_log: 'git',
-	git_add: 'git',
-	git_commit: 'git',
-	git_push: 'git',
-	git_pull: 'git',
-	git_branch: 'git',
-	git_stash: 'git',
-	git_reset: 'git',
-	git_pr: 'git',
-	skill: 'skill',
-	check_skill: 'skill',
-};
-
-export function toolFamily(name: string): string {
-	return TOOL_GROUP_FAMILIES[name] ?? `__standalone__:${name}`;
-}
-
-/**
  * File-write tools always render their own rows (CompactFileResult in
  * nanocoder), never grouped, even when the same tool runs multiple times.
  */
-const FILE_WRITE_TOOLS = new Set(['write_file', 'string_replace', 'diff_edit']);
+const FILE_WRITE_TOOLS = new Set([
+	'write_file',
+	'edit_file',
+	'string_replace',
+	'diff_edit',
+	'apply_patch',
+]);
 
 export function isFileWriteTool(name: string): boolean {
 	return FILE_WRITE_TOOLS.has(name);
@@ -311,34 +580,20 @@ export function isFileWriteTool(name: string): boolean {
  */
 export function toolArgsSummary(call: MockToolCall): string {
 	const args = call.arguments;
-	// Git tools synthesize the equivalent CLI invocation from the structured
-	// args (parity: nanocoder's getCompactToolDetail) so the header shows
-	// what actually ran (`✦ git_diff(git diff --staged --stat)`).
-	if (
-		call.name === 'git_diff' ||
-		call.name === 'git_log' ||
-		call.name === 'git_status'
-	) {
-		if (call.name === 'git_status') return 'git status';
-		const parts = call.name === 'git_diff' ? ['git diff'] : ['git log'];
-		if (call.name === 'git_diff') {
-			if (args?.staged === true) parts.push('--staged');
-			if (args?.stat === true) parts.push('--stat');
-		} else if (typeof args?.count === 'number') {
-			parts.push(`-n ${args.count}`);
-		}
-		if (typeof args?.base === 'string' && args.base) parts.push(args.base);
-		if (typeof args?.author === 'string' && args.author)
-			parts.push(`--author=${args.author}`);
-		if (typeof args?.since === 'string' && args.since)
-			parts.push(`--since=${args.since}`);
-		if (typeof args?.file === 'string' && args.file) parts.push(args.file);
-		return parts.join(' ');
-	}
 	const order =
 		call.name === 'skill'
 			? ['name', 'path', 'description']
-			: ['command', 'path', 'pattern', 'query', 'name', 'description'];
+			: [
+					'command',
+					'path',
+					'pattern',
+					'query',
+					'element',
+					'target',
+					'url',
+					'name',
+					'description',
+				];
 	for (const key of order) {
 		const value = args?.[key];
 		if (typeof value === 'string' && value.trim()) return value.trim();
@@ -355,6 +610,14 @@ export function toolDisplayDetail(call: MockToolCall): string {
 		const type = String(call.arguments.subagent_type ?? 'explore');
 		const task = toolArgsSummary(call);
 		return `agent:${type}${task ? `(${task})` : ''}`;
+	}
+	if (call.name.startsWith('agent_')) {
+		return String(call.arguments.agent_id ?? toolArgsSummary(call));
+	}
+	if (call.name === 'lsp') {
+		return [call.arguments.operation, call.arguments.query]
+			.filter(value => typeof value === 'string' && value)
+			.join(' ');
 	}
 	return toolArgsSummary(call);
 }
@@ -395,14 +658,65 @@ export async function executeTool(
 	if (!def) {
 		return {tool_call_id: call.id, content: `Unknown tool: ${call.name}`};
 	}
+	const validation = validateToolArguments(
+		canonicalCall.arguments,
+		def.parameters,
+	);
+	if (!validation.valid) {
+		return {
+			tool_call_id: call.id,
+			content: `Error: Invalid tool arguments for ${canonicalName}: ${validation.errors.join('; ')}`,
+		};
+	}
 	try {
+		let effectiveArgs = canonicalCall.arguments;
+		if (canonicalName !== 'execute_bash') {
+			const pre = await runHooks({
+				event: 'PreToolUse',
+				toolName: canonicalName,
+				toolInput: effectiveArgs,
+			});
+			if (pre.denied) throw new Error(pre.denied);
+			if (pre.updatedInput) effectiveArgs = pre.updatedInput;
+		}
 		// /undo parity (openclaude rewind): snapshot the file(s) this
 		// mutation will touch BEFORE executing, so a later undo can restore
 		// them alongside the transcript truncation. Non-file tools no-op.
-		snapshotMutationTargets(canonicalName, canonicalCall.arguments);
-		const content = await def.execute(canonicalCall.arguments, ctx);
-		return {tool_call_id: call.id, content};
+		snapshotMutationTargets(
+			canonicalName,
+			effectiveArgs,
+			ctx.cwd || process.cwd(),
+		);
+		let displayArgs: Record<string, unknown> | undefined =
+			canonicalName === 'apply_patch'
+				? {
+						...effectiveArgs,
+						_applyPatchDisplay: applyPatchDisplayChanges(
+							ctx.cwd || process.cwd(),
+							text(effectiveArgs, 'patchText'),
+						),
+					}
+				: undefined;
+		const content = await def.execute(effectiveArgs, {
+			...ctx,
+			toolCallId: call.id,
+		});
+		if (canonicalName === 'write_tasks') {
+			displayArgs = {tasks: tasks().map(task => ({...task}))};
+		}
+		if (canonicalName !== 'execute_bash') {
+			await runHooks({
+				event: 'PostToolUse',
+				toolName: canonicalName,
+				toolInput: effectiveArgs,
+				data: {tool_result: content},
+			});
+		}
+		return {tool_call_id: call.id, content, displayArgs};
 	} catch (error) {
+		// Cancellation must unwind the whole turn. Converting AbortError into a
+		// normal tool result lets the model continue while agents still clean up.
+		if (error instanceof Error && error.name === 'AbortError') throw error;
 		return {
 			tool_call_id: call.id,
 			content: `Error: ${error instanceof Error ? error.message : String(error)}`,
@@ -411,9 +725,291 @@ export async function executeTool(
 }
 
 registerTool('read_file', {
-	async execute(args) {
-		const path = text(args, 'path') || 'README.md';
-		return Bun.file(path).text();
+	description:
+		'Read a UTF-8 text file from the current workspace. Supports an optional ' +
+		'1-based line offset and line limit; output is capped to prevent oversized tool results.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {
+				type: 'string',
+				description: 'Absolute or cwd-relative file path.',
+			},
+			offset: {
+				type: 'number',
+				description: 'First 1-based line to return. Defaults to 1.',
+			},
+			limit: {
+				type: 'number',
+				description: 'Maximum lines to return. Defaults to 2000, maximum 5000.',
+			},
+		},
+		required: ['path'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		const requested = text(args, 'path');
+		if (!requested) return 'Error: read_file requires a path.';
+		const cwd = ctx.cwd || process.cwd();
+		const workspaceRoot = ctx.workspaceRoot || cwd;
+		const path = resolve(cwd, requested);
+		if (!pathWithinWorkspace(path, workspaceRoot))
+			return `Error: ${requested} is outside the current workspace.`;
+		const file = Bun.file(path);
+		if (!(await file.exists())) return `Error: ${requested} does not exist`;
+		try {
+			if (
+				!pathWithinWorkspace(realpathSync(path), realpathSync(workspaceRoot))
+			) {
+				return `Error: ${requested} resolves outside the current workspace.`;
+			}
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+		if (file.size > 10 * 1024 * 1024) {
+			return `Error: ${requested} is larger than the 10 MiB read limit.`;
+		}
+		const source = await file.text();
+		if (source.includes('\u0000'))
+			return `Error: ${requested} appears to be binary.`;
+		const lines = source.replace(/\r\n/g, '\n').split('\n');
+		const offset = Math.max(1, Math.floor(Number(args.offset) || 1));
+		const limit = Math.max(
+			1,
+			Math.min(5000, Math.floor(Number(args.limit) || 2000)),
+		);
+		const visible = lines.slice(offset - 1, offset - 1 + limit);
+		const hidden = Math.max(0, lines.length - (offset - 1 + visible.length));
+		return `${visible.join('\n')}${hidden > 0 ? `\n… +${hidden} more lines` : ''}`;
+	},
+});
+registerTool('view_image', {
+	description:
+		'Inspect a workspace image with the configured vision model. Supports PNG, JPEG, GIF, and WebP up to 20 MiB; paths cannot escape the workspace.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {type: 'string'},
+			question: {type: 'string'},
+		},
+		required: ['path'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		try {
+			return await inspectWorkspaceImage(
+				text(args, 'path'),
+				text(args, 'question'),
+				ctx.cwd || process.cwd(),
+			);
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	},
+});
+registerTool('tool_search', {
+	description:
+		'Search deferred custom and MCP tools by capability. Matching tools become available in the next model round; use this instead of guessing hidden tool names.',
+	parameters: {
+		type: 'object',
+		properties: {
+			query: {type: 'string'},
+			limit: {type: 'integer', minimum: 1, maximum: 50},
+		},
+		required: ['query'],
+	},
+	readOnly: true,
+	execute(args) {
+		const matches = searchDeferredTools(
+			text(args, 'query'),
+			Number(args.limit) || 10,
+		);
+		for (const match of matches) activatedDeferredTools.add(match.name);
+		if (matches.length === 0) return 'No deferred tools matched.';
+		return matches
+			.map(
+				tool =>
+					`${tool.name}: ${tool.description}\n${JSON.stringify(tool.parameters ?? {})}`,
+			)
+			.join('\n\n');
+	},
+});
+registerTool('lsp', {
+	description:
+		'Query code intelligence without editing files. Supports installed server ' +
+		'discovery, project diagnostics, symbol definitions, and references. ' +
+		'Symbol/reference queries use a fast source search fallback when a live server is unavailable.',
+	parameters: {
+		type: 'object',
+		properties: {
+			operation: {
+				type: 'string',
+				enum: [
+					'servers',
+					'diagnostics',
+					'symbols',
+					'references',
+					'definition',
+					'hover',
+				],
+			},
+			query: {type: 'string', description: 'Symbol or reference name.'},
+			path: {
+				type: 'string',
+				description: 'Optional cwd-relative file or directory scope.',
+			},
+			line: {
+				type: 'number',
+				description: '1-based source line for protocol queries.',
+			},
+			character: {
+				type: 'number',
+				description: '1-based source column for protocol queries.',
+			},
+		},
+		required: ['operation'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		return executeLspOperation(ctx.cwd || process.cwd(), {
+			operation: text(args, 'operation'),
+			query: text(args, 'query'),
+			path: text(args, 'path'),
+			line: Number(args.line) || undefined,
+			character: Number(args.character) || undefined,
+		});
+	},
+});
+
+registerTool('question', {
+	description:
+		'Ask the user one or more focused questions when required information ' +
+		'cannot be inferred safely. Each question may include suggested options; ' +
+		'the user can still type a custom answer. Do not use for routine confirmation.',
+	parameters: {
+		type: 'object',
+		properties: {
+			questions: {
+				type: 'array',
+				items: {
+					type: 'object',
+					properties: {
+						header: {type: 'string'},
+						question: {type: 'string'},
+						options: {
+							type: 'array',
+							items: {
+								oneOf: [
+									{type: 'string'},
+									{
+										type: 'object',
+										properties: {
+											label: {type: 'string'},
+											description: {type: 'string'},
+										},
+										required: ['label'],
+									},
+								],
+							},
+						},
+						multi_select: {type: 'boolean'},
+					},
+					required: ['question'],
+				},
+			},
+		},
+		required: ['questions'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		if (!ctx.askUser) return 'Error: user interaction is unavailable.';
+		const questions = Array.isArray(args.questions) ? args.questions : [];
+		if (questions.length === 0)
+			return 'Error: question requires at least one question.';
+		const answers: string[] = [];
+		for (const [index, value] of questions.entries()) {
+			if (!value || typeof value !== 'object') continue;
+			const row = value as Record<string, unknown>;
+			const prompt = String(row.question ?? '').trim();
+			if (!prompt) continue;
+			const header = String(row.header ?? '').trim();
+			const options = Array.isArray(row.options)
+				? row.options.flatMap(option => {
+						if (typeof option === 'string') {
+							const label = option.trim();
+							return label ? [{label}] : [];
+						}
+						if (!option || typeof option !== 'object') return [];
+						const value = option as Record<string, unknown>;
+						const label = String(value.label ?? '').trim();
+						return label
+							? [
+									{
+										label,
+										description:
+											String(value.description ?? '').trim() || undefined,
+									},
+								]
+							: [];
+					})
+				: [];
+			const rendered = header ? `[${header}] ${prompt}` : prompt;
+			const answer = await ctx.askUser(
+				rendered,
+				options,
+				row.multi_select === true,
+			);
+			answers.push(`${index + 1}. ${answer || '(cancelled)'}`);
+			if (!answer) break;
+		}
+		return `User answers:\n${answers.join('\n')}`;
+	},
+});
+
+registerTool('request_permissions', {
+	description:
+		'Request session-scoped approval for specific tool names. State why each capability is needed. Grants reduce repeated prompts but never bypass workspace confinement, deletion guards, sandboxing, or other hard safety checks.',
+	parameters: {
+		type: 'object',
+		properties: {
+			permissions: {
+				type: 'array',
+				items: {
+					type: 'object',
+					properties: {
+						tool: {type: 'string'},
+						reason: {type: 'string'},
+					},
+					required: ['tool', 'reason'],
+				},
+			},
+		},
+		required: ['permissions'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		if (!ctx.askUser) return 'Error: user interaction is unavailable.';
+		const requested = Array.isArray(args.permissions)
+			? args.permissions.flatMap(value => {
+					if (!value || typeof value !== 'object') return [];
+					const row = value as Record<string, unknown>;
+					const tool = String(row.tool ?? '').trim();
+					const reason = String(row.reason ?? '').trim();
+					return tool && reason ? [{tool: resolveToolName(tool), reason}] : [];
+				})
+			: [];
+		if (requested.length === 0) return 'Error: no valid permissions requested.';
+		const unknown = requested.filter(row => !toolRegistry.has(row.tool));
+		if (unknown.length)
+			return `Error: unknown tools: ${unknown.map(row => row.tool).join(', ')}`;
+		const answer = await ctx.askUser(
+			`Grant these tools for this session?\n${requested.map(row => `${row.tool}: ${row.reason}`).join('\n')}`,
+			[{label: 'Grant'}, {label: 'Deny'}],
+			false,
+		);
+		if (answer !== 'Grant') return 'Permission denied.';
+		for (const row of requested) sessionPermissionGrants.add(row.tool);
+		return `Granted for this session: ${requested.map(row => row.tool).join(', ')}. Hard safety boundaries remain enforced.`;
 	},
 });
 
@@ -421,8 +1017,10 @@ registerTool('execute_bash', {
 	description:
 		'Run a shell command in the terminal (builds, tests, git, process ' +
 		'management, file inspection — anything no dedicated file tool ' +
-		'covers; prefer write_file/string_replace/diff_edit for editing ' +
-		'files and delete_file for deleting them). ' +
+		'covers; prefer edit_file/write_file or apply_patch for editing ' +
+		'files and delete_file for deleting them). Commands start in the ' +
+		'Current Working Directory from SYSTEM INFORMATION; do not prepend ' +
+		'`cd` unless intentionally changing directories. ' +
 		'ALWAYS write a one-line PRE-TOOL BRIEF before calling this tool — ' +
 		'what you are about to run and why, ≤8 words (e.g. "run tests to ' +
 		'verify") — THEN call it in the same message; this requirement ' +
@@ -449,7 +1047,14 @@ registerTool('execute_bash', {
 		required: ['command'],
 	},
 	async execute(args, ctx) {
-		const command = text(args, 'command') || 'true';
+		let command = text(args, 'command') || 'true';
+		// Capture workspace before async hooks. process.cwd() is global and can
+		// change during resume/clear while hooks are running.
+		const cwd = ctx.cwd || projectRoot(process.cwd());
+		// Claude-compatible user + nearest project PreToolUse hooks. Hooks may
+		// deny the call or rewrite input (RTK); denial happens before mutation.
+		const hooked = await runBashPreHooks(command);
+		command = normalizeBashCommand(hooked.command, cwd);
 		// House rule (git/gh messages): validate BEFORE running so a bad
 		// commit or PR never lands. Pure, unit-tested (commit-guard.ts).
 		if (/\bgit\s+commit\b/i.test(command)) {
@@ -474,16 +1079,203 @@ registerTool('execute_bash', {
 				);
 			}
 		}
-		const result = await runBash(command, ctx.onProgress, ctx.signal);
+		let result = await runBash(
+			command,
+			ctx.onProgress,
+			ctx.signal,
+			cwd,
+			ctx.onCwdChange,
+			ctx.backgroundOwner ?? 'user',
+			ctx.workspaceRoot,
+			[...sessionExternalWriteGrants],
+		);
+		const blockedPath = readonlyFailurePath(result.content);
+		if (blockedPath) {
+			const absolute = resolve(cwd, blockedPath);
+			const grant = await requestExternalWriteAccess(absolute, ctx);
+			if (!grant) {
+				return `Permission denied: external folder remains read-only: ${externalGrantRoot(absolute)}`;
+			}
+			result = await runBash(
+				command,
+				ctx.onProgress,
+				ctx.signal,
+				cwd,
+				ctx.onCwdChange,
+				ctx.backgroundOwner ?? 'user',
+				ctx.workspaceRoot,
+				[...sessionExternalWriteGrants, grant],
+			);
+		}
+		// Suspend model loop until auto-backgrounded command exits. Model gets
+		// one final result, so polling commands waste neither tokens nor calls.
+		if (result.cwd) ctx.onCwdChange?.(result.cwd);
+		const content = result.task?.running
+			? await waitForBackgroundTask(result.task, ctx.signal)
+			: result.content;
+		await runBashPostHooks(command, content);
+		return content;
+	},
+});
+registerTool('process_start', {
+	description:
+		'Start a persistent sandboxed process and return its id immediately. Use process_input, process_status, and process_stop for lifecycle control.',
+	parameters: {
+		type: 'object',
+		properties: {command: {type: 'string'}},
+		required: ['command'],
+	},
+	execute(args, ctx) {
+		const row = startPersistentProcess(
+			text(args, 'command'),
+			ctx.cwd || process.cwd(),
+		);
+		return `Started ${row.id} (pid ${row.proc.pid}).`;
+	},
+});
+registerTool('process_input', {
+	description: 'Write text to a running persistent process stdin.',
+	parameters: {
+		type: 'object',
+		properties: {process_id: {type: 'string'}, input: {type: 'string'}},
+		required: ['process_id', 'input'],
+	},
+	execute(args) {
+		return writePersistentProcess(
+			text(args, 'process_id'),
+			text(args, 'input'),
+		);
+	},
+});
+registerTool('process_status', {
+	description:
+		'Inspect one persistent process or list all persistent processes with recent output.',
+	parameters: {type: 'object', properties: {process_id: {type: 'string'}}},
+	readOnly: true,
+	execute(args) {
+		return persistentProcessStatus(text(args, 'process_id') || undefined);
+	},
+});
+registerTool('process_stop', {
+	description: 'Stop one persistent process and its process group.',
+	parameters: {
+		type: 'object',
+		properties: {process_id: {type: 'string'}},
+		required: ['process_id'],
+	},
+	execute(args) {
+		return stopPersistentProcess(text(args, 'process_id'));
+	},
+});
+
+registerTool('enter_worktree', {
+	description:
+		'Create and enter an isolated git worktree, or enter an existing registered ' +
+		'worktree. New worktrees stay under the repository .bobonyo/worktrees directory.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {type: 'string', description: 'New branch/worktree name.'},
+			path: {
+				type: 'string',
+				description:
+					'Existing worktree path, or optional path for the new worktree.',
+			},
+			base: {
+				type: 'string',
+				description:
+					'Git revision used as the new branch base. Defaults to HEAD.',
+			},
+		},
+	},
+	async execute(args, ctx) {
+		const result = enterWorktree(ctx.cwd || process.cwd(), {
+			name: text(args, 'name'),
+			path: text(args, 'path'),
+			base: text(args, 'base'),
+		});
+		if (result.cwd) ctx.onCwdChange?.(result.cwd);
 		return result.content;
+	},
+});
+registerTool('exit_worktree', {
+	description:
+		'Leave the current linked worktree and return to the repository main worktree. ' +
+		'This does not delete the linked worktree or its branch.',
+	parameters: {type: 'object', properties: {}},
+	async execute(_args, ctx) {
+		const result = exitWorktree(ctx.cwd || process.cwd());
+		if (result.cwd) ctx.onCwdChange?.(result.cwd);
+		return result.content;
+	},
+});
+
+registerTool('list_worktrees', {
+	description:
+		'Inspect registered git worktrees, showing current location, branch, clean/dirty state, and lock/prune status.',
+	parameters: {type: 'object', properties: {}},
+	readOnly: true,
+	execute(_args, ctx) {
+		return inspectWorktrees(ctx.cwd || process.cwd()).content;
+	},
+});
+registerTool('remove_worktree', {
+	description:
+		'Remove a registered non-main git worktree only when it is clean and its branch is merged into HEAD. ' +
+		'Optionally delete the merged branch. Never forces removal or discards changes.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {type: 'string', description: 'Registered worktree path.'},
+			delete_branch: {
+				type: 'boolean',
+				description: 'Also delete the merged local branch.',
+			},
+		},
+		required: ['path'],
+	},
+	execute(args, ctx) {
+		return removeWorktree(ctx.cwd || process.cwd(), {
+			path: text(args, 'path'),
+			deleteBranch: args.delete_branch === true,
+		}).content;
+	},
+});
+
+registerTool('apply_patch', {
+	description:
+		'Apply one atomic file-oriented patch. Patch text must use *** Begin Patch / ' +
+		'*** End Patch with Add File, Update File, Delete File, and optional Move to sections. ' +
+		'All changes are verified before writing and rolled back if application fails.',
+	parameters: {
+		type: 'object',
+		properties: {
+			patchText: {
+				type: 'string',
+				description:
+					'Complete apply_patch text including Begin Patch and End Patch markers.',
+			},
+		},
+		required: ['patchText'],
+	},
+	execute(args, ctx) {
+		const patchText = text(args, 'patchText');
+		if (!patchText) return 'Error: apply_patch requires patchText.';
+		const cwd = ctx.cwd || process.cwd();
+		try {
+			for (const path of applyPatchPaths(cwd, patchText)) {
+				snapshotFileBeforeMutation(path);
+			}
+			return executeApplyPatch(cwd, patchText);
+		} catch (error) {
+			return `Error: apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`;
+		}
 	},
 });
 
 registerTool('write_file', {
 	description:
-		'Create or fully overwrite a file with new content. For small edits ' +
-		'prefer string_replace (targeted) or diff_edit (patch) so the change ' +
-		'is visible as a diff.',
+		'Create or fully overwrite a file with new content. For small edits prefer edit_file so the change stays targeted and visible as a diff.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -498,11 +1290,16 @@ registerTool('write_file', {
 		},
 		required: ['path', 'content'],
 	},
-	async execute(args) {
-		const path = text(args, 'path') || 'scratch/mock-write.txt';
+	async execute(args, ctx) {
+		const requested = text(args, 'path') || 'scratch/mock-write.txt';
+		const cwd = ctx.cwd || process.cwd();
+		const path = resolve(cwd, requested);
+		if (!(await requestExternalWriteAccess(path, ctx))) {
+			return `Permission denied: external folder remains read-only: ${externalGrantRoot(path)}`;
+		}
 		const body = text(args, 'content') ?? '';
 		await Bun.write(path, body);
-		return `Wrote ${body.length} chars to ${path}\n${body}`;
+		return `Wrote ${body.length} chars to ${requested}\n${body}`;
 	},
 });
 
@@ -554,6 +1351,44 @@ registerTool('string_replace', {
 	},
 });
 
+registerTool('edit_file', {
+	description:
+		'Replace one exact, unique substring in a workspace file. Fails when the target is missing or ambiguous; use write_file only for full-file replacement.',
+	parameters: {
+		type: 'object',
+		properties: {
+			path: {type: 'string'},
+			old_string: {type: 'string'},
+			new_string: {type: 'string'},
+		},
+		required: ['path', 'old_string', 'new_string'],
+	},
+	async execute(args, ctx) {
+		const requested = text(args, 'path');
+		const cwd = ctx.cwd || process.cwd();
+		const workspaceRoot = ctx.workspaceRoot || cwd;
+		const path = resolve(cwd, requested);
+		if (
+			!pathWithinWorkspace(path, workspaceRoot) &&
+			!(await requestExternalWriteAccess(path, ctx))
+		) {
+			return `Permission denied: external folder remains read-only: ${externalGrantRoot(path)}`;
+		}
+		const file = Bun.file(path);
+		if (!(await file.exists())) return `Error: ${requested} does not exist`;
+		const current = await file.text();
+		const oldString = text(args, 'old_string');
+		const newString = text(args, 'new_string');
+		const count = oldString ? current.split(oldString).length - 1 : 0;
+		if (count !== 1)
+			return `Error: old_string matched ${count} times in ${requested}; expected exactly 1.`;
+		const baseLine = current.split(oldString, 1)[0]?.split('\n').length ?? 1;
+		const updated = current.replace(oldString, newString);
+		await Bun.write(path, updated);
+		return `Replaced 1 occurrence in ${requested} (at line ${baseLine})\n${updated}`;
+	},
+});
+
 registerTool('diff_edit', {
 	description:
 		'Apply a unified diff (patch -p1 --forward) to the repository. Use for ' +
@@ -602,14 +1437,20 @@ registerTool('delete_file', {
 		},
 		required: ['path'],
 	},
-	async execute(args) {
+	async execute(args, ctx) {
 		const path = text(args, 'path') || 'scratch/mock-delete.txt';
+		const cwd = ctx.cwd || process.cwd();
+		const workspaceRoot = ctx.workspaceRoot || cwd;
+		const absolute = resolve(cwd, path);
+		if (!pathInsideWorkspace(absolute, workspaceRoot)) {
+			return `REFUSED deletion outside current workspace or of workspace root: ${path}`;
+		}
 		try {
-			const stat = statSync(path);
+			const stat = statSync(absolute);
 			if (stat.isDirectory()) {
 				return `Error: ${path} is a directory — delete_file only removes files (use bash for directories).`;
 			}
-			unlinkSync(path);
+			unlinkSync(absolute);
 			return `Deleted ${path}`;
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
@@ -619,251 +1460,233 @@ registerTool('delete_file', {
 	},
 });
 
-registerTool('git_status', {
-	async execute(args, ctx) {
-		const cwd = text(args, 'cwd') || process.cwd();
-		const result = Bun.spawnSync(['git', 'status', '--short'], {
-			cwd,
-		});
-		return streamLines(
-			(result.stdout?.toString() ?? '').trim() || 'working tree clean',
-			ctx,
-		);
-	},
-});
-
-registerTool('git_log', {
-	async execute(args, ctx) {
-		const cwd = text(args, 'cwd') || process.cwd();
-		const count = Math.max(1, Math.min(50, Number(args.count) || 10));
-		const result = Bun.spawnSync(
-			['git', 'log', `-n ${count}`, '--pretty=format:%h %s'],
-			{cwd},
-		);
-		const out = (result.stdout?.toString() ?? '').trim();
-		return streamLines(`EXIT_CODE: ${result.exitCode}\n${out}`.trim(), ctx);
-	},
-});
-
-registerTool('git_diff', {
-	async execute(args, ctx) {
-		const cwd = text(args, 'cwd') || process.cwd();
-		const staged = args.staged === true;
-		const stat = args.stat === true;
-		const result = Bun.spawnSync(
-			[
-				'git',
-				'diff',
-				...(staged ? ['--staged'] : []),
-				...(stat ? ['--stat'] : []),
-			],
-			{cwd},
-		);
-		const out = (result.stdout?.toString() ?? '').trim();
-		return streamLines(`EXIT_CODE: ${result.exitCode}\n${out}`.trim(), ctx);
-	},
-});
-
-for (const name of ['git_add', 'git_push', 'git_pull', 'git_branch']) {
-	registerTool(name, {
-		execute(args) {
-			const cwd = text(args, 'cwd') || process.cwd();
-			const rest = Array.isArray(args.args) ? args.args.map(String) : [];
-			const sub = name.slice('git_'.length);
-			const result = Bun.spawnSync(['git', sub, ...rest], {cwd});
-			const out = (result.stdout?.toString() ?? '').trim();
-			const err = (result.stderr?.toString() ?? '').trim();
-			return `EXIT_CODE: ${result.exitCode}\n${out}${err ? `\n${err}` : ''}`.trim();
-		},
-	});
-}
-
-registerTool('git_commit', {
+registerTool('glob', {
 	description:
-		'Create a git commit. The message must be a SINGLE line with exactly ' +
-		'ONE `-m` flag and NO AI-attribution lines (Co-authored-by:, ' +
-		'Generated by:, etc.) — e.g. `-m "fix: typo in parser"`. Violating ' +
-		'messages are REFUSED.',
-	execute(args) {
-		const cwd = text(args, 'cwd') || process.cwd();
-		const rest = Array.isArray(args.args) ? args.args.map(String) : [];
-		// House rule: refuse multi-line / AI-attributed commit messages
-		// before they land (pure, unit-tested in commit-guard.ts).
-		const violation = gitCommitMessagesViolation(commitMessagesFromArgs(rest));
-		if (violation) {
-			return (
-				`REFUSED to commit — ${violation}.\n` +
-				`Redo with exactly one single-line -m and no AI attribution.`
-			);
-		}
-		const result = Bun.spawnSync(['git', 'commit', ...rest], {cwd});
-		const out = (result.stdout?.toString() ?? '').trim();
-		const err = (result.stderr?.toString() ?? '').trim();
-		return `EXIT_CODE: ${result.exitCode}\n${out}${err ? `\n${err}` : ''}`.trim();
-	},
-});
-
-for (const name of ['git_stash', 'git_reset']) {
-	registerTool(name, {
-		execute(args) {
-			const cwd = text(args, 'cwd') || process.cwd();
-			const rest = Array.isArray(args.args) ? args.args.map(String) : [];
-			const sub = name.slice('git_'.length);
-			const result = Bun.spawnSync(['git', sub, ...rest], {cwd});
-			const out = (result.stdout?.toString() ?? '').trim();
-			const err = (result.stderr?.toString() ?? '').trim();
-			return `EXIT_CODE: ${result.exitCode}\n${out}${err ? `\n${err}` : ''}`.trim();
+		'Find files recursively in the workspace using a glob pattern. Results are sorted, bounded, skip symlinks, and hide .git/node_modules by default.',
+	parameters: {
+		type: 'object',
+		properties: {
+			pattern: {
+				type: 'string',
+				description: 'Glob pattern, for example *.ts or a recursive pattern.',
+			},
+			path: {
+				type: 'string',
+				description: 'Optional workspace-relative search root.',
+			},
+			include_hidden: {
+				type: 'boolean',
+				description: 'Include hidden files and directories. Defaults to false.',
+			},
+			include_directories: {type: 'boolean'},
+			limit: {type: 'integer', minimum: 1, maximum: 5000},
 		},
-	});
-}
-
-registerTool('git_pr', {
-	execute(args) {
-		const cwd = text(args, 'cwd') || process.cwd();
-		const result = Bun.spawnSync(
-			['gh', 'pr', 'view', '--json', 'url,title,state'],
-			{cwd},
-		);
-		const out = (result.stdout?.toString() ?? '').trim();
-		if (result.exitCode !== 0) {
-			return `EXIT_CODE: ${result.exitCode}\n${out}`.trim();
-		}
+		required: ['pattern'],
+	},
+	readOnly: true,
+	execute(args, ctx) {
 		try {
-			const pr = JSON.parse(out) as {
-				url?: string;
-				title?: string;
-				state?: string;
-			};
-			return `PR: ${pr.title ?? ''} (${pr.state ?? ''})\n${pr.url ?? ''}`;
-		} catch {
-			return `EXIT_CODE: ${result.exitCode}\n${out}`.trim();
+			return globWorkspace({
+				cwd: ctx.cwd || process.cwd(),
+				pattern: text(args, 'pattern'),
+				path: text(args, 'path') || undefined,
+				includeHidden: args.include_hidden === true,
+				includeDirectories: args.include_directories === true,
+				limit: Number(args.limit) || undefined,
+			});
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	},
 });
-
-registerTool('file_op', {
-	async execute(args) {
-		const op = text(args, 'op') || 'stat';
-		const path = text(args, 'path') || '.';
-		const target = text(args, 'target') ?? '';
-		switch (op) {
-			case 'read':
-			case 'cat': {
-				const file = Bun.file(path);
-				if (!(await file.exists())) return `Error: ${path} does not exist`;
-				return (await file.text()).trim();
-			}
-			case 'delete':
-			case 'rm': {
-				Bun.spawnSync(['rm', '-f', path], {cwd: process.cwd()});
-				return `Deleted ${path}`;
-			}
-			case 'move':
-			case 'rename': {
-				if (!target) return 'Error: file_op move needs a target';
-				Bun.spawnSync(['mv', path, target], {cwd: process.cwd()});
-				return `Moved ${path} -> ${target}`;
-			}
-			case 'copy': {
-				if (!target) return 'Error: file_op copy needs a target';
-				Bun.spawnSync(['cp', path, target], {cwd: process.cwd()});
-				return `Copied ${path} -> ${target}`;
-			}
-			case 'mkdir': {
-				Bun.spawnSync(['mkdir', '-p', path], {cwd: process.cwd()});
-				return `Created directory ${path}`;
-			}
-			default:
-				return `stat ${path}`;
+registerTool('grep', {
+	description:
+		'Search text recursively in workspace files using a regular expression or literal pattern. Supports glob filtering, context lines, bounded results, and skips binary/oversized files.',
+	parameters: {
+		type: 'object',
+		properties: {
+			pattern: {type: 'string'},
+			path: {
+				type: 'string',
+				description: 'Optional workspace-relative search root.',
+			},
+			file_pattern: {
+				type: 'string',
+				description: 'Optional file glob, for example *.ts.',
+			},
+			literal: {type: 'boolean'},
+			case_sensitive: {type: 'boolean'},
+			include_hidden: {type: 'boolean'},
+			context: {type: 'integer', minimum: 0, maximum: 10},
+			limit: {type: 'integer', minimum: 1, maximum: 5000},
+		},
+		required: ['pattern'],
+	},
+	readOnly: true,
+	execute(args, ctx) {
+		try {
+			return grepWorkspace({
+				cwd: ctx.cwd || process.cwd(),
+				pattern: text(args, 'pattern'),
+				path: text(args, 'path') || undefined,
+				filePattern: text(args, 'file_pattern') || undefined,
+				literal: args.literal === true,
+				caseSensitive: args.case_sensitive === true,
+				includeHidden: args.include_hidden === true,
+				context: Number(args.context) || 0,
+				limit: Number(args.limit) || undefined,
+			});
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
 		}
 	},
 });
-
-registerTool('check_skill', {
-	execute(args) {
-		const name = text(args, 'name') || 'unknown';
-		const path = text(args, 'path') || `<${name}>`;
-		return `Skill ${name} is loadable (${path}).`;
-	},
-});
-
-registerTool('find_files', {
-	async execute(args, ctx) {
-		const pattern = text(args, 'pattern') || '**/*';
-		const path = text(args, 'path') || '.';
-		const result = Bun.spawnSync(['rg', '--files', '-g', pattern, path], {
-			cwd: process.cwd(),
-		});
-		const out = (result.stdout?.toString() ?? '').trim();
-		return streamLines(out || `no files matched ${pattern}`, ctx);
-	},
-});
-
-registerTool('list_directory', {
-	async execute(args, ctx) {
-		const path = text(args, 'path') || '.';
-		const result = Bun.spawnSync(['ls', '-1', path], {
-			cwd: process.cwd(),
-		});
-		const out = (result.stdout?.toString() ?? '').trim();
-		return streamLines(out || `empty directory: ${path}`, ctx);
-	},
-});
-
-registerTool('search_file_contents', {
-	execute(args) {
-		const pattern = text(args, 'pattern') || 'mock-provider';
-		const path = text(args, 'path') || '.';
-		const result = Bun.spawnSync(['rg', '-l', pattern, path], {
-			cwd: process.cwd(),
-		});
-		return (
-			(result.stdout?.toString() ?? '').trim() || `no matches for ${pattern}`
-		);
-	},
-});
-
 registerTool('web_search', {
-	async execute(args, ctx) {
-		const query = text(args, 'query') || 'web search';
-		// Fallback model configured (Settings → Capabilities → Web search
-		// model): run the query through its provider's NATIVE server-side
-		// search and emit the chat indicator (parity: nanocoder's
-		// `✦ WebSearch fallback: <model> searched → <main> responds`).
-		const fallback = resolveWebSearchFallback();
-		if (fallback) {
-			try {
-				const results = await executeNativeWebSearch(query);
-				if (results !== null) {
+	description:
+		'Search the public web for current information. Returns source titles, URLs, ' +
+		'and concise excerpts when the configured provider supports native web search.',
+	parameters: {
+		type: 'object',
+		properties: {
+			query: {type: 'string', description: 'Focused search query.'},
+		},
+		required: ['query'],
+	},
+	readOnly: true,
+	async execute(args) {
+		const query = text(args, 'query').trim();
+		if (!query) return 'Error: web_search requires a query.';
+		try {
+			const results = await executeNativeWebSearch(query);
+			if (results !== null) {
+				const fallback = resolveWebSearchFallback();
+				if (fallback) {
 					appendInfo(
 						`  ✦ WebSearch fallback: ${fallback.model} searched → ` +
 							`${activeEndpoint().model} responds`,
 					);
-					return results;
 				}
-			} catch (error) {
-				return `Error: ${
-					error instanceof Error ? error.message : String(error)
-				}`;
+				return results;
 			}
+			return 'Error: no native web-search provider is configured. Configure Settings → Capabilities → Web search model.';
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
 		}
-		return streamLines(
-			// Parity with `nanocoder preview tui`'s canned web-search result.
-			'1. Ink, React for CLIs\n2. Static vs live rendering in terminal apps\n3. Mouse handling in raw-mode TUIs',
-			ctx,
-			120,
-		);
 	},
 });
-
 registerTool('fetch_url', {
-	async execute(args, ctx) {
-		void text(args, 'url');
-		return streamLines(
-			'<html><head><title>Example Docs</title></head><body><h1>Welcome</h1></body></html>',
-			ctx,
-			100,
+	description:
+		'Fetch one public HTTP(S) URL and return bounded text content. Redirects are ' +
+		'followed, binary bodies are rejected, and responses are capped at 2 MiB.',
+	parameters: {
+		type: 'object',
+		properties: {
+			url: {type: 'string', description: 'Absolute http:// or https:// URL.'},
+		},
+		required: ['url'],
+	},
+	readOnly: true,
+	async execute(args) {
+		const raw = text(args, 'url').trim();
+		let url: URL;
+		try {
+			url = new URL(raw);
+		} catch {
+			return 'Error: fetch_url requires a valid absolute URL.';
+		}
+		try {
+			return await fetchPublicText(url);
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	},
+});
+registerTool('list_mcp_resources', {
+	description: 'List resources exposed by configured MCP servers.',
+	parameters: {type: 'object', properties: {server_id: {type: 'string'}}},
+	readOnly: true,
+	async execute(args) {
+		try {
+			return await listMCPResources(text(args, 'server_id') || undefined);
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	},
+});
+registerTool('list_mcp_resource_templates', {
+	description:
+		'List parameterized resource templates exposed by configured MCP servers.',
+	parameters: {type: 'object', properties: {server_id: {type: 'string'}}},
+	readOnly: true,
+	async execute(args) {
+		try {
+			return await listMCPResourceTemplates(
+				text(args, 'server_id') || undefined,
+			);
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	},
+});
+registerTool('read_mcp_resource', {
+	description:
+		'Read one MCP resource by server id and URI. Text is returned directly; binary blobs are summarized.',
+	parameters: {
+		type: 'object',
+		properties: {server_id: {type: 'string'}, uri: {type: 'string'}},
+		required: ['server_id', 'uri'],
+	},
+	readOnly: true,
+	async execute(args) {
+		try {
+			return await readMCPResource(text(args, 'server_id'), text(args, 'uri'));
+		} catch (error) {
+			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	},
+});
+registerTool('command', {
+	description:
+		'Load a custom slash command as adaptable workflow guidance. Use when the ' +
+		'user asks you to run /command-name now or later in a broader request. ' +
+		'Read and interpret the command before acting; user intent and repository ' +
+		'context override conflicting defaults. This tool does not execute the ' +
+		'workflow itself.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {
+				type: 'string',
+				description: 'Command name without leading slash.',
+			},
+			arguments: {
+				type: 'string',
+				description: 'Raw user arguments or purpose for this invocation.',
+			},
+		},
+		required: ['name'],
+	},
+	readOnly: true,
+	execute(args) {
+		const name = text(args, 'name').replace(/^\//, '');
+		const rawArgs = text(args, 'arguments');
+		const command = loadCustomCommands().find(
+			candidate => candidate.name.toLowerCase() === name.toLowerCase(),
 		);
+		if (!command) return `Command /${name} not found.`;
+		const tokens = parseCommandArguments(rawArgs);
+		const guidance = expandCommandPrompt({
+			body: command.body,
+			rawArgs,
+			spec: command.arguments,
+			tokens,
+		});
+		return buildCommandInvocationPrompt({
+			name: command.name,
+			description: command.description,
+			userRequest: rawArgs,
+			guidance,
+		});
 	},
 });
 
@@ -872,7 +1695,11 @@ registerTool('skill', {
 		'Load a skill (a markdown instruction bundle) into context. Skills are ' +
 		'listed in the SYSTEM prompt under AVAILABLE SKILLS — pick the one that ' +
 		'matches the task (e.g. hilinga-prod-ops for production server work) and ' +
-		'call this with its exact name before acting on that domain.',
+		'call this with its exact name before acting on that domain. Before calling, ' +
+		'check conversation context: if the same skill instructions are already ' +
+		'present, reuse them and do not call this tool again. Reload only after ' +
+		'compaction removed those instructions, in a new conversation, or when fresh ' +
+		'file contents are required.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -880,17 +1707,32 @@ registerTool('skill', {
 				type: 'string',
 				description: 'Exact skill name from the AVAILABLE SKILLS list.',
 			},
+			arguments: {
+				type: 'string',
+				description: 'Raw user purpose or arguments for this skill.',
+			},
 		},
 		required: ['name'],
 	},
 	execute(args) {
 		const name = text(args, 'name') || 'unknown';
 		const path = text(args, 'path') || `<${name}>`;
+		const rawArgs = text(args, 'arguments');
 		const skill = loadSkills().find(
 			candidate => candidate.name.toLowerCase() === name.toLowerCase(),
 		);
 		if (skill) {
-			return `Loaded skill ${name} from ${skill.source}\n${skill.body.trim()}`;
+			return buildCommandInvocationPrompt({
+				name: skill.name,
+				description: skill.description,
+				userRequest: rawArgs,
+				guidance: expandCommandPrompt({
+					body: skill.body,
+					rawArgs,
+					spec: [],
+					tokens: parseCommandArguments(rawArgs),
+				}),
+			});
 		}
 		// Path-based fallback: read the md file directly when it exists.
 		try {
@@ -906,7 +1748,9 @@ registerTool('skill', {
 registerTool('check_skill', {
 	description:
 		'Check whether a skill exists and is valid (no undeclared template ' +
-		'variables). Use before/after calling the skill tool to confirm the name.',
+		'variables). Use only when availability or validity is uncertain. Do not ' +
+		'call routinely before or after loading a known skill, and do not use it to ' +
+		'reload instructions already present in conversation context.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -960,19 +1804,91 @@ registerTool('review_changes', {
 			return 'REVIEW_UNAVAILABLE: no review-* agents configured.';
 		}
 		const base = text(args, 'base') || 'origin/main';
+		const live = new Map<string, string>();
+		const render = () =>
+			[...live.entries()]
+				.map(([name, output]) => {
+					const status = output.startsWith('@@DONE@@')
+						? 'completed'
+						: 'running';
+					const text = output.replace(/^@@DONE@@\n?/, '').trim() || 'Working…';
+					return `✦ Ran agent:${name}(review current git diff) ${status}\n  └  ${text}`;
+				})
+				.join('\n');
 		const results = await Promise.all(
 			reviewers.map(async name => {
+				const id = `review:${name}:${Date.now()}:${Math.random()}`;
+				const signal = agentSignal(id, ctx.signal);
 				setActiveAgents(prev => prev + 1);
+				live.set(name, '');
+				setActiveAgentRuns(prev => [
+					...prev,
+					{
+						id,
+						name,
+						description: 'review current git diff',
+						output: '',
+						transcript: [],
+						streaming: '',
+						history: [],
+						status: 'running',
+					},
+				]);
+				ctx.onProgress?.(render());
 				try {
 					const result = await runSubagent(
 						name,
 						`Review current git diff against ${base}. Read-only. Return ` +
 							'REVIEW_PASSED if no blockers, otherwise REVIEW_FINDINGS with every ' +
 							'finding including file and line. Do not edit, commit, push, or create a PR.',
-						ctx.onProgress,
+						update => {
+							live.set(name, update.tail);
+							setActiveAgentRuns(prev =>
+								prev.map(row =>
+									row.id === id
+										? {
+												...row,
+												output: update.tail,
+												transcript: update.transcript,
+												streaming: update.streaming,
+												history: update.history,
+											}
+										: row,
+								),
+							);
+							ctx.onProgress?.(render());
+						},
+						signal,
 					);
+					live.set(name, `@@DONE@@\n${result}`);
+					ctx.onProgress?.(render());
+					appendMessage({
+						role: 'tool',
+						content: result,
+						toolId: `${ctx.toolCallId ?? 'review'}:${name}`,
+						tool: {
+							name: 'agent',
+							detail: `agent:${name}(review current git diff)`,
+							output: result,
+						},
+					});
 					return `## ${name}\n${result}`;
+				} catch (error) {
+					setActiveAgentRuns(prev =>
+						prev.map(row => (row.id === id ? {...row, status: 'error'} : row)),
+					);
+					throw error;
 				} finally {
+					activeAgentControllers.delete(id);
+					setActiveAgentRuns(prev =>
+						prev
+							.slice(-20)
+							.map(row =>
+								row.id === id && row.status === 'running'
+									? {...row, status: 'completed'}
+									: row,
+							),
+					);
 					setActiveAgents(prev => Math.max(0, prev - 1));
 				}
 			}),
@@ -980,20 +1896,279 @@ registerTool('review_changes', {
 		return results.join('\n\n');
 	},
 });
+async function executeAgentRun(
+	id: string,
+	subagentType: string,
+	description: string,
+	history: ChatMessageLike[] | undefined,
+	prompt: string,
+	ctx: ToolContext,
+	retrieved: boolean,
+): Promise<string> {
+	const signal = agentSignal(id, ctx.signal);
+	setActiveAgents(prev => prev + 1);
+	if (history) {
+		setActiveAgentRuns(prev =>
+			prev.map(row =>
+				row.id === id
+					? {
+							...row,
+							status: 'running',
+							streaming: '',
+							output: `Follow-up: ${prompt}`,
+							retrieved,
+						}
+					: row,
+			),
+		);
+	} else {
+		setActiveAgentRuns(prev => [
+			...prev,
+			{
+				id,
+				name: subagentType,
+				description,
+				output: '',
+				transcript: [],
+				streaming: '',
+				history: [],
+				status: 'running',
+				retrieved,
+			},
+		]);
+	}
+	ctx.onStateChange?.();
+	notifyAgentStatus(id);
+	try {
+		return await runSubagent(
+			subagentType,
+			description,
+			update => {
+				setActiveAgentRuns(prev =>
+					prev.map(row =>
+						row.id === id
+							? {
+									...row,
+									output: update.tail,
+									transcript: update.transcript,
+									streaming: update.streaming,
+									history: update.history,
+								}
+							: row,
+					),
+				);
+				ctx.onStateChange?.();
+			},
+			signal,
+			history,
+			prompt,
+			ctx,
+			id,
+		);
+	} catch (error) {
+		const status =
+			error instanceof Error && error.name === 'AbortError'
+				? 'cancelled'
+				: 'error';
+		setActiveAgentRuns(prev =>
+			prev.map(row => (row.id === id ? {...row, status} : row)),
+		);
+		ctx.onStateChange?.();
+		notifyAgentStatus(id);
+		throw error;
+	} finally {
+		activeAgentControllers.delete(id);
+		setActiveAgentRuns(prev =>
+			prev
+				.slice(-20)
+				.map(row =>
+					row.id === id && row.status === 'running'
+						? {...row, status: 'completed', streaming: ''}
+						: row,
+				),
+		);
+		setActiveAgents(prev => Math.max(0, prev - 1));
+		ctx.onStateChange?.();
+		notifyAgentStatus(id);
+	}
+}
 registerTool('agent', {
+	description:
+		'Spawn a delegated subagent with its own conversation history. Foreground agents return their final response; background agents return an id and keep running in /ps. Use agent_message to continue an existing agent.',
+	parameters: {
+		type: 'object',
+		properties: {
+			description: {type: 'string', description: 'Task for the subagent.'},
+			subagent_type: {
+				type: 'string',
+				description: 'Built-in or custom agent name. Defaults to explore.',
+			},
+			background: {
+				type: 'boolean',
+				description: 'Run asynchronously and return the agent id immediately.',
+			},
+		},
+		required: ['description'],
+	},
+	readOnly: true,
 	async execute(args, ctx) {
 		const description =
 			text(args, 'description') || 'investigate the repository';
 		const subagentType = text(args, 'subagent_type') || 'explore';
-		setActiveAgents(prev => prev + 1);
-		try {
-			return await runSubagent(subagentType, description, ctx.onProgress);
-		} finally {
-			setActiveAgents(prev => Math.max(0, prev - 1));
+		const id = `agent:${subagentType}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+		const task = executeAgentRun(
+			id,
+			subagentType,
+			description,
+			undefined,
+			description,
+			ctx,
+			args.background !== true,
+		);
+		if (args.background === true) {
+			void task.catch(() => {});
+			return `Started background agent ${id}\nUse agent_status or /ps to inspect it, agent_message to continue it, and agent_cancel to stop it.`;
 		}
+		return task;
+	},
+});
+registerTool('agent_message', {
+	description:
+		'Continue an existing completed or errored subagent using its preserved chat history.',
+	parameters: {
+		type: 'object',
+		properties: {
+			agent_id: {type: 'string'},
+			message: {type: 'string'},
+			background: {type: 'boolean'},
+		},
+		required: ['agent_id', 'message'],
+	},
+	readOnly: true,
+	async execute(args, ctx) {
+		const id = text(args, 'agent_id');
+		const message = text(args, 'message');
+		const run = activeAgentRuns().find(row => row.id === id);
+		if (!run) return `Error: agent ${id} not found.`;
+		if (!message) return 'Error: agent_message requires a message.';
+		if (run.status === 'running') {
+			queueAgentMessage(id, message);
+			return `Queued message for running agent ${id}. It will be delivered before the next model round.`;
+		}
+		const task = executeAgentRun(
+			id,
+			run.name,
+			run.description,
+			structuredClone(run.history),
+			message,
+			ctx,
+			args.background !== true,
+		);
+		if (args.background === true) {
+			void task.catch(() => {});
+			return `Continued background agent ${id}`;
+		}
+		return task;
+	},
+});
+registerTool('agent_status', {
+	description:
+		'List delegated agents or inspect one agent status and recent human-readable tail.',
+	parameters: {type: 'object', properties: {agent_id: {type: 'string'}}},
+	readOnly: true,
+	execute(args) {
+		const id = text(args, 'agent_id');
+		const runs = id
+			? activeAgentRuns().filter(row => row.id === id)
+			: activeAgentRuns();
+		if (runs.length === 0)
+			return id ? `Agent ${id} not found.` : 'No delegated agents.';
+		const observedIds = new Set(runs.map(run => run.id));
+		setActiveAgentRuns(previous =>
+			previous.map(run =>
+				observedIds.has(run.id) && run.status !== 'running'
+					? {...run, retrieved: true}
+					: run,
+			),
+		);
+		return runs
+			.map(
+				run =>
+					`${run.id} · ${run.status} · agent:${run.name}(${run.description})\n  └  ${run.output.trim() || 'Working…'}`,
+			)
+			.join('\n');
+	},
+});
+registerTool('agent_wait', {
+	description:
+		'Wait efficiently for one delegated agent to leave its current status. ' +
+		'Returns immediately if the agent is already settled; never poll agent_status in a loop.',
+	parameters: {
+		type: 'object',
+		properties: {
+			agent_id: {type: 'string'},
+			timeout_ms: {
+				type: 'number',
+				description:
+					'Maximum wait in milliseconds. Defaults to 30000, maximum 300000.',
+			},
+		},
+		required: ['agent_id'],
+	},
+	readOnly: true,
+	async execute(args) {
+		const id = text(args, 'agent_id');
+		const initial = activeAgentRuns().find(row => row.id === id);
+		if (!initial) return `Agent ${id} not found.`;
+		if (initial.status !== 'running') {
+			setActiveAgentRuns(previous =>
+				previous.map(row => (row.id === id ? {...row, retrieved: true} : row)),
+			);
+			return `${id} · ${initial.status}\n  └  ${initial.output.trim() || 'No output.'}`;
+		}
+		const timeout = Math.max(
+			1,
+			Math.min(300_000, Math.floor(Number(args.timeout_ms) || 30_000)),
+		);
+		await new Promise<void>(resolve => {
+			const timer = setTimeout(() => {
+				agentStatusWaiters.get(id)?.delete(wake);
+				resolve();
+			}, timeout);
+			const wake = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			const waiters = agentStatusWaiters.get(id) ?? new Set<() => void>();
+			waiters.add(wake);
+			agentStatusWaiters.set(id, waiters);
+		});
+		const run = activeAgentRuns().find(row => row.id === id);
+		if (run && run.status !== 'running') {
+			setActiveAgentRuns(previous =>
+				previous.map(row => (row.id === id ? {...row, retrieved: true} : row)),
+			);
+		}
+		return run
+			? `${id} · ${run.status}\n  └  ${run.output.trim() || 'Working…'}`
+			: `Agent ${id} no longer exists.`;
 	},
 });
 
+registerTool('agent_cancel', {
+	description: 'Cancel one running delegated agent by id.',
+	parameters: {
+		type: 'object',
+		properties: {agent_id: {type: 'string'}},
+		required: ['agent_id'],
+	},
+	readOnly: true,
+	execute(args) {
+		const id = text(args, 'agent_id');
+		if (!cancelActiveAgent(id)) return `Agent ${id} is not running.`;
+		return `Cancelled agent ${id}.`;
+	},
+});
 /** Default subagent personalities (parity: the reference/openclaude). */
 export const SUBAGENT_TYPES: Record<
 	string,
@@ -1013,31 +2188,245 @@ export const SUBAGENT_TYPES: Record<
 	},
 };
 
+const TASK_STATUSES = new Set<TaskStatus>([
+	'pending',
+	'in_progress',
+	'completed',
+	'cancelled',
+]);
+export function normalizeTaskList(value: unknown): Array<{
+	id: string;
+	title: string;
+	activeForm?: string;
+	status: TaskStatus;
+	dependsOn?: string[];
+	owner?: string;
+}> {
+	if (!Array.isArray(value)) return [];
+	const normalized = value
+		.map((item, index) => {
+			if (typeof item === 'string') {
+				const title = item.trim();
+				return title
+					? {id: `task_${index + 1}`, title, status: 'pending' as const}
+					: null;
+			}
+			if (!item || typeof item !== 'object') return null;
+			const row = item as Record<string, unknown>;
+			const title = String(row.title ?? row.content ?? '').trim();
+			if (!title) return null;
+			const activeForm =
+				typeof row.activeForm === 'string' && row.activeForm.trim()
+					? row.activeForm.trim()
+					: undefined;
+			const legacyStatus =
+				row.done === true
+					? 'completed'
+					: row.running === true
+						? 'in_progress'
+						: undefined;
+			const requested = String(
+				row.status ?? legacyStatus ?? 'pending',
+			) as TaskStatus;
+			const status = TASK_STATUSES.has(requested) ? requested : 'pending';
+			const id = String(row.id ?? `task_${index + 1}`).trim();
+			const dependsOn = Array.isArray(row.dependsOn)
+				? row.dependsOn.map(String).filter(Boolean)
+				: Array.isArray(row.depends_on)
+					? row.depends_on.map(String).filter(Boolean)
+					: undefined;
+			const owner = String(row.owner ?? '').trim() || undefined;
+			return {
+				id,
+				title,
+				...(activeForm ? {activeForm} : {}),
+				status,
+				...(dependsOn?.length ? {dependsOn} : {}),
+				...(owner ? {owner} : {}),
+			};
+		})
+		.filter((item): item is NonNullable<typeof item> => item !== null);
+	let activeSeen = false;
+	return normalized.map(item => {
+		if (item.status !== 'in_progress') return item;
+		if (!activeSeen) {
+			activeSeen = true;
+			return item;
+		}
+		return {...item, status: 'pending'};
+	});
+}
 registerTool('write_tasks', {
+	description:
+		'Create or update the current session task checklist. Use proactively for ' +
+		'non-trivial work, tasks with 3 or more steps, multiple user requests, ' +
+		'or any change needing implementation plus verification. Skip only ' +
+		'purely informational requests and genuinely tiny one-step changes. ' +
+		'Every call replaces the full list. Update immediately when work starts ' +
+		'or finishes; keep exactly one in_progress item while work remains. ' +
+		'Completed items must remain in the list with status completed so the UI ' +
+		'can strike them through. Include only work the agent must perform. Never ' +
+		'add user-owned actions such as waiting for user input, approval, manual ' +
+		'verification, or confirmation. Mention those outside the checklist. Use ' +
+		'title/content as imperative text and activeForm as present-continuous text.',
+	parameters: {
+		type: 'object',
+		properties: {
+			tasks: {
+				type: 'array',
+				items: {
+					type: 'object',
+					properties: {
+						id: {type: 'string'},
+						title: {type: 'string'},
+						content: {type: 'string'},
+						activeForm: {type: 'string'},
+						status: {
+							type: 'string',
+							enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+						},
+						dependsOn: {type: 'array', items: {type: 'string'}},
+						owner: {type: 'string'},
+					},
+					required: ['status'],
+				},
+			},
+		},
+		required: ['tasks'],
+	},
 	execute(args) {
-		const tasks = Array.isArray(args.tasks) ? args.tasks : [];
-		if (tasks.length === 0) return 'Tasks updated: no tasks.';
-		const lines = tasks.map((task, index) => {
-			const title =
-				typeof task === 'string'
-					? task
-					: typeof task === 'object' && task !== null && 'title' in task
-						? String((task as {title?: unknown}).title ?? 'task')
-						: 'task';
-			return `${index + 1}. ${title}`;
-		});
-		// A7/C9: publish the live task list for the running overlay.
-		setTasks(
-			tasks.map(task => ({
-				title:
-					typeof task === 'string'
-						? task
-						: typeof task === 'object' && task !== null && 'title' in task
-							? String((task as {title?: unknown}).title ?? 'task')
-							: 'task',
-			})),
+		const next = normalizeTaskList(args.tasks);
+		setTasks(next);
+		if (next.length === 0) return 'Tasks updated: no tasks.';
+		const icons: Record<TaskStatus, string> = {
+			pending: '·',
+			in_progress: '›',
+			completed: '◆',
+			cancelled: '×',
+		};
+		const lines = next.map(
+			(task, index) =>
+				`${index + 1}. ${icons[task.status]} ${task.title} [${task.status}]`,
 		);
-		return `Tasks updated:\n${lines.join('\n')}`;
+		const unfinished = next.filter(
+			task => task.status === 'pending' || task.status === 'in_progress',
+		).length;
+		return (
+			`Tasks updated (${unfinished} remaining):\n${lines.join('\n')}\n` +
+			(unfinished > 0
+				? 'Continue with the in-progress task and update this list immediately after each status change.'
+				: 'All tasks completed.')
+		);
+	},
+});
+
+function taskText(task: SessionTask): string {
+	return `${task.id} · ${task.status} · ${task.title}${task.owner ? ` · owner ${task.owner}` : ''}${task.dependsOn?.length ? ` · depends on ${task.dependsOn.join(', ')}` : ''}`;
+}
+registerTool('task_create', {
+	description:
+		'Create one task with a stable id, optional owner, and dependencies.',
+	parameters: {
+		type: 'object',
+		properties: {
+			title: {type: 'string'},
+			activeForm: {type: 'string'},
+			owner: {type: 'string'},
+			depends_on: {type: 'array', items: {type: 'string'}},
+		},
+		required: ['title'],
+	},
+	execute(args) {
+		const id = `task_${Date.now().toString(36)}_${tasks().length + 1}`;
+		const task: SessionTask = {
+			id,
+			title: text(args, 'title'),
+			activeForm: text(args, 'activeForm') || undefined,
+			owner: text(args, 'owner') || undefined,
+			dependsOn: Array.isArray(args.depends_on)
+				? args.depends_on.map(String)
+				: undefined,
+			status: 'pending',
+		};
+		setTasks(prev => [...prev, task]);
+		return taskText(task);
+	},
+});
+registerTool('task_list', {
+	description: 'List all tasks with ids, status, owners, and dependencies.',
+	parameters: {type: 'object', properties: {}},
+	readOnly: true,
+	execute() {
+		return tasks().length ? tasks().map(taskText).join('\n') : 'No tasks.';
+	},
+});
+registerTool('task_get', {
+	description: 'Get one task by stable id.',
+	parameters: {
+		type: 'object',
+		properties: {task_id: {type: 'string'}},
+		required: ['task_id'],
+	},
+	readOnly: true,
+	execute(args) {
+		const task = tasks().find(row => row.id === text(args, 'task_id'));
+		return task
+			? taskText(task)
+			: `Error: task ${text(args, 'task_id')} not found.`;
+	},
+});
+registerTool('task_update', {
+	description:
+		'Update one task by id. A task cannot start until all dependencies are completed.',
+	parameters: {
+		type: 'object',
+		properties: {
+			task_id: {type: 'string'},
+			title: {type: 'string'},
+			activeForm: {type: 'string'},
+			status: {
+				type: 'string',
+				enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+			},
+			owner: {type: 'string'},
+			depends_on: {type: 'array', items: {type: 'string'}},
+		},
+		required: ['task_id'],
+	},
+	execute(args) {
+		const id = text(args, 'task_id');
+		const current = tasks().find(task => task.id === id);
+		if (!current) return `Error: task ${id} not found.`;
+		const status = text(args, 'status') as TaskStatus;
+		if (status === 'in_progress') {
+			const blocked = (current.dependsOn ?? []).filter(
+				dep => tasks().find(task => task.id === dep)?.status !== 'completed',
+			);
+			if (blocked.length)
+				return `Error: task ${id} is blocked by ${blocked.join(', ')}.`;
+		}
+		const updated: SessionTask = {
+			...current,
+			...(text(args, 'title') ? {title: text(args, 'title')} : {}),
+			...(text(args, 'activeForm')
+				? {activeForm: text(args, 'activeForm')}
+				: {}),
+			...(status ? {status} : {}),
+			...(text(args, 'owner') ? {owner: text(args, 'owner')} : {}),
+			...(Array.isArray(args.depends_on)
+				? {dependsOn: args.depends_on.map(String)}
+				: {}),
+		};
+		setTasks(prev =>
+			prev.map(task =>
+				task.id === id
+					? updated
+					: status === 'in_progress' && task.status === 'in_progress'
+						? {...task, status: 'pending'}
+						: task,
+			),
+		);
+		return taskText(updated);
 	},
 });
 
@@ -1047,67 +2436,221 @@ function loadSubagentNames(): string[] {
 		.filter(name => /^review(?:-|$)/i.test(name))
 		.sort();
 }
+export interface SubagentProgressUpdate {
+	tail: string;
+	transcript: string[];
+	streaming: string;
+	history: ChatMessageLike[];
+}
+
+export function subagentTranscriptTail(lines: string[], maxLines = 6): string {
+	return lines.slice(-Math.max(1, maxLines)).join('\n');
+}
+
+function firstUsefulLine(text: string): string {
+	return (
+		text
+			.split('\n')
+			.map(line => line.trim())
+			.find(Boolean) ?? ''
+	);
+}
+
+function shortText(text: string, max = 120): string {
+	const line = firstUsefulLine(text).replace(/\s+/g, ' ');
+	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+function safeParseToolArgs(raw: string): Record<string, unknown> {
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		return parsed && typeof parsed === 'object'
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function formatSubagentToolCall(call: {
+	id: string;
+	name: string;
+	arguments: string;
+}): string {
+	const args = safeParseToolArgs(call.arguments);
+	const mockCall: MockToolCall = {
+		id: call.id,
+		name: call.name,
+		arguments: args,
+		rawArguments: call.arguments,
+	};
+	const detail = toolArgsSummary(mockCall);
+	return detail
+		? `${displayToolName(call.name)} ${detail}`
+		: displayToolName(call.name);
+}
+
+export function formatSubagentStatusMessage(
+	message: ChatMessageLike,
+): string | null {
+	if (message.role === 'tool') {
+		const summary = shortText(message.content);
+		return /^(?:Error:|REFUSED|EXIT_CODE:\s*[1-9])/i.test(summary)
+			? `Failed: ${summary}`
+			: null;
+	}
+	if (message.tool_calls?.length) {
+		return message.tool_calls.map(formatSubagentToolCall).join('\n');
+	}
+	const text = shortText(message.content);
+	if (!text) return null;
+	return message.role === 'assistant' ? text : `Task: ${text}`;
+}
 async function runSubagent(
 	subagentType: string,
 	description: string,
-	onProgress?: (output: string) => void,
+	onProgress?: (update: SubagentProgressUpdate) => void,
+	signal?: AbortSignal,
+	initialHistory?: ChatMessageLike[],
+	followupPrompt?: string,
+	toolContext: ToolContext = {},
+	agentId?: string,
 ): Promise<string> {
 	// Custom agents (`.bobonyo/agents/*.md` or legacy `.nanocoder`, user
 	// agents) carry their own
 	// system prompt; built-ins fall back to the registry instructions.
+	const startHook = await runHooks({
+		event: 'SubagentStart',
+		agentName: subagentType,
+		data: {description},
+	});
+	if (startHook.denied) throw new Error(startHook.denied);
 	const customPrompt = subagentSystemPrompt(subagentType);
-	let history: ChatMessageLike[] = [
-		{
-			role: 'user',
-			content:
-				`${
-					customPrompt ||
-					(SUBAGENT_TYPES[subagentType]?.instruction ??
-						SUBAGENT_TYPES.general!.instruction)
-				}\n\n` + `Task: ${description}`,
-		},
-	];
+	const endpoint = subagentEndpoint(subagentType);
+	const subagentModel =
+		typeof endpoint === 'string'
+			? endpoint
+			: (endpoint?.model ?? activeEndpoint().model);
+	let history: ChatMessageLike[] = initialHistory
+		? [
+				...initialHistory,
+				{role: 'user', content: followupPrompt || description},
+			]
+		: [
+				{
+					role: 'user',
+					content:
+						`${
+							customPrompt ||
+							(SUBAGENT_TYPES[subagentType]?.instruction ??
+								SUBAGENT_TYPES.general!.instruction)
+						}
+
+` + `Task: ${description}`,
+				},
+			];
+	let transcript = initialHistory
+		? [`Follow-up: ${followupPrompt || description}`]
+		: [`Task: ${description}`];
+	const publish = (streamingText = '') => {
+		const lines = streamingText.trim()
+			? [...transcript, shortText(streamingText.trim())]
+			: transcript;
+		onProgress?.({
+			tail: subagentTranscriptTail(lines),
+			transcript: lines,
+			streaming: streamingText.trim(),
+			history: structuredClone(history),
+		});
+	};
+	publish();
 	for (let round = 0; round < 6; round++) {
+		if (agentId) {
+			const queued = drainAgentMessages(agentId);
+			if (queued.length > 0) {
+				history = [
+					...history,
+					...queued.map(content => ({role: 'user' as const, content})),
+				];
+				transcript = [
+					...transcript,
+					...queued.map(content => `Message: ${shortText(content)}`),
+				];
+				publish();
+			}
+		}
 		const result = await streamChat(
 			history,
 			{
 				// C10: stream the subagent's reasoning/text into the running row so
 				// its per-call progress is visible while it works.
-				onText: text => onProgress?.(text),
+				onText: text => publish(text),
 				onReasoning: () => {},
 			},
+			signal,
+			toolCatalogForModel(subagentModel),
 			undefined,
-			toolCatalog(),
 			undefined,
 			undefined,
-			undefined,
-			subagentModel(subagentType),
+			endpoint,
 		);
 		if (result.toolCalls.length === 0) {
-			return result.text.trim() || 'Subagent produced no output.';
+			const finalText = result.text.trim() || 'Subagent produced no output.';
+			transcript = [...transcript, shortText(finalText)];
+			history = [...history, {role: 'assistant', content: finalText}];
+			publish();
+			const queued = agentId ? drainAgentMessages(agentId) : [];
+			if (queued.length > 0) {
+				history = [
+					...history,
+					...queued.map(content => ({role: 'user' as const, content})),
+				];
+				transcript = [
+					...transcript,
+					...queued.map(content => `Message: ${shortText(content)}`),
+				];
+				publish();
+				continue;
+			}
+			await runHooks({
+				event: 'SubagentStop',
+				agentName: subagentType,
+				data: {description, result: finalText},
+			});
+			return finalText;
 		}
-		const toolMessages: ChatMessageLike[] = [];
+		const assistantMessage: ChatMessageLike = {
+			role: 'assistant',
+			content: result.text,
+			tool_calls: result.toolCalls.map(call => ({
+				id: call.id,
+				name: call.name,
+				arguments: call.rawArguments,
+			})),
+		};
+		const assistantSummary = formatSubagentStatusMessage(assistantMessage);
+		if (assistantSummary) transcript = [...transcript, assistantSummary];
+		history = [...history, assistantMessage];
+		publish();
 		for (const call of result.toolCalls) {
-			const toolResult = await executeTool(call);
-			toolMessages.push({
+			const toolResult = await executeTool(call, {
+				...toolContext,
+				signal,
+			});
+			const toolMessage: ChatMessageLike = {
 				role: 'tool',
 				content: toolResult.content,
 				tool_call_id: toolResult.tool_call_id,
-			});
+			};
+			const toolSummary = formatSubagentStatusMessage(toolMessage);
+			if (toolSummary) transcript = [...transcript, toolSummary];
+			history = [...history, toolMessage];
+			publish();
 		}
-		history = [
-			...history,
-			{
-				role: 'assistant',
-				content: result.text,
-				tool_calls: result.toolCalls.map(call => ({
-					id: call.id,
-					name: call.name,
-					arguments: call.rawArguments,
-				})),
-			},
-			...toolMessages,
-		];
 	}
-	return `Subagent ${subagentType} finished without a final response.`;
+	const exhausted = `Subagent ${subagentType} finished without a final response.`;
+	transcript = [...transcript, exhausted];
+	history = [...history, {role: 'assistant', content: exhausted}];
+	publish();
+	return exhausted;
 }

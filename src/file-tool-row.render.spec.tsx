@@ -397,6 +397,70 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 
 		expect(brief.startsWith('✦ ')).toBe(true);
 	});
+	test('briefed diff_edit renders unified patch as a real DiffView', async () => {
+		const terminalWidth = 84;
+		const patch = [
+			'--- a/src/foo.ts',
+			'+++ b/src/foo.ts',
+			'@@ -9,3 +9,4 @@',
+			' const keep = true;',
+			'-const oldValue = 1;',
+			'+const newValue = 2;',
+			'+const added = true;',
+		].join('\n');
+		const raw = formatToolEntry(
+			{
+				name: 'diff_edit',
+				detail: 'src/foo.ts',
+				output: `EXIT_CODE: 0\npatching file src/foo.ts\n${patch}`,
+				args: {diff: patch},
+			},
+			false,
+			'done',
+			true,
+			true,
+			historyFillWidth(terminalWidth),
+		);
+		const inner = raw
+			.split('\n')
+			.filter(line => !/^\s*```/.test(line))
+			.join('\n');
+		const seg = liveRowSegments(
+			inner,
+			'filediff',
+			'done',
+			colors(),
+			toolRowFillWidth(terminalWidth, 'Apply parser safety guard'),
+		);
+		const setup = await testRender(
+			() => (
+				<FileToolRow
+					header={seg.header}
+					body={seg.body}
+					status="done"
+					glyph="✦"
+					hovered={false}
+					md={testMd}
+					brief="Apply parser safety guard"
+				/>
+			),
+			{width: terminalWidth, height: 20},
+		);
+		await setup.flush();
+		await new Promise(resolve => setTimeout(resolve, 100));
+		const rows = setup
+			.captureSpans()
+			.lines.map(line => line.spans.map(span => span.text).join(''));
+		expect(rows[1]).toContain('Apply parser safety guard');
+		expect(rows[2]).toContain('Edit src/foo.ts');
+		expect(rows[3]).toContain('1 removed · 2 added');
+		expect(rows[4]).toContain('9   const keep = true;');
+		expect(rows[5]).toContain('10 - const oldValue = 1;');
+		expect(rows[6]).toContain('10 + const newValue = 2;');
+		expect(rows[7]).toContain('11 + const added = true;');
+		expect(rows.join('\n')).not.toContain('EXIT_CODE');
+		expect(rows.join('\n')).not.toContain('--- a/src/foo.ts');
+	});
 	test('BRIEFED diff rows fit the renderable (3-wide indent shrinks the fill)', async () => {
 		// The briefed entry prepends a 3-wide indent box to EVERY row; the
 		// tokenizer budget must shrink by the same 3 or the padded row
@@ -474,4 +538,152 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 			expect(text.length).toBeLessThanOrEqual(terminalWidth);
 		}
 	});
+});
+test('apply_patch renders add, update, and delete rows as one DiffView', async () => {
+	const raw = formatToolEntry(
+		{
+			name: 'apply_patch',
+			detail: '',
+			output: 'Applied patch successfully.',
+			args: {
+				patchText: '*** Begin Patch\n*** End Patch',
+				_applyPatchDisplay: [
+					{
+						type: 'add',
+						path: 'new.txt',
+						rows: [{kind: 'add', line: 1, text: 'new'}],
+					},
+					{
+						type: 'update',
+						path: 'old.txt',
+						rows: [
+							{kind: 'remove', line: 2, text: 'old'},
+							{kind: 'add', line: 2, text: 'changed'},
+						],
+					},
+					{
+						type: 'delete',
+						path: 'gone.txt',
+						rows: [{kind: 'remove', line: 1, text: 'gone'}],
+					},
+				],
+			},
+			briefed: true,
+		},
+		false,
+		'done',
+		true,
+		true,
+		84,
+	);
+	const inner = raw
+		.split('\n')
+		.filter(line => !/^\s*```/.test(line))
+		.join('\n');
+	const seg = liveRowSegments(inner, 'filediff', 'done', colors(), 84);
+	const setup = await testRender(
+		() => (
+			<FileToolRow
+				header={seg.header}
+				body={seg.body}
+				status="done"
+				glyph="✦"
+				hovered={false}
+				md={testMd}
+				brief="Update project files"
+			/>
+		),
+		{width: 84, height: 16},
+	);
+	try {
+		await setup.flush();
+		const rows = setup
+			.captureSpans()
+			.lines.map(line =>
+				line.spans
+					.map(span => span.text)
+					.join('')
+					.trimEnd(),
+			)
+			.filter(Boolean);
+		expect(rows).not.toContain('✦ Edited 3 files (+2 -2)');
+		expect(rows.join('\n')).not.toContain('ApplyPatch');
+		// Test Markdown stub paints only brief glyph. Native action starts at
+		// brief text column; no duplicate aggregate header or second glyph.
+		expect(rows[0]).toBe('✦');
+		expect(rows).toContain('  └ Create new.txt (+1 -0)');
+		expect(rows).toContain('    1   new');
+		expect(rows).toContain('  └ Edit old.txt (+1 -1)');
+		expect(rows).toContain('    2 - old');
+		expect(rows).toContain('    2 + changed');
+		expect(rows).toContain('  └ Delete gone.txt (+0 -1)');
+		expect(rows).toContain('    1 - gone');
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test('file row after another briefed tool keeps batch indentation', async () => {
+	const raw = formatToolEntry(
+		{
+			name: 'apply_patch',
+			detail: '',
+			output: 'Applied patch successfully.',
+			args: {
+				patchText: '*** Begin Patch\n*** End Patch',
+				_applyPatchDisplay: [
+					{
+						type: 'update',
+						path: 'src/row-highlight.spec.ts',
+						rows: [
+							{kind: 'remove', line: 720, text: 'old'},
+							{kind: 'add', line: 720, text: 'new'},
+						],
+					},
+				],
+			},
+			briefed: false,
+		},
+		false,
+		'done',
+		true,
+		true,
+		84,
+	);
+	const inner = raw
+		.split('\n')
+		.filter(line => !/^\s*```/.test(line))
+		.join('\n');
+	const seg = liveRowSegments(inner, 'filediff', 'done', colors(), 81);
+	const setup = await testRender(
+		() => (
+			<FileToolRow
+				header={seg.header}
+				body={seg.body}
+				status="done"
+				glyph="✦"
+				hovered={false}
+				md={testMd}
+				batchBriefed={true}
+			/>
+		),
+		{width: 84, height: 10},
+	);
+	try {
+		await setup.flush();
+		const rows = setup
+			.captureSpans()
+			.lines.map(line =>
+				line.spans
+					.map(span => span.text)
+					.join('')
+					.trimEnd(),
+			)
+			.filter(Boolean);
+		expect(rows[0]).toBe('   Edit src/row-highlight.spec.ts (+1 -1)');
+		expect(rows[1]).toMatch(/^ {7}720 - old$/);
+		expect(rows[2]).toMatch(/^ {7}720 \+ new$/);
+	} finally {
+		setup.renderer.destroy();
+	}
 });

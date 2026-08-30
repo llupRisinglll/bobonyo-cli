@@ -48,6 +48,16 @@ export function FileToolRow(props: {
 	const tint = RGBA.fromHex(colors().secondary);
 	const hoverBg = RGBA.fromValues(tint.r, tint.g, tint.b, 0.24);
 	const briefed = () => Boolean(props.brief && props.brief.trim());
+	const compactBriefTree = () =>
+		briefed() &&
+		props.header
+			.map(chunk => chunk.text)
+			.join('')
+			.replace(/^[✦⚙]\s*/, '')
+			.trimStart()
+			.startsWith('└ ');
+	const indentContent = () =>
+		(briefed() || props.batchBriefed) && !compactBriefTree();
 	return (
 		<box flexDirection="column" ref={props.onRef}>
 			{/* Leading breakline (parity: every other tool row). */}
@@ -70,7 +80,7 @@ export function FileToolRow(props: {
 					{/* With a brief, the row indents to the brief's text
 					    column (`✦` + the 2-col gap = 3 cols) and the header
 					    chunk's own glyph is stripped — one glyph per batch. */}
-					<Show when={briefed() || props.batchBriefed}>
+					<Show when={indentContent()}>
 						<box width={3} />
 					</Show>
 					<text>
@@ -78,7 +88,9 @@ export function FileToolRow(props: {
 							{(c, index) => {
 								const text =
 									index() === 0 && (briefed() || props.batchBriefed)
-										? c.text.replace(/^[✦⚙]\s*/, '')
+										? compactBriefTree()
+											? c.text.replace(/^[✦⚙]\s/, '')
+											: c.text.replace(/^[✦⚙]\s*/, '')
 										: c.text;
 								if (!text) return null;
 								return (
@@ -103,7 +115,7 @@ export function FileToolRow(props: {
 						flexDirection="row"
 						backgroundColor={props.hovered ? hoverBg : undefined}
 					>
-						<Show when={briefed() || props.batchBriefed}>
+						<Show when={indentContent()}>
 							<box width={3} />
 						</Show>
 						<text>

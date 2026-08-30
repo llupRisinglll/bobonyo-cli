@@ -13,6 +13,7 @@ import {
 	monthKey,
 	recordProviderUsage,
 	sessionCacheUsage,
+	usageCalendarEnd,
 } from './provider-usage';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
@@ -40,6 +41,20 @@ describe('monthKey', () => {
 	});
 });
 
+describe('usageCalendarEnd', () => {
+	test('offset pages end before newer ranges without overlap', () => {
+		const now = Date.UTC(2026, 7, 17, 12);
+		expect(usageCalendarEnd(now, 0).toISOString().slice(0, 10)).toBe(
+			'2026-08-17',
+		);
+		expect(usageCalendarEnd(now, 3).toISOString().slice(0, 10)).toBe(
+			'2026-05-31',
+		);
+		expect(usageCalendarEnd(now, 6).toISOString().slice(0, 10)).toBe(
+			'2026-02-28',
+		);
+	});
+});
 describe('formatTokens', () => {
 	test('compacts large totals with K/M suffixes', () => {
 		expect(formatTokens(0)).toBe('0');
@@ -265,11 +280,22 @@ describe('extractCacheTokens (provider-agnostic cache rate)', () => {
 });
 
 describe('formatUsageCalendar', () => {
+	test('month header never exceeds calendar row width', () => {
+		for (const months of [3, 6, 12]) {
+			const lines = formatUsageCalendar(
+				'https://example.test',
+				Date.UTC(2026, 7, 17),
+				months,
+			).split('\n');
+			expect(lines[4]!.length).toBeLessThanOrEqual(lines[5]!.length);
+		}
+	});
+
 	test('renders token activity summary and weekday rows', () => {
 		const now = Date.UTC(2026, 7, 17);
 		recordProviderUsage(MIMO_BASE, {total_tokens: 100}, now);
 		const calendar = formatUsageCalendar(MIMO_BASE, now, 12);
-		expect(calendar).toContain('Token activity   last 12 months');
+		expect(calendar).toContain('Token activity   Sep 2025 – Aug 2026');
 		expect(calendar).toMatch(/Lifetime [0-9.]+[KM]?/);
 		expect(calendar).toContain('Su ');
 		expect(calendar).toContain('daily · weekly · cumulative');

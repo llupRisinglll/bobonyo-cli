@@ -29,12 +29,15 @@ export function SettledToolRow(props: {
 	brief?: string;
 	/** Batch marker: part of a briefed batch (share the glyph/indent). */
 	batchBriefed?: boolean;
+	/** Render brief, but keep aggregate agent rows at normal columns. */
+	briefUnindented?: boolean;
 	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
 	md: MarkdownBriefRenderer;
 	onRef?: (element: unknown) => void;
 }) {
 	const dim = () => createTextAttributes({dim: true});
 	const briefed = () => Boolean(props.brief && props.brief.trim());
+	const aligned = () => briefed() && !props.briefUnindented;
 	// Thought gears are ALWAYS secondary/dim (optional info); tool glyphs
 	// follow the status (done = success green). The gear never turns green.
 	const glyph = settledGlyphColor(
@@ -74,12 +77,14 @@ export function SettledToolRow(props: {
 				    the header must start at col 3 — width 3, NOT 2 — or the
 				    tool content sits one gap LEFT of the brief (bash parity:
 				    the bordered box indents width 3 for the same reason). */}
-				<Show when={!briefed() && !props.batchBriefed}>
+				<Show
+					when={(!briefed() || props.briefUnindented) && !props.batchBriefed}
+				>
 					<text fg={glyph} attributes={props.glyph === '⚙' ? dim() : undefined}>
 						{(props.glyph ?? '✦') + ' '}
 					</text>
 				</Show>
-				<Show when={briefed() || props.batchBriefed}>
+				<Show when={aligned() || props.batchBriefed}>
 					<box width={3} />
 				</Show>
 				{/* ONE text renderable for the whole header, styled SPANS for
@@ -119,7 +124,7 @@ export function SettledToolRow(props: {
 						    is 1 wide — the `└` lands at col 3, aligned with
 						    the header text AND the brief text (non-briefed:
 						    `└` at col 2 = the header text col 2). */}
-						<Show when={briefed() || props.batchBriefed}>
+						<Show when={aligned() || props.batchBriefed}>
 							<box width={1} />
 						</Show>
 						<text>

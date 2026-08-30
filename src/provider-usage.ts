@@ -185,6 +185,28 @@ export function formatTokens(total: number): string {
 	return formatCount(total);
 }
 
+/** End day for a paged calendar range (current page ends today). */
+export function usageCalendarEnd(now: number, startMonth: number): Date {
+	const current = new Date(now);
+	current.setUTCHours(0, 0, 0, 0);
+	if (startMonth <= 0) return current;
+	return new Date(
+		Date.UTC(
+			current.getUTCFullYear(),
+			current.getUTCMonth() - startMonth + 1,
+			0,
+		),
+	);
+}
+
+// One /usage open formats many responsive ranges. Session-history scanning
+// dominates cost, so reuse same provider snapshot briefly instead of reading
+// every session file once per range/page.
+const calendarDailyCache = new Map<
+	string,
+	{at: number; entries: Record<string, number>}
+>();
+
 /** Build compact Codex-style daily activity calendar for one provider. */
 export function formatUsageCalendar(
 	baseUrl: string,
@@ -192,58 +214,61 @@ export function formatUsageCalendar(
 	months = 12,
 	startMonth = 0,
 ): string {
-	const entries = loadProviderUsage().entries[cacheKey(baseUrl)] ?? {};
-	const daily: Record<string, number> = {};
-	// Older sessions predate the usage ledger. Seed the calendar from their
-	// persisted transcript/context so `/usage` is useful immediately after
-	// upgrade; new turns continue using exact provider usage blocks.
-	try {
-		const dir = join(bobonyoDataDir(), 'sessions');
-		for (const file of readdirSync(dir).filter(name =>
-			name.endsWith('.json'),
-		)) {
-			const session = JSON.parse(readFileSync(join(dir, file), 'utf8')) as {
-				provider?: string;
-				updatedAt?: number;
-				messages?: Array<{content?: string}>;
-				context?: Array<{content?: string}>;
-			};
-			if (
-				session.provider &&
-				session.provider !== cacheKey(baseUrl) &&
-				!session.provider.includes(baseUrl)
-			)
-				continue;
-			const contents = session.messages ?? session.context ?? [];
-			const tokens = Math.floor(
-				contents.reduce(
-					(sum, message) => sum + (message.content?.length ?? 0),
-					0,
-				) / 4,
-			);
-			if (tokens > 0 && session.updatedAt) {
-				const day = new Date(session.updatedAt).toISOString().slice(0, 10);
-				daily[day] = Math.max(daily[day] ?? 0, tokens);
+	const key = cacheKey(baseUrl);
+	const cachedDaily = calendarDailyCache.get(key);
+	const daily: Record<string, number> =
+		cachedDaily && Date.now() - cachedDaily.at < 1_000
+			? {...cachedDaily.entries}
+			: {};
+	if (!cachedDaily || Date.now() - cachedDaily.at >= 1_000) {
+		const entries = loadProviderUsage().entries[key] ?? {};
+		// Older sessions predate usage ledger. Scan once per /usage open, not
+		// once for every responsive range.
+		try {
+			const dir = join(bobonyoDataDir(), 'sessions');
+			for (const file of readdirSync(dir).filter(name =>
+				name.endsWith('.json'),
+			)) {
+				const session = JSON.parse(readFileSync(join(dir, file), 'utf8')) as {
+					provider?: string;
+					updatedAt?: number;
+					messages?: Array<{content?: string}>;
+					context?: Array<{content?: string}>;
+				};
+				if (
+					session.provider &&
+					session.provider !== cacheKey(baseUrl) &&
+					!session.provider.includes(baseUrl)
+				)
+					continue;
+				const contents = session.messages ?? session.context ?? [];
+				const tokens = Math.floor(
+					contents.reduce(
+						(sum, message) => sum + (message.content?.length ?? 0),
+						0,
+					) / 4,
+				);
+				if (tokens > 0 && session.updatedAt) {
+					const day = new Date(session.updatedAt).toISOString().slice(0, 10);
+					daily[day] = Math.max(daily[day] ?? 0, tokens);
+				}
+			}
+		} catch {
+			/* missing session directory is normal */
+		}
+		for (const bucket of Object.values(entries)) {
+			const recorded = bucket.dailyTokens ?? {};
+			for (const [day, total] of Object.entries(recorded)) {
+				daily[day] = Math.max(daily[day] ?? 0, total);
+			}
+			if (Object.keys(recorded).length === 0 && bucket.totalTokens > 0) {
+				const day = new Date(bucket.at).toISOString().slice(0, 10);
+				daily[day] = Math.max(daily[day] ?? 0, bucket.totalTokens);
 			}
 		}
-	} catch {
-		/* missing session directory is normal */
+		calendarDailyCache.set(key, {at: Date.now(), entries: {...daily}});
 	}
-	for (const bucket of Object.values(entries)) {
-		const recorded = bucket.dailyTokens ?? {};
-		for (const [day, total] of Object.entries(recorded)) {
-			daily[day] = Math.max(daily[day] ?? 0, total);
-		}
-		// Legacy monthly buckets predate dailyTokens. Put their total on the
-		// recorded bucket day so old usage produces visible calendar activity
-		// instead of a misleading all-empty grid.
-		if (Object.keys(recorded).length === 0 && bucket.totalTokens > 0) {
-			const day = new Date(bucket.at).toISOString().slice(0, 10);
-			daily[day] = Math.max(daily[day] ?? 0, bucket.totalTokens);
-		}
-	}
-	const end = new Date(now);
-	end.setUTCHours(0, 0, 0, 0);
+	const end = usageCalendarEnd(now, startMonth);
 	const start = new Date(
 		Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - months + 1, 1),
 	);
@@ -284,17 +309,32 @@ export function formatUsageCalendar(
 		(label, weekday) =>
 			`${label} ${weeks.map(week => `${cell(daily[week[weekday]!.toISOString().slice(0, 10)] ?? 0)} `).join('')}`,
 	);
-	const monthLabels = weeks
-		.map((week, index) =>
-			week[0]!.getUTCDate() <= 7
-				? new Intl.DateTimeFormat('en', {
-						month: 'short',
-						timeZone: 'UTC',
-					}).format(week[0]!)
-				: '   ',
-		)
-		.join('');
-	return `Token activity   last ${months} months\n\nLifetime ${formatCount(total)} · Peak ${formatCount(peak)} · Streak ${streak}d (best ${best}d)\n\n   ${monthLabels}\n${rows.join('\n')}\n\n   Less · ▪ ▪ ■ ■ █ More\n   daily · weekly · cumulative`;
+	// Header shares weekday grid's TWO columns per week. Previous code
+	// emitted THREE chars for every week (`'   '`), making a 12-month header
+	// 156 columns while calendar rows were 105; OpenTUI wrapped May onward.
+	// Paint month names onto a fixed-width canvas instead, clipping only a
+	// final label at the right edge. Page selection handles narrower cards.
+	const monthCanvas = Array.from({length: weeks.length * 2}, () => ' ');
+	for (let index = 0; index < weeks.length; index++) {
+		const week = weeks[index]!;
+		if (week[0]!.getUTCDate() > 7) continue;
+		const label = new Intl.DateTimeFormat('en', {
+			month: 'short',
+			timeZone: 'UTC',
+		}).format(week[0]!);
+		for (let offset = 0; offset < label.length; offset++) {
+			const column = index * 2 + offset;
+			if (column < monthCanvas.length) monthCanvas[column] = label[offset]!;
+		}
+	}
+	const monthLabels = monthCanvas.join('').trimEnd();
+	const dateLabel = (date: Date) =>
+		new Intl.DateTimeFormat('en', {
+			month: 'short',
+			year: 'numeric',
+			timeZone: 'UTC',
+		}).format(date);
+	return `Token activity   ${dateLabel(start)} – ${dateLabel(end)}\n\nLifetime ${formatCount(total)} · Peak ${formatCount(peak)} · Streak ${streak}d (best ${best}d)\n\n   ${monthLabels}\n${rows.join('\n')}\n\n   Less · ▪ ▪ ■ ■ █ More\n   daily · weekly · cumulative`;
 }
 
 /**

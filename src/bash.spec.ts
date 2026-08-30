@@ -2,10 +2,60 @@ import {describe, expect, test} from 'bun:test';
 import {
 	MAX_BASH_OUTPUT_CHARS,
 	MAX_BASH_OUTPUT_LINES,
+	MAX_COMPLETED_BACKGROUND_TASKS,
+	avoidProcessMatcherSelfMatch,
+	capBackgroundTasks,
 	capOutputTail,
+	cancelRunningBackgroundTasks,
+	setBgTasks,
 	runBash,
 	stripEchoedCommand,
+	stripTerminalControl,
+	normalizeBashCommand,
 } from './bash';
+
+describe('avoidProcessMatcherSelfMatch', () => {
+	test('brackets pgrep -f literals so monitors do not match themselves', () => {
+		const command =
+			"if ! pgrep -f 'node scripts/run.mjs --workers 5'; then echo done; fi";
+		expect(avoidProcessMatcherSelfMatch(command)).toContain(
+			"pgrep -f '[n]ode scripts/run.mjs --workers 5'",
+		);
+	});
+	test('keeps already-safe bracket patterns unchanged', () => {
+		const command = "pgrep -f '[n]ode scripts/run.mjs'";
+		expect(avoidProcessMatcherSelfMatch(command)).toBe(command);
+	});
+});
+describe('normalizeBashCommand (redundant workspace cd)', () => {
+	test('removes same-directory cd before a chained command', () => {
+		expect(normalizeBashCommand('cd /tmp/work && pwd', '/tmp/work')).toBe(
+			'pwd',
+		);
+	});
+	test('keeps cd when target differs', () => {
+		expect(normalizeBashCommand('cd /tmp && pwd', '/tmp/work')).toBe(
+			'cd /tmp && pwd',
+		);
+	});
+	test('keeps commands that merely contain cd later', () => {
+		expect(normalizeBashCommand('printf "cd /tmp/work"', '/tmp/work')).toBe(
+			'printf "cd /tmp/work"',
+		);
+	});
+});
+describe('stripTerminalControl (Bash output safety)', () => {
+	test('removes SGR color and reset sequences', () => {
+		expect(stripTerminalControl('\u001b[37mwhite\u001b[0m text')).toBe(
+			'white text',
+		);
+	});
+	test('removes OSC title sequences and C0 controls', () => {
+		expect(stripTerminalControl('\u001b]0;leak\u0007hello\u0007')).toBe(
+			'hello',
+		);
+	});
+});
 
 describe('capOutputTail (bash output capture caps)', () => {
 	test('keeps output unchanged when it fits within both caps', () => {
@@ -197,14 +247,106 @@ describe('stripEchoedCommand (leading echoed-command line)', () => {
 	});
 });
 
+describe('runBash working directory', () => {
+	test('starts commands in the explicit workspace directory', async () => {
+		const result = await runBash('pwd', undefined, undefined, process.cwd());
+		expect(result.content.trim().split('\n').at(-1)).toBe(process.cwd());
+	});
+});
 describe('runBash abort signal', () => {
 	test('kills a long-running process when the signal aborts', async () => {
 		const controller = new AbortController();
 		const started = Date.now();
 		const promise = runBash('sleep 30', undefined, controller.signal);
 		setTimeout(() => controller.abort(), 50);
-		const result = await promise;
-		expect(Date.now() - started).toBeLessThan(2000);
-		expect(result.content).toContain('EXIT_CODE:');
+		await expect(promise).rejects.toMatchObject({name: 'AbortError'});
+		expect(Date.now() - started).toBeLessThan(500);
+	});
+
+	test('kills descendant processes without waiting on inherited pipes', async () => {
+		const controller = new AbortController();
+		const started = Date.now();
+		const promise = runBash("bash -c 'sleep 30'", undefined, controller.signal);
+		setTimeout(() => controller.abort(), 50);
+		await expect(promise).rejects.toMatchObject({name: 'AbortError'});
+		expect(Date.now() - started).toBeLessThan(500);
+	});
+});
+
+describe('background task ownership', () => {
+	test('keeps all running tasks and only newest completed summaries', () => {
+		const tasks = [
+			...Array.from(
+				{length: MAX_COMPLETED_BACKGROUND_TASKS + 5},
+				(_, index) => ({
+					id: `done-${index}`,
+					command: 'done',
+					output: [],
+					running: false,
+					exitCode: 0,
+					startedAt: index,
+					completedAt: index,
+				}),
+			),
+			{
+				id: 'running',
+				command: 'running',
+				output: [],
+				running: true,
+				exitCode: null,
+				startedAt: 0,
+			},
+		];
+		const capped = capBackgroundTasks(tasks);
+		expect(capped.filter(task => task.running).map(task => task.id)).toEqual([
+			'running',
+		]);
+		expect(capped.filter(task => !task.running)).toHaveLength(
+			MAX_COMPLETED_BACKGROUND_TASKS,
+		);
+		expect(capped.some(task => task.id === 'done-0')).toBe(false);
+	});
+	test('cancels only the requested owner', () => {
+		let goalCancelled = 0;
+		let userCancelled = 0;
+		setBgTasks([
+			{
+				id: 'goal-bg',
+				command: 'goal monitor',
+				output: [],
+				running: true,
+				exitCode: null,
+				startedAt: 1,
+				owner: 'goal',
+				cancel: () => goalCancelled++,
+			},
+			{
+				id: 'user-bg',
+				command: 'dev server',
+				output: [],
+				running: true,
+				exitCode: null,
+				startedAt: 1,
+				owner: 'user',
+				cancel: () => userCancelled++,
+			},
+		]);
+		expect(cancelRunningBackgroundTasks('goal')).toBe(1);
+		expect(goalCancelled).toBe(1);
+		expect(userCancelled).toBe(0);
+		setBgTasks([]);
+	});
+
+	test('runBash assigns completion and owner before returning', async () => {
+		const result = await runBash(
+			'printf done',
+			undefined,
+			undefined,
+			process.cwd(),
+			undefined,
+			'goal',
+		);
+		expect(result.task?.completion).toBeInstanceOf(Promise);
+		expect(result.task?.owner).toBe('goal');
 	});
 });

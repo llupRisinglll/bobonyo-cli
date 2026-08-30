@@ -3,6 +3,10 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
+	"packageManager": "bun@1.4.0",
+	"engines": {
+		"bun": ">=1.4.0"
+	},
 	"description": "Rewrite of the nanocoder CLI on Solid + OpenTUI (parity target: docs/business-logic/cli)",
 	"scripts": {
 		"dev": "bun run src/index.tsx",

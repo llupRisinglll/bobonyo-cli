@@ -57,14 +57,19 @@ describe('stableSettledBlocks (no whole-history re-render on bash settle)', () =
 
 	test('removed blocks drop out of the rendered list', () => {
 		const cache = new Map<string, SettledBlock>();
-		const first = stableSettledBlocks(cache, [
-			mdBlock('a'),
-			mdBlock('b'),
-		]);
+		const first = stableSettledBlocks(cache, [mdBlock('a'), mdBlock('b')]);
 		// /undo truncated the transcript back to one message.
 		const second = stableSettledBlocks(cache, [mdBlock('a')]);
 		expect(second).toHaveLength(1);
 		expect(second[0]).toBe(first[0]);
+		expect(cache).toHaveLength(1);
+	});
+	test('content and width variants do not accumulate after replacement', () => {
+		const cache = new Map<string, SettledBlock>();
+		stableSettledBlocks(cache, [mdBlock('old-width')]);
+		stableSettledBlocks(cache, [mdBlock('new-width')]);
+		expect(cache).toHaveLength(1);
+		expect([...cache.keys()][0]).toContain('new-width');
 	});
 });
 
@@ -84,9 +89,7 @@ describe('settledBlockCacheKey', () => {
 			...block,
 			status: 'done' as const,
 		};
-		expect(settledBlockCacheKey(block)).not.toBe(
-			settledBlockCacheKey(changed),
-		);
+		expect(settledBlockCacheKey(block)).not.toBe(settledBlockCacheKey(changed));
 		// A theme/width change alters the tokenized segments -> new key.
 		const recolored = {
 			...block,

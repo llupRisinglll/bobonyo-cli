@@ -8,7 +8,12 @@
  */
 
 import {createSignal} from 'solid-js';
+import {isAbsolute, relative, resolve, sep} from 'node:path';
 import {appendMessage} from './state';
+import {checkBashRemovalSafety} from './bash-removal-guard';
+import {loadSettings} from './settings';
+import {buildSandboxCommand} from './sandbox';
+import {projectRoot} from './project-paths';
 
 export interface BackgroundTask {
 	id: string;
@@ -18,6 +23,10 @@ export interface BackgroundTask {
 	exitCode: number | null;
 	startedAt: number;
 	completedAt?: number;
+	claimed?: boolean;
+	completion?: Promise<void>;
+	cancel?: () => void;
+	owner?: 'user' | 'goal' | 'loop';
 }
 
 /** nanocoder's foreground budget (source/utils/streaming-bash-tool.tsx). */
@@ -66,6 +75,35 @@ export function capOutputTail(
 }
 
 export const [bgTasks, setBgTasks] = createSignal<BackgroundTask[]>([]);
+export const MAX_COMPLETED_BACKGROUND_TASKS = 20;
+
+/** Keep every running task plus only the newest completed task summaries. */
+export function capBackgroundTasks(
+	tasks: BackgroundTask[],
+	maxCompleted = MAX_COMPLETED_BACKGROUND_TASKS,
+): BackgroundTask[] {
+	const running = tasks.filter(task => task.running);
+	const completed = tasks
+		.filter(task => !task.running)
+		.sort(
+			(a, b) => (b.completedAt ?? b.startedAt) - (a.completedAt ?? a.startedAt),
+		)
+		.slice(0, Math.max(0, maxCompleted));
+	return [...running, ...completed].sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** Remove terminal control sequences before subprocess text reaches OpenTUI. */
+export function stripTerminalControl(text: string): string {
+	return text
+		.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+		.replace(
+			/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g,
+			'',
+		)
+		.replace(/\u001b./gs, '')
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u009b]/g, '')
+		.replace(/\r/g, '');
+}
 
 let taskSeq = 0;
 function nextTaskId(): string {
@@ -75,6 +113,17 @@ function nextTaskId(): string {
 
 export function activeBgCount(): number {
 	return bgTasks().filter(task => task.running).length;
+}
+
+/** Cancel every running Bash task owned by this Bobonyo process. */
+export function cancelRunningBackgroundTasks(
+	owner?: BackgroundTask['owner'],
+): number {
+	const running = bgTasks().filter(
+		task => task.running && (!owner || task.owner === owner),
+	);
+	for (const task of running) task.cancel?.();
+	return running.length;
 }
 
 /**
@@ -154,16 +203,89 @@ function collapseText(text: string): string {
 	return text.trim().split(/\s+/).filter(Boolean).join(' ');
 }
 
+/**
+ * Prevent `pgrep/pkill -f 'literal'` from matching its own shell command.
+ * Bracketing one literal character keeps regex meaning for target processes
+ * (`node` -> `[n]ode`) while the wrapper command contains `[n]ode`, not
+ * `node`. Existing bracket-safe patterns remain untouched.
+ */
+export function avoidProcessMatcherSelfMatch(command: string): string {
+	return command.replace(
+		/\b(pgrep|pkill)(\s+[^;&|\n]*?(?:-f|-[A-Za-z]*f[A-Za-z]*))\s+(['"])([^'"\n]+)\3/g,
+		(full, tool: string, flags: string, quote: string, pattern: string) => {
+			if (/\[[^\]]+\]/.test(pattern)) return full;
+			const at = pattern.search(/[A-Za-z0-9]/);
+			if (at < 0) return full;
+			const char = pattern[at] ?? '';
+			const safe = `${pattern.slice(0, at)}[${char}]${pattern.slice(at + 1)}`;
+			return `${tool}${flags} ${quote}${safe}${quote}`;
+		},
+	);
+}
+
+/** Remove only a redundant leading `cd <current workspace>` prefix. */
+export function normalizeBashCommand(command: string, cwd: string): string {
+	const match =
+		/^\s*cd\s+(?:--\s+)?(?:(['"])(.*?)\1|(\S+))\s*(?:(&&|;)([\s\S]*))?\s*$/.exec(
+			command,
+		);
+	if (!match) return command;
+	const target = match[2] ?? match[3];
+	if (!target) return command;
+	let resolvedTarget: string;
+	try {
+		resolvedTarget = resolve(cwd, target);
+	} catch {
+		return command;
+	}
+	if (resolvedTarget !== resolve(cwd)) return command;
+	const rest = match[5]?.trim() ?? '';
+	return rest || ':';
+}
+
+/** Sandboxed commands may only move harness cwd within project workspace. */
+export function sandboxedCwd(
+	candidate: string | undefined,
+	cwd: string,
+	active: boolean,
+	workspaceRoot = projectRoot(cwd),
+): string | undefined {
+	if (!candidate || !active) return candidate;
+	const root = resolve(workspaceRoot);
+	const target = resolve(candidate);
+	const rel = relative(root, target);
+	return rel === '' ||
+		(rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+		? target
+		: undefined;
+}
+
 export interface BashTurnResult {
 	content: string;
 	task?: BackgroundTask;
+	cwd?: string;
 }
 
 export async function runBash(
 	command: string,
 	onProgress?: (output: string) => void,
 	signal?: AbortSignal,
+	cwd = process.cwd(),
+	onCwdChange?: (cwd: string) => void,
+	owner: BackgroundTask['owner'] = 'user',
+	workspaceRoot = projectRoot(cwd),
+	extraWritablePaths: string[] = [],
 ): Promise<BashTurnResult> {
+	command = avoidProcessMatcherSelfMatch(command);
+	// Non-negotiable containment gate. Approval mode never overrides this:
+	// shell deletion may touch literal targets strictly below workspace only.
+	const removalSafety = checkBashRemovalSafety(command, cwd);
+	if (!removalSafety.allowed) {
+		return {
+			content: `REFUSED dangerous deletion: ${removalSafety.reason}. Use delete_file for an explicit in-workspace file.`,
+			cwd,
+		};
+	}
 	const task: BackgroundTask = {
 		id: nextTaskId(),
 		command,
@@ -171,26 +293,95 @@ export async function runBash(
 		running: true,
 		exitCode: null,
 		startedAt: Date.now(),
+		owner,
 	};
 
-	const proc = Bun.spawn(['bash', '-c', command], {
-		cwd: process.cwd(),
+	const cwdMarker = '__BOBONYО_CWD__';
+	let finalCwd: string | undefined;
+	// Run command in one shell, then probe that shell's final PWD. A new
+	// process per tool call cannot retain `cd` by itself.
+	const wrappedCommand = `${command}\n__bobonyo_status=$?\nprintf '\n${cwdMarker}%s\n' "$PWD"\nexit $__bobonyo_status`;
+	let stdoutRemainder = '';
+	const consumeStdout = (text: string) => {
+		stdoutRemainder += text;
+		const lines = stdoutRemainder.split('\n');
+		stdoutRemainder = lines.pop() ?? '';
+		for (const line of lines) {
+			if (line.startsWith(cwdMarker)) {
+				finalCwd = line.slice(cwdMarker.length).trim();
+			} else if (line) {
+				task.output.push(line);
+			}
+		}
+	};
+	const sandboxSettings = loadSettings().sandbox ?? {
+		mode: 'auto' as const,
+		network: true,
+		writablePaths: [],
+	};
+	const sandbox = buildSandboxCommand(
+		wrappedCommand,
+		cwd,
+		{
+			...sandboxSettings,
+			writablePaths: [
+				...new Set([...sandboxSettings.writablePaths, ...extraWritablePaths]),
+			],
+		},
+		undefined,
+		workspaceRoot,
+	);
+	if (sandbox.argv.length === 0) {
+		return {content: `REFUSED: ${sandbox.reason}`, cwd};
+	}
+	const proc = Bun.spawn(sandbox.argv, {
+		cwd,
 		stdout: 'pipe',
 		stderr: 'pipe',
+		env: {
+			...process.env,
+			TERM: 'dumb',
+			NO_COLOR: '1',
+			FORCE_COLOR: '0',
+			CLICOLOR: '0',
+			CLICOLOR_FORCE: '0',
+		},
+		// Separate process group: Esc must kill bash AND descendants (gh/npm/
+		// test runners), not leave a grandchild holding stdout pipes open.
+		detached: process.platform !== 'win32',
 	});
 
 	// ABORT SIGNAL: when the user presses Esc (the turn's AbortController
 	// fires), kill the spawned process immediately so the tool loop
 	// unwinds instead of waiting for the process to finish naturally.
-	if (signal) {
-		const onAbort = () => {
+	let abortReject: ((error: DOMException) => void) | undefined;
+	const aborted = new Promise<never>((_, reject) => {
+		abortReject = reject;
+	});
+	const killProcessTree = () => {
+		try {
+			if (process.platform !== 'win32') process.kill(-proc.pid, 'SIGTERM');
+			else proc.kill('SIGTERM');
+		} catch {
 			try {
 				proc.kill('SIGTERM');
-			} catch {
-				// Process already exited — safe to ignore.
-			}
-		};
-		signal.addEventListener('abort', onAbort, {once: true});
+			} catch {}
+		}
+		// Some CLIs trap TERM. Esc is cancellation, not a polite shutdown
+		// request: force the whole group after a tiny grace period.
+		const timer = setTimeout(() => {
+			try {
+				if (process.platform !== 'win32') process.kill(-proc.pid, 'SIGKILL');
+				else proc.kill('SIGKILL');
+			} catch {}
+		}, 100);
+		timer.unref();
+		abortReject?.(new DOMException('Aborted', 'AbortError'));
+	};
+	task.cancel = killProcessTree;
+	if (signal) {
+		if (signal.aborted) killProcessTree();
+		else signal.addEventListener('abort', killProcessTree, {once: true});
 	}
 
 	let truncated = false;
@@ -200,9 +391,10 @@ export async function runBash(
 		for (;;) {
 			const {done, value} = await reader.read();
 			if (done) break;
-			const chunk = decoder.decode(value, {stream: true});
-			for (const line of chunk.split('\n')) {
-				if (line) task.output.push(line);
+			const chunk = stripTerminalControl(decoder.decode(value, {stream: true}));
+			if (stream === proc.stdout) consumeStdout(chunk);
+			else {
+				for (const line of chunk.split('\n')) if (line) task.output.push(line);
 			}
 			// Strip a leading echoed-command line (the shell printed the
 			// typed command back): the tool box already renders the command
@@ -221,7 +413,7 @@ export async function runBash(
 	// Register immediately so the floating notification appears from the
 	// start (not just after the 15s budget expires). The `running: true`
 	// flag controls the count; finished() flips it to false.
-	setBgTasks(prev => [...prev, task]);
+	setBgTasks(prev => capBackgroundTasks([...prev, task]));
 	const finished = (async () => {
 		await Promise.all([
 			proc.exited,
@@ -237,8 +429,12 @@ export async function runBash(
 				...task.output,
 			];
 		}
-		setBgTasks(prev => [...prev]);
+		setBgTasks(prev => capBackgroundTasks([...prev]));
+		signal?.removeEventListener('abort', killProcessTree);
 	})();
+	// waitForBackgroundTask must await this exact process. Without this,
+	// auto-backgrounded monitor commands resolve immediately and leak forever.
+	task.completion = finished;
 
 	// nanocoder disables auto-background for a leading `sleep`.
 	const disallowAutoBackground = /^\s*sleep(?:\s|$)/.test(command);
@@ -253,12 +449,21 @@ export async function runBash(
 		? await Promise.race([
 				finished.then(() => 'done' as const),
 				budget.then(() => 'background' as const),
+				aborted,
 			])
-		: 'done';
+		: await Promise.race([finished.then(() => 'done' as const), aborted]);
 
 	if (outcome === 'background') {
 		void finished
 			.then(() => {
+				const nextCwd = sandboxedCwd(
+					finalCwd,
+					cwd,
+					sandbox.active,
+					workspaceRoot,
+				);
+				if (nextCwd) onCwdChange?.(nextCwd);
+				if (task.claimed) return;
 				const scriptLines = command
 					.split('\n')
 					.map(line => line.trimEnd())
@@ -286,9 +491,28 @@ export async function runBash(
 	}
 
 	await finished;
+	if (stdoutRemainder) consumeStdout('\n');
 	const output = task.output.join('\n');
 	return {
 		content: `EXIT_CODE: ${task.exitCode ?? '?'}\n${output}`.trim(),
 		task,
+		cwd: sandboxedCwd(finalCwd, cwd, sandbox.active, workspaceRoot),
 	};
+}
+
+/** Wait without model polling when a command auto-backgrounds. */
+export async function waitForBackgroundTask(
+	task: BackgroundTask,
+	signal?: AbortSignal,
+): Promise<string> {
+	task.claimed = true;
+	if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+	await new Promise<void>((resolve, reject) => {
+		const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+		signal?.addEventListener('abort', onAbort, {once: true});
+		(task.completion ?? Promise.resolve())
+			.then(resolve, reject)
+			.finally(() => signal?.removeEventListener('abort', onAbort));
+	});
+	return `EXIT_CODE: ${task.exitCode ?? '?'}\n${task.output.join('\n')}`.trim();
 }

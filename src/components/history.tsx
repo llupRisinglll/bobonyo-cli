@@ -12,24 +12,32 @@ import {
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+} from 'solid-js';
 import {
 	activeAgents,
+	activeAgentRuns as globalActiveAgentRuns,
 	activeEndpoint,
 	expandedBlocks,
 	gearGlyph,
 	hoverRow,
 	thinkingMode,
-	liveOutputs,
-	messages,
+	liveOutputs as globalLiveOutputs,
+	messages as globalMessages,
 	mode,
-	reasoning,
-	running,
+	reasoning as globalReasoning,
+	running as globalRunning,
 	setHoverRow,
 	setThoughtExpanded,
 	setToolsExpanded,
 	spinnerFrame,
-	streaming,
+	streaming as globalStreaming,
 	thinkingElapsed,
 	turnElapsed,
 	titleShape,
@@ -47,14 +55,18 @@ import {
 	type ChatMessage,
 } from '../state';
 import {markdownSyntaxStyleFor} from '../syntax';
-import {displayToolName, isFileWriteTool, toolFamily} from '../tools';
+import {activityGroupForTool, formatActivityMessages} from '../activity-groups';
 import {
 	fence,
 	formatOutputTail,
 	formatToolEntry,
 	rowLanguage,
 } from '../tool-display';
-import {liveRowSegments, type LiveRowSegments} from '../live-tool-row';
+import {
+	liveRowSegments,
+	shouldRenderRunningToolMessage,
+	type LiveRowSegments,
+} from '../live-tool-row';
 import {stableSettledBlocks, type SettledBlock} from '../settled-block-cache';
 import {
 	disabledScroll,
@@ -65,6 +77,8 @@ import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
 import {BashToolRow} from './bash-tool-row';
 import {FileToolRow} from './file-tool-row';
+import {TranscriptReply} from './transcript-reply';
+import {formatSubagentCompactTail} from '../subagent-tail';
 import type {MarkdownBriefRenderer} from './markdown-brief';
 import {
 	tokenizeAgentRow,
@@ -135,13 +149,6 @@ export function hitTestBlock(
 	);
 }
 
-/**
- * Expanded per-call entries of every multi-call compact block, keyed by block
- * key. Clicking an expandable tally opens the DETAILS MODAL with these
- * entries (scrollable) instead of toggling in place.
- */
-const compactDetails = new Map<string, string>();
-
 type RenderToken = {type: string; text?: string; lang?: string};
 
 /**
@@ -185,8 +192,22 @@ function rowPath(text: string): string {
  * headings/lists/code/tables format live while the stream grows, and the
  * settled transcript is byte-identical in shape.
  */
-export function History(props: {
+export function attachmentMarkerFromLanguage(language: string): string {
+	return language.match(/(?:^|:)a([^:]*)/)?.[1] ?? '';
+}
+
+export interface HistoryProps {
 	height?: number;
+	width?: number;
+	/** Optional transcript sources for embedded child conversations. */
+	messages?: () => ChatMessage[];
+	running?: () => boolean;
+	streaming?: () => string;
+	reasoning?: () => string;
+	liveOutputs?: () => Record<string, string>;
+	activeAgentRuns?: typeof globalActiveAgentRuns;
+	/** Embedded views omit welcome UI and do not consume modal navigation keys. */
+	embedded?: boolean;
 	/**
 	 * Terminal-like input placement: reports the REAL rendered content
 	 * height (banner + transcript rows, measured from the laid-out scrollbox
@@ -195,9 +216,23 @@ export function History(props: {
 	 * grows until it sticks at the bottom.
 	 */
 	onContentHeight?: (height: number) => void;
-}) {
+}
+
+export function History(props: HistoryProps) {
 	const renderer = useRenderer();
+	const messages = props.messages ?? globalMessages;
+	const running = props.running ?? globalRunning;
+	const streaming = props.streaming ?? globalStreaming;
+	const reasoning = props.reasoning ?? globalReasoning;
+	const liveOutputs = props.liveOutputs ?? globalLiveOutputs;
+	const activeAgentRuns = props.activeAgentRuns ?? globalActiveAgentRuns;
+	// Details belong to this mounted transcript only. Rebuilding the settled
+	// view clears stale session/compaction entries instead of retaining full
+	// tool output and reasoning in a process-global map forever.
+	const compactDetails = new Map<string, string>();
 	const dim = () => createTextAttributes({dim: true});
+	const replyWidth = () =>
+		props.width === undefined ? undefined : Math.max(1, props.width - 3);
 	// OpenTUI's built-in tree-sitter grammars (ts/js/md) highlight fenced
 	// code blocks, attach the client so ` ```typescript ` previews get real
 	// syntax colors instead of a hand-rolled tokenizer. In the COMPILED
@@ -339,10 +374,9 @@ export function History(props: {
 						token.text ?? '',
 						colors(),
 						historyFillWidth(terminalDimensions().width ?? 80),
-						// The fence language suffix carries the REAL
-						// attachment token numbers (`a13` = #1 + #3), so only
-						// genuine [Image #N]/[Text #N] tokens get colored.
-						String(token.lang ?? '').split(':')[2] ?? '',
+						// Find attachment metadata explicitly. Resize metadata may
+						// precede it (`w120:a13`), so positional parsing is wrong.
+						attachmentMarkerFromLanguage(String(token.lang ?? '')),
 					),
 			}),
 		commandrow: (token, status) =>
@@ -425,13 +459,26 @@ export function History(props: {
 		renderNode,
 		treeSitter,
 	};
+	// One source of truth for LIVE ownership. Global `running()` only means
+	// the model turn continues; it does NOT mean every tool from that turn is
+	// still live. Completed tools move straight to settled history while the
+	// model keeps working. A live duplicate with the same id wins.
+	const liveToolIds = createMemo(
+		() =>
+			new Set(
+				messages()
+					.filter(message => message.role === 'tool' && message.running)
+					.map(message => message.toolId)
+					.filter((id): id is string => Boolean(id)),
+			),
+	);
 
 	// C1: PageUp/PageDn scroll the transcript by one viewport (wheel is
 	// handled natively by the scrollbox). Sticky-bottom re-engages on the
 	// next content append. While a modal (settings) is open the modal owns
 	// the keys, scrolling the history behind it would be a leak.
 	useKeyboard(event => {
-		if (anyModalOpen()) {
+		if (!props.embedded && anyModalOpen()) {
 			// FOOLPROOF MODAL ISOLATION: global key listeners run BEFORE the
 			// renderable handlers (the history scrollbox's native arrow-key
 			// scrolling). preventDefault stops the key from reaching the
@@ -481,6 +528,7 @@ export function History(props: {
 	 */
 	const settledBlockCache = new Map<string, SettledBlock>();
 	const settledBlocks = createMemo(() => {
+		compactDetails.clear();
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
 		// the full-row-bg code blocks instead of keeping the old-width chunks.
@@ -514,31 +562,39 @@ export function History(props: {
 			});
 		};
 		const all = messages();
+		// Keep latest task snapshot expanded per user turn. Earlier task
+		// updates in same turn collapse; older turns retain their final list.
+		const latestTaskMessages = new Set<ChatMessage>();
+		let taskSeenInTurn = false;
+		for (let index = all.length - 1; index >= 0; index--) {
+			const candidate = all[index]!;
+			if (candidate.role === 'user') {
+				taskSeenInTurn = false;
+				continue;
+			}
+			if (candidate.role !== 'tool' || candidate.tool?.name !== 'write_tasks')
+				continue;
+			if (!taskSeenInTurn && !candidate.running)
+				latestTaskMessages.add(candidate);
+			taskSeenInTurn = true;
+		}
+		const seenToolIds = new Set<string>();
 		// Welcome block (parity: nanocoder shows a welcome message on an
 		// empty conversation instead of a blank transcript). SYSTEM logs
 		// (e.g. `Session renamed to "x"`) carry a `kind` and must NOT hide
 		// the banner — only real conversation rows do.
-		if (!hasConversation(all) && !running()) {
+		if (!props.embedded && !hasConversation(all) && !running()) {
 			pushBlock(buildWelcomeBanner(titleShape()));
 		}
 		for (let i = 0; i < all.length; i++) {
 			const message = all[i]!;
 			if (message.role === 'user') {
-				// Triggered commands/skills render TWO rows: the ORIGINAL
-				// typed command as a normal user message (`/worktree purpose:
-				// hello world`), then the tool-style block
-				// (`✦ Triggered a Command(name)` + body preview + `+N more
-				// lines`) so the user sees what they typed AND what was
-				// injected.
+				// Command/skill workflow bodies are model-only guidance. Transcript
+				// shows only what user typed; never dump `Triggered a Command` plus
+				// hundreds of hidden workflow lines into chat.
 				if (message.command) {
-					const key = `command-${i}`;
-					if (message.command.original) {
-						pushBlock(
-							fence('usermsg', 'done', `❯ ${message.command.original}`),
-						);
-					}
-					const rendered = renderCommandBlock(message.command, key);
-					pushBlock(rendered.text, rendered.blockKey);
+					const visible = commandVisibleText(message.command, message.content);
+					pushBlock(fence('usermsg', 'done', `❯ ${visible}`));
 					continue;
 				}
 				// User messages render as a surface-filled `❯ content` block
@@ -546,18 +602,38 @@ export function History(props: {
 				// capped at USER_PREVIEW_LINES with a clickable
 				// `+N more lines` footer that opens the full text.
 				const userKey = `user-${i}`;
+				compactDetails.set(userKey, message.content);
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
-				// Tool rows render in the LIVE region until the whole tool turn
-				// settles. A fast tool can flip its own `running` flag before the
-				// global turn flag does; excluding it here prevents one frame of
-				// live + settled duplication (brief/command shown twice).
-				if (message.running || (running() && message.toolId)) continue;
+				// review_changes is a fan-out coordinator. Its individual reviewer
+				// calls are materialized as real agent tool rows; never paint the
+				// coordinator's aggregate result as one fake row.
+				if (message.tool?.name === 'review_changes') continue;
+				// A tool id is unique per call. Defensive dedupe prevents a
+				// stale live/settled transition or resume conversion from painting
+				// the same command and pre-tool brief twice.
+				if (message.toolId) {
+					if (seenToolIds.has(message.toolId)) continue;
+					seenToolIds.add(message.toolId);
+				}
+				// Row state owns placement; global running() only means model turn
+				// continues. Completed commands stay visible during Working. A live
+				// duplicate id wins, preventing simultaneous live + settled paint.
+				if (
+					message.running ||
+					(message.toolId && liveToolIds().has(message.toolId))
+				)
+					continue;
 				// Collect the maximal run of consecutive tool calls, then group
 				// same-family calls into compact blocks (expanding per-call).
 				const run: ChatMessage[] = [message];
-				while (i + 1 < all.length && all[i + 1]?.role === 'tool') {
+				while (
+					i + 1 < all.length &&
+					all[i + 1]?.role === 'tool' &&
+					!all[i + 1]?.running &&
+					(!all[i + 1]?.toolId || !liveToolIds().has(all[i + 1]!.toolId!))
+				) {
 					run.push(all[i + 1]!);
 					i++;
 				}
@@ -568,7 +644,12 @@ export function History(props: {
 				// brief keeps every round's narration visible once settled —
 				// the old run-wide `run[0]?.brief` dropped every brief after
 				// the first tool message of the run.
-				for (const row of renderToolRun(run, fillWidth)) {
+				for (const row of renderToolRun(
+					run,
+					fillWidth,
+					compactDetails,
+					latestTaskMessages,
+				)) {
 					pushBlock(row.text, row.blockKey, 'md', row.brief);
 				}
 			} else if (message.kind === 'info') {
@@ -655,16 +736,9 @@ export function History(props: {
 				});
 				continue;
 			}
-			const last = blocks[blocks.length - 1];
-			// File-write/diff parts get their OWN markdown block: merging them
-			// with the previous part (user message, reply…) collapses the
-			// inter-block blank line and the tool glues to the chat.
-			const fileRowPart = /^```+(filerow|filediff):/.test(part.text);
-			if (last?.kind === 'md' && !fileRowPart) {
-				last.parts.push(part);
-			} else {
-				blocks.push({kind: 'md', parts: [part]});
-			}
+			// Every transcript part gets its own block. Never merge entries:
+			// markdown newline normalization can erase visual spacing.
+			blocks.push({kind: 'md', parts: [part]});
 		}
 
 		const docLines: Array<{text: string; key?: string}> = [];
@@ -781,6 +855,19 @@ export function History(props: {
 	 * so the formatting/indentation is identical while rendering and when
 	 * done (real-time consistency).
 	 */
+	// Throttle the STREAMING REPLY to ~7 updates/sec (the provider streams
+	// per word, which would re-parse the live markdown 30+ times a second and
+	// flicker). The settled reply is unaffected.
+	const [throttledStreaming, setThrottledStreaming] = createSignal('');
+	// Throttle the REASONING tail the same way (the thought block must not
+	// re-parse per reasoning word either).
+	const [throttledReasoning, setThrottledReasoning] = createSignal('');
+	// Throttle RUNNING TOOL OUTPUT the same way: tool results stream per
+	// chunk, so without a floor the live row would re-parse every chunk and
+	// flicker. The settled rows read committed output, never this signal.
+	const [throttledToolOutputs, setThrottledToolOutputs] = createSignal<
+		Record<string, string>
+	>({});
 	const liveThoughtHeader = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
 		return liveThinkingHeader(spinnerFrame(), thinkingElapsed());
@@ -795,27 +882,12 @@ export function History(props: {
 			.join('\n');
 		return wrapThoughtBody(tail, width);
 	});
-	// Throttle the STREAMING REPLY to ~7 updates/sec (the provider streams
-	// per word, which would re-parse the live markdown 30+ times a second and
-	// flicker). The settled reply is unaffected.
-	const [throttledStreaming, setThrottledStreaming] = createSignal('');
-	// Throttle the REASONING tail the same way (the thought block must not
-	// re-parse per reasoning word either).
-	const [throttledReasoning, setThrottledReasoning] = createSignal('');
-	// Throttle RUNNING TOOL OUTPUT the same way: tool results stream per
-	// chunk, so without a floor the live row would re-parse every chunk and
-	// flicker. The settled rows read committed output, never this signal.
-	const [throttledToolOutputs, setThrottledToolOutputs] = createSignal<
-		Record<string, string>
-	>({});
-	createEffect(() => {
-		const timer = setInterval(() => {
-			setThrottledStreaming(streaming());
-			setThrottledReasoning(reasoning());
-			setThrottledToolOutputs(liveOutputs());
-		}, 150);
-		return () => clearInterval(timer);
-	});
+	const throttleTimer = setInterval(() => {
+		setThrottledStreaming(streaming());
+		setThrottledReasoning(reasoning());
+		setThrottledToolOutputs(liveOutputs());
+	}, 150);
+	onCleanup(() => clearInterval(throttleTimer));
 	const liveReplyText = createMemo(() =>
 		running() && throttledStreaming() ? throttledStreaming() : '',
 	);
@@ -833,23 +905,60 @@ export function History(props: {
 	const liveToolRows = createMemo(() => {
 		if (!running()) return [];
 		const outputs = throttledToolOutputs();
+		const seenToolIds = new Set<string>();
+		const runningAgents = activeAgentRuns().filter(
+			run => run.status === 'running',
+		);
 		const rows: Array<
 			LiveRowSegments & {
 				toolId?: string;
 				lang?: string;
 				brief?: string;
 				batchBriefed?: boolean;
+				agentAggregate?: boolean;
 			}
 		> = [];
+		for (const run of runningAgents) {
+			const width = historyFillWidth(terminalDimensions().width ?? 80);
+			const tail = formatSubagentCompactTail(
+				run.output,
+				4,
+				Math.max(20, width - 6),
+			);
+			const raw = `✦ Ran agent:${run.name}(${run.description}) running\n${tail}`;
+			rows.push({
+				toolId: run.id,
+				lang: 'agentrow',
+				...liveRowSegments(raw, 'agentrow', 'running', colors(), width),
+			});
+		}
 		for (const message of messages()) {
-			if (message.role === 'tool' && message.running && message.tool) {
+			if (
+				message.role === 'tool' &&
+				message.running &&
+				message.tool &&
+				message.tool.name !== 'review_changes' &&
+				shouldRenderRunningToolMessage(
+					message.tool.name,
+					runningAgents.length > 0,
+				)
+			) {
+				if (message.toolId) {
+					if (seenToolIds.has(message.toolId)) continue;
+					seenToolIds.add(message.toolId);
+				}
 				const streamed = message.toolId ? outputs[message.toolId] : undefined;
 				const output =
 					streamed !== undefined ? streamed : (message.tool.output ?? '');
 				// Plain text (no fence, no blink swap): `✦ Name(detail)`
 				// header + `  └   ` body, exactly like the settled row.
 				const raw = formatToolEntry(
-					{...message.tool, output},
+					{
+						...message.tool,
+						output,
+						briefed: Boolean(message.brief && message.brief.trim()),
+						briefTitle: message.brief,
+					},
 					false,
 					'running',
 					true,
@@ -859,8 +968,10 @@ export function History(props: {
 				rows.push({
 					toolId: message.toolId,
 					lang: rowLanguage(message.tool.name),
-					brief: message.brief,
+					brief:
+						message.tool.name === 'write_tasks' ? undefined : message.brief,
 					batchBriefed: message.brief === ' ',
+					agentAggregate: message.tool.name === 'review_changes',
 					...liveRowSegments(
 						raw,
 						rowLanguage(message.tool.name),
@@ -884,6 +995,12 @@ export function History(props: {
 	 * As soon as reasoning/reply/tool rows stream, the tip disappears and
 	 * the real content takes over.
 	 */
+	// Provider text preceding tool call is transferred into first tool's
+	// `brief`. Throttled reply may retain previous value for 150ms; suppress
+	// it whenever live tool owns that narration. One visual owner, always.
+	const visibleLiveReplyText = createMemo(() =>
+		liveToolRows().length > 0 ? '' : liveReplyText(),
+	);
 	const historyTip = createMemo(() => {
 		// "Idle" = a turn is running but NOTHING is painting in the history:
 		// no tool rows, no streaming reply, and — in hidden thinking mode —
@@ -894,7 +1011,7 @@ export function History(props: {
 		const idle =
 			running() &&
 			!liveToolRows().length &&
-			!liveReplyText() &&
+			!visibleLiveReplyText() &&
 			!(thinkingMode() === 'show' && liveThoughtHeader());
 		if (!idle) return '';
 		const elapsed = turnElapsed();
@@ -1105,39 +1222,8 @@ export function History(props: {
 		// current event loop turn.
 		setTimeout(measureContentHeight, 0);
 	});
-	return (
-		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
-		<scrollbox
-			ref={element => {
-				scrollRef = element;
-			}}
-			// NO flex-grow: the parent sizes us to min(content, cap), so the
-			// input below stays adjacent to the content (terminal-like) until
-			// the content fills the cap and the box pins at the bottom.
-			flexGrow={0}
-			flexShrink={1}
-			minHeight={0}
-			height={props.height ?? '100%'}
-			// RIGHT gap so the scrollbar never overlaps text (the LEFT gap is
-			// per-REPLY, rendered as a padded container below).
-			paddingRight={2}
-			stickyScroll
-			stickyStart="bottom"
-			// Mouse-wheel speed parity with opencode: 3× by default
-			// (settings → scrollSpeed), so wheel scrolling feels as fast and
-			// smooth as the reference CLI instead of the linear 1× default.
-			// A MODAL freezes the wheel entirely (zero multiplier) so the
-			// history never scrolls behind it.
-			scrollAcceleration={
-				anyModalOpen() ? disabledScroll : resolveScrollAcceleration()
-			}
-			{...({
-				onMouseDown: handleMouseDown,
-				onMouseUp: handleMouseUp,
-				onMouseMove: handleMouseMove,
-				onMouseOut: handleMouseOut,
-			} as any)}
-		>
+	const transcriptContent = () => (
+		<>
 			{/* SETTLED blocks: the `each` reference stays IDENTICAL while
 			    streaming (OpenTUI's For re-renders every child when the each
 			    array reference changes, which was the flash cause), so the
@@ -1203,6 +1289,9 @@ export function History(props: {
 								hovered={block.part.key === hoveredBlock()}
 								brief={block.brief}
 								batchBriefed={block.batchBriefed}
+								briefUnindented={block.segments.header.some(chunk =>
+									chunk.text.includes('agent:'),
+								)}
 								md={briefMarkdown}
 								width={historyFillWidth(terminalDimensions().width ?? 80)}
 							/>
@@ -1212,57 +1301,35 @@ export function History(props: {
 						block.parts.map(part => part.text).join('\n\n');
 					if (block.kind === 'reply') {
 						return (
-							<box flexDirection="column">
-								{/* Breakline before every response (parity: the
-							    original's reply margin). */}
-								<box height={1} />
-								<box flexDirection="row">
-									<text fg={colors().secondary} attributes={dim()}>
-										✦
-									</text>
-									{/* The content box carries its OWN left gap:
-								    the glyph sits at column 1 (aligned with
-								    tool glyphs) and the text starts two cells
-								    later, so a reply NEVER renders glued to
-								    the glyph (`✦The`) and wrapped lines stay
-								    inside the container. */}
-									<box flexGrow={1} paddingLeft={2}>
-										<markdown
-											ref={setRef}
-											content={contentFor()}
-											streaming={false}
-											fg={colors().text}
-											syntaxStyle={syntaxStyle()}
-											internalBlockMode="top-level"
-											renderNode={renderNode}
-											treeSitterClient={treeSitter}
-											tableOptions={{
-												style: 'grid',
-												borders: true,
-												widthMode: 'content',
-											}}
-										/>
-									</box>
-								</box>
-							</box>
+							<TranscriptReply
+								content={contentFor()}
+								renderNode={renderNode}
+								treeSitter={treeSitter}
+								onRef={setRef}
+							/>
 						);
 					}
 					return (
-						<markdown
-							ref={setRef}
-							content={contentFor()}
-							streaming={false}
-							fg={colors().text}
-							syntaxStyle={syntaxStyle()}
-							internalBlockMode="top-level"
-							renderNode={renderNode}
-							treeSitterClient={treeSitter}
-							tableOptions={{
-								style: 'grid',
-								borders: true,
-								widthMode: 'content',
-							}}
-						/>
+						<box flexDirection="column">
+							{/* Structural gap: every generic history entry owns one blank
+							    row above it. Markdown never owns spacing. */}
+							<box height={1} />
+							<markdown
+								ref={setRef}
+								content={contentFor()}
+								streaming={false}
+								fg={colors().text}
+								syntaxStyle={syntaxStyle()}
+								internalBlockMode="top-level"
+								renderNode={renderNode}
+								treeSitterClient={treeSitter}
+								tableOptions={{
+									style: 'grid',
+									borders: true,
+									widthMode: 'content',
+								}}
+							/>
+						</box>
 					);
 				}}
 			</For>
@@ -1298,34 +1365,16 @@ export function History(props: {
 			    settled reply, so the indentation and markdown formatting are
 			    identical while streaming and when done. The leading breakline
 			    matches the settled blank row before every response. */}
-			<Show when={liveReplyText()}>
-				<box flexDirection="column">
-					<box height={1} />
-					<box flexDirection="row">
-						<text fg={colors().secondary} attributes={dim()}>
-							✦
-						</text>
-						<box flexGrow={1} paddingLeft={2}>
-							<markdown
-								ref={element => {
-									liveReplyRef = element as never;
-								}}
-								content={liveReplyText()}
-								streaming={running()}
-								fg={colors().text}
-								syntaxStyle={syntaxStyle()}
-								internalBlockMode="top-level"
-								renderNode={renderNode}
-								treeSitterClient={treeSitter}
-								tableOptions={{
-									style: 'grid',
-									borders: true,
-									widthMode: 'content',
-								}}
-							/>
-						</box>
-					</box>
-				</box>
+			<Show when={visibleLiveReplyText()}>
+				<TranscriptReply
+					content={visibleLiveReplyText()}
+					streaming={running()}
+					renderNode={renderNode}
+					treeSitter={treeSitter}
+					onRef={element => {
+						liveReplyRef = element as never;
+					}}
+				/>
 			</Show>
 			{/* Idle-history tip: a TRANSIENT centered row at the bottom of the
 			    transcript (breakline above so it never glues to the last
@@ -1344,7 +1393,7 @@ export function History(props: {
 			</Show>
 			{/* Compacting indicator: a TRANSIENT centered row at the bottom of
 			    the transcript (breakline above so it never glues to the last
-			    message, animated dots, secondary color — same shape as the
+			    message, animated dots, warning color — same shape as the
 			    idle-history tip). Shows ONLY while an LLM context compaction
 			    runs and disappears the moment it settles, so the compaction
 			    never pollutes the chat history with a permanent row. It
@@ -1354,12 +1403,63 @@ export function History(props: {
 				<box flexDirection="column">
 					<box height={1} />
 					<box flexDirection="row" justifyContent="center">
-						<text fg={colors().secondary} attributes={dim()}>
+						<text fg={colors().warning} attributes={dim()}>
 							{compactingLabel(spinnerFrame())}
 						</text>
 					</box>
 				</box>
 			</Show>
+		</>
+	);
+	if (props.embedded) {
+		return (
+			<box
+				width={props.width ?? '100%'}
+				height={props.height ?? '100%'}
+				flexDirection="column"
+				minHeight={0}
+			>
+				{transcriptContent()}
+			</box>
+		);
+	}
+	return (
+		// biome-ignore lint/suspicious/noExplicitAny: runtime-valid mouse prop
+		<scrollbox
+			width={props.width ?? '100%'}
+			ref={element => {
+				scrollRef = element;
+			}}
+			// NO flex-grow: the parent sizes us to min(content, cap), so the
+			// input below stays adjacent to the content (terminal-like) until
+			// the content fills the cap and the box pins at the bottom.
+			flexGrow={0}
+			flexShrink={1}
+			minHeight={0}
+			height={props.height ?? '100%'}
+			// RIGHT gap so the scrollbar never overlaps text (the LEFT gap is
+			// per-REPLY, rendered as a padded container below).
+			paddingRight={2}
+			stickyScroll
+			stickyStart="bottom"
+			// Mouse-wheel speed parity with opencode: 3× by default
+			// (settings → scrollSpeed), so wheel scrolling feels as fast and
+			// smooth as the reference CLI instead of the linear 1× default.
+			// A MODAL freezes the wheel entirely (zero multiplier) so the
+			// history never scrolls behind it.
+			scrollAcceleration={
+				!props.embedded && anyModalOpen()
+					? disabledScroll
+					: resolveScrollAcceleration()
+			}
+			{...({
+				onMouseDown: handleMouseDown,
+				onMouseUp: handleMouseUp,
+				onMouseMove: handleMouseMove,
+				onMouseOut: handleMouseOut,
+			} as any)}
+		>
+			{transcriptContent()}
 		</scrollbox>
 	);
 }
@@ -1461,21 +1561,17 @@ export function settledThought(
  * script. Every other info row renders verbatim.
  */
 export function renderInfoRow(content: string, key: string): string {
-	// Every chat-history info row owns a leading breakline. Without it,
-	// command output such as `/tool:open-prs` glues directly to the preceding
-	// row; tool rows already own their internal layout and are unaffected.
-	const withBreakline = (text: string): string => `\n${text}`;
 	if (content.startsWith('Background task completed')) {
-		return withBreakline(renderBackgroundTaskRow(content, key));
+		return renderBackgroundTaskRow(content, key);
 	}
 	if (!content.startsWith('Session:   ')) {
-		return withBreakline(content);
+		return content;
 	}
 	// `/status` block (codex-like): render through a custom fenced row so the
 	// `model[effort]` brackets survive (the markdown/tree-sitter pipeline
 	// drops bare `[x]` groups). Everything else stays plain markdown.
 	if (content.startsWith('Session:   ')) {
-		return withBreakline(fence('statusrow', 'done', content));
+		return fence('statusrow', 'done', content);
 	}
 	const lines = content.replace(/\n+$/, '').split('\n');
 	const header = lines[0] ?? '';
@@ -1548,12 +1644,10 @@ function wordWrapForBackground(text: string, width: number): string[] {
 }
 
 /**
- * Group a run of consecutive tool calls into render blocks: file-write
- * tools, agents and every bash call keep their OWN block (bash compaction
- * would hide the command — the command line IS the useful content), while
- * same-family calls collapse into ONE compact tally (`✦ Ran WebSearch ×2
- * and WebFetch`). Ctrl+O toggles between the compacted header and the
- * individual call entries.
+ * Group only activity-style tools into chronological trees. Exploration
+ * calls share `Explored`, web calls share `Navigated Web`, and MCP calls
+ * share one group per server. Every other tool remains standalone: file
+ * mutations, agents, bash, tasks, skills, lifecycle tools, etc.
  *
  * A same-family block stays ONE batch only while it shares a single brief:
  * within one round the first call carries the real brief and later calls
@@ -1565,36 +1659,22 @@ function groupToolRun(run: ChatMessage[]): ChatMessage[][] {
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';
-		// File-write tools, AGENTS and BASH keep their own rows. Bash
-		// compaction (`✦ Ran Bash ×2`) hides the actual commands — each
-		// command line IS the useful content, so every bash call renders as
-		// its own `✦ Bash(cmd)` row instead of a ×N tally.
-		if (
-			isFileWriteTool(name) ||
-			name === 'agent' ||
-			name === 'execute_bash' ||
-			name === 'execute_bash:user'
-		) {
+		const activity = activityGroupForTool(name);
+		if (!activity) {
 			blocks.push([message]);
 			continue;
 		}
-		const family = toolFamily(name);
 		const last = blocks[blocks.length - 1];
-		const lastFamily =
-			last && last[0]?.tool ? toolFamily(last[0].tool.name) : null;
+		const lastActivity = last?.[0]?.tool
+			? activityGroupForTool(last[0].tool.name)
+			: null;
 		const incomingBrief = message.brief;
 		const groupBrief = last?.[0]?.brief;
 		const sharesBatch =
 			!incomingBrief ||
 			incomingBrief === ' ' ||
 			(groupBrief !== undefined && incomingBrief === groupBrief);
-		if (
-			last &&
-			lastFamily === family &&
-			!isFileWriteTool(last[0]?.tool?.name ?? '') &&
-			last[0]?.tool?.name !== 'agent' &&
-			sharesBatch
-		) {
+		if (last && lastActivity?.key === activity.key && sharesBatch) {
 			last.push(message);
 		} else {
 			blocks.push([message]);
@@ -1621,24 +1701,41 @@ export function toolRunBriefs(run: ChatMessage[]): Array<string | undefined> {
  * single brief; for single-call rows it is that call's brief), so later
  * rounds' narration is never swallowed by the first row of the run.
  */
-function renderToolRun(
+export function renderToolRun(
 	run: ChatMessage[],
 	width: number,
+	details: Map<string, string>,
+	latestTaskMessages: Set<ChatMessage> = new Set(),
 ): Array<{text: string; blockKey?: string; brief?: string}> {
 	return groupToolRun(run).flatMap(block => {
 		const brief = block[0]?.brief;
-		if (block.length === 1) {
-			const key =
-				block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
+		const activity = block[0]?.tool
+			? activityGroupForTool(block[0].tool.name)
+			: null;
+		if (!activity) {
+			const message = block[0]!;
+			const compactTask =
+				message.tool?.name === 'write_tasks' &&
+				!latestTaskMessages.has(message);
+			if (
+				compactTask &&
+				message.tool?.name === 'write_tasks' &&
+				!message.brief?.trim()
+			) {
+				return [];
+			}
+			const key = message.toolId ?? message.tool?.name ?? `block-${Date.now()}`;
 			// Expanded details for the modal (collapsed output caps at 3
 			// lines; clicking the `+N` footer opens the full scrollable view).
-			if (block[0]!.tool) {
-				compactDetails.set(
+			if (message.tool) {
+				details.set(
 					key,
 					formatToolEntry(
 						{
-							...block[0]!.tool,
-							output: liveOutput(block[0]!),
+							...message.tool,
+							output: liveOutput(message),
+							briefTitle: message.brief,
+							compactTask,
 						},
 						true,
 						'done',
@@ -1649,14 +1746,18 @@ function renderToolRun(
 				);
 			}
 			return [
-				{text: singleToolRow(block[0]!, key, width), blockKey: key, brief},
+				{
+					text: singleToolRow(message, key, width, compactTask),
+					blockKey: key,
+					brief: message.tool?.name === 'write_tasks' ? undefined : brief,
+				},
 			];
 		}
 		const key =
 			block[0]!.toolId ?? block[0]!.tool?.name ?? `block-${Date.now()}`;
-		// Stash the EXPANDED per-call entries for the details modal (plain
-		// text, no outer fences) — clicking the tally opens this content.
-		compactDetails.set(
+		// Stash full per-call entries for the details modal. Main transcript
+		// keeps only chronological action labels, never output tails or ×N.
+		details.set(
 			key,
 			block
 				.map(message =>
@@ -1673,7 +1774,8 @@ function renderToolRun(
 				)
 				.join('\n\n'),
 		);
-		return [{text: compactToolBlock(block, key, width), blockKey: key, brief}];
+		const tree = formatActivityMessages(activity, block, width);
+		return [{text: fence('grouprow', 'done', tree), blockKey: key, brief}];
 	});
 }
 
@@ -1692,37 +1794,15 @@ function isFileRowBlock(block: SettledBlock): boolean {
 	return lang === 'filerow' || lang === 'filediff';
 }
 
-/**
- * Triggered-command block (custom commands / skills / subscribe auto-
- * triggers), tool-row format: `✦ Triggered a Command(name)` header, the
- * injected body preview (FIRST 10 lines) under a `  └   ` container, and a
- * `+N more lines` footer. Clicking the block opens the full body in the
- * details modal (same expand mechanism as the tool rows). Only the word
- * `Command` is primary; the rest is secondary (parity: tool rows).
- */
-const COMMAND_PREVIEW_LINES = 10;
-/** User messages are capped for display; the footer opens the full text. */
+/** User messages are capped for display; footer opens full text. */
 const USER_PREVIEW_LINES = 12;
 
-export function renderCommandBlock(
+/** Visible text for a command/skill invocation. Workflow body stays model-only. */
+export function commandVisibleText(
 	command: NonNullable<ChatMessage['command']>,
-	key: string,
-): {text: string; blockKey: string} {
-	const body = command.body.trim();
-	compactDetails.set(key, body);
-	const lines = body.split('\n');
-	const expanded = expandedBlocks()[key] ?? toolsExpanded();
-	const preview = expanded ? lines : lines.slice(0, COMMAND_PREVIEW_LINES);
-	const bodyText = preview
-		.map((line, index) => `${index === 0 ? '  └   ' : '      '}${line}`)
-		.join('\n');
-	const hidden = lines.length - preview.length;
-	const footer = hidden > 0 ? `\n     … +${hidden} more lines` : '';
-	const header = `✦ Triggered a ${command.kind === 'skill' ? 'Skill' : 'Command'}(${command.name})`;
-	return {
-		text: fence('commandrow', 'done', `${header}\n${bodyText}${footer}`),
-		blockKey: key,
-	};
+	fallback = '',
+): string {
+	return command.original?.trim() || fallback;
 }
 
 /**
@@ -1737,7 +1817,6 @@ export function renderUserBlock(
 ): {text: string; blockKey: string} {
 	const content = message.content;
 	const lines = content.replace(/\n+$/, '').split('\n');
-	compactDetails.set(key, content);
 	const keys = Object.keys(message.attachments ?? {}).join('');
 	const hidden = lines.length - USER_PREVIEW_LINES;
 	const preview = hidden > 0 ? lines.slice(0, USER_PREVIEW_LINES) : lines;
@@ -1753,9 +1832,19 @@ function singleToolRow(
 	message: ChatMessage,
 	key: string,
 	width: number,
+	compactTask = false,
 ): string {
 	if (!message.tool) return message.content;
 	if (message.tool.name === 'agent') return agentRow(message);
+	// review_changes output already contains one agent row per reviewer; keep
+	// it in the agent tokenizer instead of generic tool grouping.
+	if (message.tool.name === 'review_changes') {
+		return fence(
+			'agentrow',
+			message.running ? 'running' : 'done',
+			message.tool.output,
+		);
+	}
 	const status: RowStatus = message.running
 		? 'running'
 		: message.tool.name === 'execute_bash' && message.kind === 'info'
@@ -1766,7 +1855,13 @@ function singleToolRow(
 	// settled memo every tick and re-render every block (the flicker loop).
 	const blinkOn = true;
 	const formatted = formatToolEntry(
-		{...message.tool, output: liveOutput(message)},
+		{
+			...message.tool,
+			output: liveOutput(message),
+			briefed: Boolean(message.brief && message.brief.trim()),
+			briefTitle: message.brief,
+			compactTask,
+		},
 		expandedBlocks()[key] ?? toolsExpanded(),
 		status,
 		false,
@@ -1778,6 +1873,7 @@ function singleToolRow(
 	// needs an OUTER fence to detect them as component tool rows (the gap +
 	// hover + click). Wrap them so they render like every other tool row.
 	return message.tool.name === 'write_file' ||
+		message.tool.name === 'edit_file' ||
 		message.tool.name === 'string_replace' ||
 		message.tool.name === 'diff_edit'
 		? fence(rowLanguage(message.tool.name), status, formatted)
@@ -1835,65 +1931,7 @@ function agentRow(message: ChatMessage): string {
 /** Live output for a running tool row; committed output once settled. */
 function liveOutput(message: ChatMessage): string {
 	if (message.running && message.toolId) {
-		return liveOutputs()[message.toolId] ?? message.tool?.output ?? '';
+		return globalLiveOutputs()[message.toolId] ?? message.tool?.output ?? '';
 	}
 	return message.tool?.output ?? '';
-}
-
-function compactToolBlock(
-	calls: ChatMessage[],
-	key: string,
-	width: number,
-): string {
-	const order: string[] = [];
-	const counts = new Map<string, number>();
-	for (const message of calls) {
-		const name = message.tool?.name ?? '';
-		if (!counts.has(name)) order.push(name);
-		counts.set(name, (counts.get(name) ?? 0) + 1);
-	}
-	const entriesText = order
-		.map((name, index) => {
-			const count = counts.get(name) ?? 1;
-			const label = `${displayToolName(name)}${count > 1 ? ` ×${count}` : ''}`;
-			const separator =
-				index === 0
-					? ''
-					: index === order.length - 1 && order.length > 1
-						? ' and '
-						: ', ';
-			return `${separator}${label}`;
-		})
-		.join('');
-	const header = `✦ Ran ${entriesText}`;
-
-	const expanded = expandedBlocks()[key] ?? toolsExpanded();
-	if (expanded) {
-		const entries = calls
-			.map(message =>
-				message.tool
-					? formatToolEntry(
-							{...message.tool, output: liveOutput(message)},
-							true,
-							'done',
-							true,
-							true,
-							width,
-						)
-					: message.content,
-			)
-			.join('\n\n');
-		return fence('grouprow', 'done', `${header}\n\n${entries}`);
-	}
-
-	const lastWithTool = [...calls].reverse().find(message => message.tool);
-	const tail = lastWithTool
-		? formatOutputTail(liveOutput(lastWithTool), false, width)
-		: '';
-	// Universal footer: the collapsed tally hides the individual call
-	// entries behind `+N more lines` (no keyboard hint, the footer IS the
-	// expand affordance).
-	const footer = `\n     … +${calls.length} more line${calls.length === 1 ? '' : 's'}`;
-	const row = tail ? `${header}\n${tail}${footer}` : `${header}${footer}`;
-	return fence('grouprow', 'done', row);
 }

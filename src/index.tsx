@@ -70,7 +70,7 @@ if (PREVIEW_TUI) {
 	process.env.BOBONYO_CONFIG_DIR ??= '/tmp/bobonyo-preview';
 	// Preview mocks exercise the FULL tool surface, never let a persisted
 	// `minimal`/`nano` profile truncate the mock batches (e.g.
-	// `/mock:compact10` must stream all TEN bash calls into `✦ Ran Bash ×10`
+	// `/mock:compact10` exercises a long run of repeated bash calls.
 	// instead of slicing to one). loadSettings() prefers NANOCODER_PROFILE
 	// over the saved settings file, so this always wins in preview.
 	process.env.BOBONYO_PROFILE ??= 'full';

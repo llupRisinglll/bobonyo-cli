@@ -10,7 +10,10 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
 	beginFileUndoExchange,
+	fileUndoBytes,
 	fileUndoDepth,
+	MAX_FILE_UNDO_BYTES,
+	MAX_FILE_UNDO_EXCHANGES,
 	mutationTargetPaths,
 	resetFileUndoStack,
 	snapshotFileBeforeMutation,
@@ -71,24 +74,37 @@ describe('file undo (openclaude-rewind parity)', () => {
 		expect(readFileSync(path, 'utf8')).toBe('v1');
 		expect(fileUndoDepth()).toBe(0);
 	});
+	test('bounds retained exchanges and snapshot bytes', () => {
+		for (let index = 0; index < MAX_FILE_UNDO_EXCHANGES + 5; index++) {
+			beginFileUndoExchange(`prompt-${index}`);
+		}
+		expect(fileUndoDepth()).toBe(MAX_FILE_UNDO_EXCHANGES);
+
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-undo-'));
+		tempDirs.push(dir);
+		const path = join(dir, 'huge.txt');
+		writeFileSync(path, 'x'.repeat(MAX_FILE_UNDO_BYTES + 1));
+		snapshotFileBeforeMutation(path);
+		expect(fileUndoBytes()).toBeLessThanOrEqual(MAX_FILE_UNDO_BYTES);
+		expect(undoFileExchange()?.restored).not.toContain(path);
+	});
 
 	test('mutationTargetPaths maps the file tools', () => {
-		expect(
-			mutationTargetPaths('write_file', {path: 'x.ts'}),
-		).toEqual(['x.ts']);
-		expect(
-			mutationTargetPaths('delete_file', {path: 'x.ts'}),
-		).toEqual(['x.ts']);
-		expect(
-			mutationTargetPaths('file_op', {op: 'move', path: 'a', target: 'b'}),
-		).toEqual(['a', 'b']);
-		expect(mutationTargetPaths('execute_bash', {command: 'rm x'})).toEqual(
-			[],
+		expect(mutationTargetPaths('write_file', {path: 'x.ts'}, '/work')).toEqual([
+			'/work/x.ts',
+		]);
+		expect(mutationTargetPaths('edit_file', {path: 'x.ts'}, '/work')).toEqual([
+			'/work/x.ts',
+		]);
+		expect(mutationTargetPaths('delete_file', {path: 'x.ts'}, '/work')).toEqual(
+			['/work/x.ts'],
 		);
+		expect(mutationTargetPaths('execute_bash', {command: 'rm x'})).toEqual([]);
 	});
 
 	test('diff_edit extracts paths from the unified diff headers', () => {
-		const diff = '--- a/src/old.ts\n+++ b/src/new.ts\n@@ -1 +1 @@\n-old\n+new\n';
+		const diff =
+			'--- a/src/old.ts\n+++ b/src/new.ts\n@@ -1 +1 @@\n-old\n+new\n';
 		const paths = mutationTargetPaths('diff_edit', {
 			diff,
 			cwd: '/repo',

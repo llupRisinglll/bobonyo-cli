@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
-import {createSignal, For, Show} from 'solid-js';
+import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors, type Colors} from '../theme';
 
 export interface DetailSegment {
@@ -98,9 +98,49 @@ export function detailsCardHeight(
 	return Math.min(available, Math.max(6, lines + 6));
 }
 
+/** Modal width never exceeds viewport, including tiny terminals. */
+export function detailsCardWidth(title: string, terminalWidth: number): number {
+	const available = Math.max(1, terminalWidth - 2);
+	return Math.min(title === 'Usage' ? 124 : 96, available);
+}
+
+/** Usage cells collapse when two-column cells do not fit. */
+export function usageCalendarCellWidth(cardWidth: number): 1 | 2 {
+	return cardWidth >= 80 ? 2 : 1;
+}
+/** Rendered width of graph lines (not summary prose). */
+export function usageGraphWidth(content: string, cardWidth: number): number {
+	const cellWidth = usageCalendarCellWidth(cardWidth);
+	let widest = 0;
+	for (const line of content.split('\n')) {
+		if (/^(Su|Mo|Tu|We|Th|Fr|Sa)\s/.test(line)) {
+			const cells = Math.ceil(Math.max(0, line.length - 3) / 2);
+			widest = Math.max(widest, 3 + cells * cellWidth);
+		} else if (/^\s{3,}[A-Z][a-z]{2}/.test(line)) {
+			widest = Math.max(widest, line.length);
+		}
+	}
+	return widest;
+}
+/** Pick largest generated month range that fits modal's inner content. */
+export function usageVariantIndex(
+	cardWidth: number,
+	variants: string[],
+): number {
+	const available = Math.max(1, cardWidth - 6); // card + content padding/border
+	const index = variants.findIndex(
+		variant =>
+			usageGraphWidth(
+				variant.split('\n---USAGE_PAGE---\n')[0] ?? '',
+				cardWidth,
+			) <= available,
+	);
+	return index < 0 ? Math.max(0, variants.length - 1) : index;
+}
+
 /**
  * Compact-block DETAILS modal. Clicking an expandable compact tally (e.g.
- * `✦ Ran Bash ×10`) opens this scrollable card with the individual call
+ * grouped activity row opens this scrollable card with the individual call
  * entries, so the user can read the information without the in-place toggle
  * confusing them. Esc / backdrop click closes; ↑/↓/PageUp/PageDn scroll.
  */
@@ -118,7 +158,7 @@ function UsageCalendarLine(props: {line: string; width: number}) {
 				: cell === '▪'
 					? colors().secondary
 					: colors().text;
-	const cellWidth = props.width >= 112 ? 2 : 1;
+	const cellWidth = usageCalendarCellWidth(props.width);
 	return (
 		<box flexDirection="row" height={1}>
 			<text width={3} fg={colors().secondary}>
@@ -127,11 +167,11 @@ function UsageCalendarLine(props: {line: string; width: number}) {
 			<For each={cells()}>
 				{cell => (
 					<text
-						width={2}
+						width={cellWidth}
 						fg={fg(cell)}
 						attributes={createTextAttributes({bold: true})}
 					>
-						{cell === '·' ? '· ' : '■ '}
+						{cell === '·' ? '·'.padEnd(cellWidth) : '■'.padEnd(cellWidth)}
 					</text>
 				)}
 			</For>
@@ -148,23 +188,33 @@ export function DetailsModal(props: {
 	const dims = () => terminalDimensions();
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
-	const cardWidth = () =>
-		props.title === 'Usage'
-			? Math.min(124, Math.max(80, dims().width - 2))
-			: Math.min(96, Math.max(60, dims().width - 4));
-	const cardHeight = () => detailsCardHeight(props.content, dims().height);
+	const cardWidth = () => detailsCardWidth(props.title, dims().width);
+	const cardHeight = () => detailsCardHeight(visibleContent(), dims().height);
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const lines = () => visibleContent().replace(/\s+$/, '').split('\n');
 	const [scroll, setScroll] = createSignal(0);
-	const usagePages = () =>
-		props.title === 'Usage'
-			? props.content.split('\n---USAGE_PAGE---\n')
-			: [props.content];
+	const usagePages = createMemo(() => {
+		if (props.title !== 'Usage') return [props.content];
+		const variants = props.content.split('\n---USAGE_VARIANT---\n');
+		const variant =
+			variants.length > 1
+				? variants[
+						Math.min(
+							usageVariantIndex(cardWidth(), variants),
+							variants.length - 1,
+						)
+					]
+				: variants[0];
+		return (variant ?? '').split('\n---USAGE_PAGE---\n');
+	});
 	const [usagePage, setUsagePage] = createSignal(0);
-	const visibleContent = () =>
-		usagePages()[usagePage()] ?? usagePages()[0] ?? '';
+	const effectiveUsagePage = () =>
+		Math.min(usagePage(), Math.max(0, usagePages().length - 1));
+	const visibleContent = createMemo(
+		() => usagePages()[effectiveUsagePage()] ?? usagePages()[0] ?? '',
+	);
 	// AUTO-CLOSE GUARD: the modal opens on the row's mouse-DOWN; the SAME
 	// click's mouse-UP lands on the backdrop and would close it instantly.
 	// Only that opening release is ignored — a time window, NOT a one-shot
@@ -187,12 +237,13 @@ export function DetailsModal(props: {
 			props.title === 'Usage' &&
 			(event.name === 'left' || event.name === 'right')
 		) {
-			setUsagePage(prev =>
+			event.preventDefault();
+			setUsagePage(() =>
 				Math.max(
 					0,
 					Math.min(
 						usagePages().length - 1,
-						prev + (event.name === 'right' ? 1 : -1),
+						effectiveUsagePage() + (event.name === 'left' ? 1 : -1),
 					),
 				),
 			);
@@ -260,17 +311,19 @@ export function DetailsModal(props: {
 						<text
 							fg={colors().primary}
 							attributes={bold()}
-						>{` [${usagePage() + 1}/${usagePages().length}] `}</text>
+						>{` [${effectiveUsagePage() + 1}/${usagePages().length}] ← older · → newer `}</text>
 					</Show>
 					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						Esc close · ↑/↓ scroll
-					</text>
+					<Show when={cardWidth() >= 50}>
+						<text fg={colors().secondary} attributes={dim()}>
+							Esc close · ← older · → newer · ↑/↓ scroll
+						</text>
+					</Show>
 				</box>
 				<box height={1} />
 				<box
 					flexDirection="column"
-					height={cardHeight() - 5}
+					height={cardHeight() - 4}
 					border
 					borderStyle="rounded"
 					borderColor={colors().secondary}
@@ -279,7 +332,7 @@ export function DetailsModal(props: {
 				>
 					<For
 						each={lines()
-							.slice(scroll(), scroll() + (cardHeight() - 7))
+							.slice(scroll(), scroll() + (cardHeight() - 6))
 							.map((line, index) => ({
 								text: line,
 								index: scroll() + index,
@@ -290,7 +343,7 @@ export function DetailsModal(props: {
 							/^(Su|Mo|Tu|We|Th|Fr|Sa)\s/.test(line.text) ? (
 								<UsageCalendarLine line={line.text} width={cardWidth()} />
 							) : (
-								<box flexDirection="row">
+								<box flexDirection="row" height={1}>
 									<For each={colorLine(line.text)}>
 										{segment => (
 											<text fg={segment.fg} attributes={segment.attrs}>
@@ -302,9 +355,9 @@ export function DetailsModal(props: {
 							)
 						}
 					</For>
-					<Show when={lines().length > cardHeight() - 7}>
+					<Show when={lines().length > cardHeight() - 6}>
 						<text fg={colors().secondary} attributes={dim()}>
-							{scroll() + (cardHeight() - 7)}/{lines().length}
+							{scroll() + (cardHeight() - 6)}/{lines().length}
 						</text>
 					</Show>
 				</box>

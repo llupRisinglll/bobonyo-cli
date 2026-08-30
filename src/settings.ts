@@ -9,6 +9,7 @@
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {bobonyoConfigDir} from './bobonyo-paths';
+import type {SandboxMode} from './sandbox';
 
 export type Mode = 'yolo' | 'auto-accept' | 'normal' | 'plan';
 /**
@@ -50,6 +51,8 @@ export interface Settings {
 	cavemanMode?: boolean;
 	/** Resume working-directory mode (session / current / ask). */
 	resumeCwd?: ResumeCwdMode;
+	/** Whether file search tools honor .gitignore rules. */
+	respectGitignore?: boolean;
 	/**
 	 * System-prompt style (default / opencode / claudecode / codex / custom).
 	 * `custom` reads (and seeds) SYSTEM.md in the config dir.
@@ -57,12 +60,36 @@ export interface Settings {
 	systemPrompt?: string;
 	/** Mouse-wheel scroll speed multiplier (parity: opencode scroll_speed, default 3). */
 	scrollSpeed?: number;
+	/** Retry another configured provider when the primary model fails. */
+	modelFallback?: boolean;
 	autoCompact: {enabled: boolean; threshold: number};
 	watchdogMs?: number;
 	streamGuard?: {maxOutputChars?: number; maxDurationMs?: number};
+	/** Filesystem/process sandbox for shell commands. */
+	sandbox?: {
+		mode: SandboxMode;
+		network: boolean;
+		writablePaths: string[];
+	};
 	/** A2: directories the user has trusted (first-run trust gate). */
 	trustedDirs?: string[];
 	privacy?: {patterns: Array<{pattern: string; placeholder?: string}>};
+	/** Claude-shaped lifecycle hooks, owned by Bobonyo settings files. */
+	hooks?: Record<
+		string,
+		Array<{
+			matcher?: string;
+			hooks?: Array<{
+				type?: string;
+				command?: string;
+				url?: string;
+				prompt?: string;
+				if?: string;
+				timeout?: number;
+				async?: boolean;
+			}>;
+		}>
+	>;
 }
 
 const DEFAULTS: Settings = {
@@ -72,15 +99,18 @@ const DEFAULTS: Settings = {
 	thinkingMode: 'hidden',
 	cavemanMode: true,
 	resumeCwd: 'session',
+	respectGitignore: true,
 	systemPrompt: 'default',
 	scrollSpeed: 3,
+	modelFallback: false,
 	// ON by default: without compaction, a long conversation hits the
 	// message cap and silently trims its OLDEST messages — the byte-0 head
 	// changes on every request and the provider's prefix cache misses the
 	// entire history each turn (the 14M-token / 55% cache-rate session).
-	autoCompact: {enabled: true, threshold: 75},
+	autoCompact: {enabled: true, threshold: 80},
 	watchdogMs: 0,
 	streamGuard: {},
+	sandbox: {mode: 'auto', network: true, writablePaths: []},
 	trustedDirs: [],
 	privacy: {patterns: []},
 };
@@ -103,22 +133,23 @@ export function loadSettings(): Settings {
 	} catch {
 		// corrupt settings, defaults
 	}
-	const mode = (
-		process.env.BOBONYO_MODE ??
+	const mode = (process.env.BOBONYO_MODE ??
 		process.env.NANOCODER_MODE ??
 		settings.mode ??
-		DEFAULTS.mode
-	) as Mode;
-	const toolProfile = (
-		process.env.BOBONYO_PROFILE ??
+		DEFAULTS.mode) as Mode;
+	const toolProfile = (process.env.BOBONYO_PROFILE ??
 		process.env.NANOCODER_PROFILE ??
 		settings.toolProfile ??
-		DEFAULTS.toolProfile
-	) as ToolProfile;
+		DEFAULTS.toolProfile) as ToolProfile;
 	const maxMessages = Number(
-		process.env.NANOCODER_MAX_MESSAGES ?? settings.maxMessages ?? DEFAULTS.maxMessages,
+		process.env.NANOCODER_MAX_MESSAGES ??
+			settings.maxMessages ??
+			DEFAULTS.maxMessages,
 	);
-	const rawAuto = (settings.autoCompact ?? {}) as Partial<{enabled: boolean; threshold: number}>;
+	const rawAuto = (settings.autoCompact ?? {}) as Partial<{
+		enabled: boolean;
+		threshold: number;
+	}>;
 	const threshold = Math.max(
 		50,
 		Math.min(95, Number(rawAuto.threshold ?? DEFAULTS.autoCompact.threshold)),
@@ -129,9 +160,20 @@ export function loadSettings(): Settings {
 		maxDurationMs: number;
 	}>;
 	const trustedDirs = Array.isArray(settings.trustedDirs)
-		? settings.trustedDirs.filter(dir => typeof dir === 'string' && dir.length > 0)
+		? settings.trustedDirs.filter(
+				dir => typeof dir === 'string' && dir.length > 0,
+			)
 		: [];
 	const privacy = settings.privacy ?? DEFAULTS.privacy;
+	const rawSandbox = settings.sandbox ?? DEFAULTS.sandbox!;
+	const sandboxMode: SandboxMode = [
+		'auto',
+		'workspace-write',
+		'read-only',
+		'off',
+	].includes(rawSandbox.mode)
+		? rawSandbox.mode
+		: 'auto';
 	const theme =
 		typeof settings.theme === 'string' && settings.theme.length > 0
 			? settings.theme
@@ -156,6 +198,7 @@ export function loadSettings(): Settings {
 	)
 		? (settings.resumeCwd as ResumeCwdMode)
 		: DEFAULTS.resumeCwd;
+	const respectGitignore = settings.respectGitignore !== false;
 	const scrollSpeed =
 		typeof settings.scrollSpeed === 'number' &&
 		Number.isFinite(settings.scrollSpeed)
@@ -167,19 +210,26 @@ export function loadSettings(): Settings {
 			? settings.systemPrompt
 			: DEFAULTS.systemPrompt;
 	return {
-		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode) ? mode : DEFAULTS.mode,
+		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode)
+			? mode
+			: DEFAULTS.mode,
 		toolProfile: ['full', 'minimal', 'nano', 'auto'].includes(toolProfile)
 			? toolProfile
 			: DEFAULTS.toolProfile,
-		maxMessages: Number.isFinite(maxMessages) && maxMessages > 0 ? maxMessages : DEFAULTS.maxMessages,
+		maxMessages:
+			Number.isFinite(maxMessages) && maxMessages > 0
+				? maxMessages
+				: DEFAULTS.maxMessages,
 		theme,
 		titleShape,
 		statusLine,
 		thinkingMode,
 		cavemanMode,
 		resumeCwd,
+		respectGitignore,
 		systemPrompt,
 		scrollSpeed,
+		modelFallback: settings.modelFallback === true,
 		autoCompact: {
 			// Missing field → DEFAULTS (compaction is ON by default so long
 			// conversations compact before the message cap trims the cache
@@ -190,17 +240,29 @@ export function loadSettings(): Settings {
 		watchdogMs: Number.isFinite(watchdogMs) && watchdogMs >= 0 ? watchdogMs : 0,
 		streamGuard: {
 			maxOutputChars:
-				Number.isFinite(rawGuard.maxOutputChars) &&
-				rawGuard.maxOutputChars! > 0
+				Number.isFinite(rawGuard.maxOutputChars) && rawGuard.maxOutputChars! > 0
 					? rawGuard.maxOutputChars
 					: undefined,
 			maxDurationMs:
-				Number.isFinite(rawGuard.maxDurationMs) &&
-				rawGuard.maxDurationMs! > 0
-				? rawGuard.maxDurationMs
+				Number.isFinite(rawGuard.maxDurationMs) && rawGuard.maxDurationMs! > 0
+					? rawGuard.maxDurationMs
 					: undefined,
 		},
+		sandbox: {
+			mode: sandboxMode,
+			network: rawSandbox.network !== false,
+			writablePaths: Array.isArray(rawSandbox.writablePaths)
+				? rawSandbox.writablePaths.filter(
+						(path): path is string =>
+							typeof path === 'string' && path.length > 0,
+					)
+				: [],
+		},
 		trustedDirs,
+		hooks:
+			settings.hooks && typeof settings.hooks === 'object'
+				? settings.hooks
+				: undefined,
 		privacy: {
 			patterns: Array.isArray(privacy?.patterns)
 				? privacy.patterns.filter(

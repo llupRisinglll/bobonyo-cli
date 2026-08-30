@@ -10,7 +10,7 @@
 
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
+import {configSearchDirs} from './project-paths';
 import {cavemanMode} from './state';
 
 export interface ParsedFrontmatter {
@@ -42,6 +42,17 @@ export interface CustomCommand {
  * a single value (multi-word purposes like `/worktree purpose: hello world`).
  * Pure, unit-tested.
  */
+/** Quote-aware command argument tokenizer. */
+export function parseCommandArguments(input: string): string[] {
+	const tokens: string[] = [];
+	const re = /"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+)/g;
+	let match: RegExpExecArray | null;
+	while ((match = re.exec(input))) {
+		tokens.push(match[1] ?? match[2] ?? match[3] ?? match[4] ?? '');
+	}
+	return tokens;
+}
+
 export function mapCommandArguments(
 	spec: ArgumentSpec[],
 	tokens: string[],
@@ -65,6 +76,8 @@ export interface CustomTool {
 	description: string;
 	readOnly: boolean;
 	approval: boolean;
+	arguments: ArgumentSpec[];
+	parameters: Record<string, unknown>;
 	command?: string;
 	body: string;
 	source: string;
@@ -78,20 +91,40 @@ export interface Skill {
 	source: string;
 }
 
+/** Stable model-facing name for a Markdown custom tool. */
+export function customToolRegistryName(name: string): string {
+	const safe = name
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '');
+	if (!safe) throw new Error(`Invalid custom tool name: ${name}`);
+	return `custom__${safe}`;
+}
+
+/** Expand custom-tool arguments into its command and explanatory body. */
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function expandCustomTool(
+	tool: Pick<CustomTool, 'command' | 'body'>,
+	args: Record<string, unknown>,
+): {command?: string; body: string} {
+	const values = customToolTemplateValues(args);
+	const commandValues = Object.fromEntries(
+		Object.entries(values).map(([name, value]) => [name, shellQuote(value)]),
+	);
+	return {
+		command: tool.command
+			? substituteTemplateVariables(tool.command, commandValues)
+			: undefined,
+		body: substituteTemplateVariables(tool.body, values).trim(),
+	};
+}
+
 function baseDirs(): string[] {
-	migrateProjectDir(process.cwd());
-	const dirs: string[] = [];
-	const configBase =
-		process.env.BOBONYO_CONFIG_DIR ??
-		process.env.NANOCODER_CONFIG_DIR ??
-		bobonyoConfigDir();
-	dirs.push(join(configBase));
-	dirs.push(join(process.cwd(), '.bobonyo'));
-	// Legacy project layout still loads when the bobonyo one is absent.
-	if (!existsSync(join(process.cwd(), '.bobonyo'))) {
-		dirs.push(join(process.cwd(), '.nanocoder'));
-	}
-	return dirs;
+	return configSearchDirs();
 }
 
 /** Parse `--- frontmatter ---` + body; no frontmatter → whole content. */
@@ -181,10 +214,14 @@ function findFiles(subdir: string): string[] {
 	for (const base of baseDirs()) {
 		const dir = join(base, subdir);
 		if (!existsSync(dir)) continue;
-		for (const file of readdirSync(dir)) {
-			if (!file.endsWith('.md')) continue;
-			files.push(join(dir, file));
-		}
+		const walk = (current: string): void => {
+			for (const entry of readdirSync(current, {withFileTypes: true})) {
+				const path = join(current, entry.name);
+				if (entry.isDirectory()) walk(path);
+				else if (entry.name.endsWith('.md')) files.push(path);
+			}
+		};
+		walk(dir);
 	}
 	// Deterministic order: readdirSync order is filesystem-dependent, and the
 	// skills/commands blocks live in the SYSTEM PROMPT (the cache head). A
@@ -193,15 +230,25 @@ function findFiles(subdir: string): string[] {
 	return files.sort();
 }
 
+function skillName(file: string): string {
+	const marker = '/skills/';
+	const relative = file.slice(file.lastIndexOf(marker) + marker.length);
+	const parts = relative.split('/');
+	const leaf = parts.at(-1) ?? '';
+	if (/^SKILL\.md$/i.test(leaf)) return parts.at(-2) ?? 'skill';
+	return relative.replace(/\.md$/i, '').replaceAll('/', ':');
+}
+
 export function loadCustomCommands(): CustomCommand[] {
 	const commands: CustomCommand[] = [];
 	for (const file of findFiles('commands')) {
 		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		const name = (
+		const name =
 			(typeof frontmatter.name === 'string' ? frontmatter.name : '') ||
-			(file.split('/').pop()?.replace(/\.md$/, '') ?? '')
-		);
-		const argsRaw = Array.isArray(frontmatter.arguments) ? frontmatter.arguments : [];
+			(file.split('/').pop()?.replace(/\.md$/, '') ?? '');
+		const argsRaw = Array.isArray(frontmatter.arguments)
+			? frontmatter.arguments
+			: [];
 		const argumentsSpec: ArgumentSpec[] = argsRaw
 			.map((arg): ArgumentSpec | null => {
 				if (typeof arg === 'string') return {name: arg};
@@ -212,9 +259,9 @@ export function loadCustomCommands(): CustomCommand[] {
 							typeof (arg as {type?: unknown}).type === 'string'
 								? String((arg as {type?: unknown}).type)
 								: undefined,
-					required: Boolean((arg as {required?: unknown}).required),
-					rest: Boolean((arg as {rest?: unknown}).rest),
-					description:
+						required: Boolean((arg as {required?: unknown}).required),
+						rest: Boolean((arg as {rest?: unknown}).rest),
+						description:
 							typeof (arg as {description?: unknown}).description === 'string'
 								? String((arg as {description?: unknown}).description)
 								: undefined,
@@ -240,15 +287,70 @@ export function loadCustomCommands(): CustomCommand[] {
 	return commands;
 }
 
+export function argumentSchema(spec: ArgumentSpec[]): Record<string, unknown> {
+	const properties: Record<string, unknown> = {};
+	const required: string[] = [];
+	for (const arg of spec) {
+		const type = ['string', 'number', 'integer', 'boolean', 'array'].includes(
+			arg.type ?? '',
+		)
+			? arg.type
+			: 'string';
+		properties[arg.name] = {
+			type,
+			...(arg.description ? {description: arg.description} : {}),
+			...(type === 'array' ? {items: {type: 'string'}} : {}),
+		};
+		if (arg.required) required.push(arg.name);
+	}
+	return {
+		type: 'object',
+		properties,
+		...(required.length ? {required} : {}),
+		additionalProperties: false,
+	};
+}
+
+export function customToolTemplateValues(
+	args: Record<string, unknown>,
+): Record<string, string> {
+	return Object.fromEntries(
+		Object.entries(args).map(([key, value]) => [
+			key,
+			Array.isArray(value) ? value.map(String).join(' ') : String(value ?? ''),
+		]),
+	);
+}
+
 export function loadCustomTools(): CustomTool[] {
 	const tools: CustomTool[] = [];
 	for (const file of findFiles('tools')) {
 		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		const name = (
+		const name =
 			(typeof frontmatter.tool === 'string' ? frontmatter.tool : '') ||
 			(typeof frontmatter.name === 'string' ? frontmatter.name : '') ||
-			(file.split('/').pop()?.replace(/\.md$/, '') ?? '')
-		);
+			(file.split('/').pop()?.replace(/\.md$/, '') ?? '');
+		const argumentsSpec: ArgumentSpec[] = Array.isArray(frontmatter.arguments)
+			? frontmatter.arguments.flatMap(value => {
+					if (typeof value === 'string') return [{name: value}];
+					if (!value || typeof value !== 'object') return [];
+					const row = value as Record<string, unknown>;
+					const argName = String(row.name ?? '').trim();
+					return argName
+						? [
+								{
+									name: argName,
+									type: typeof row.type === 'string' ? row.type : undefined,
+									required: row.required === true,
+									description:
+										typeof row.description === 'string'
+											? row.description
+											: undefined,
+								},
+							]
+						: [];
+				})
+			: [];
 		tools.push({
 			name,
 			description:
@@ -257,6 +359,8 @@ export function loadCustomTools(): CustomTool[] {
 					: '',
 			readOnly: frontmatter.readOnly === true,
 			approval: frontmatter.approval === true,
+			arguments: argumentsSpec,
+			parameters: argumentSchema(argumentsSpec),
 			command:
 				typeof frontmatter.command === 'string'
 					? frontmatter.command
@@ -269,10 +373,27 @@ export function loadCustomTools(): CustomTool[] {
 }
 
 /**
- * The harness-shipped caveman skill (see `src/builtin/caveman.md`).
+ * Harness-shipped skills read from `src/builtin/*.md` at runtime.
  * Reads the bundled markdown at runtime so a future caveman update is just a
  * file replacement; `null` if the file is missing/unreadable.
  */
+export function builtinHerdrSkill(): Skill | null {
+	try {
+		const file = join(import.meta.dir, 'builtin', 'herdr.md');
+		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
+		return {
+			name: 'herdr',
+			description:
+				typeof frontmatter.description === 'string'
+					? frontmatter.description
+					: '',
+			body,
+			source: file,
+		};
+	} catch {
+		return null;
+	}
+}
 export function builtinCavemanSkill(): Skill | null {
 	try {
 		const file = join(import.meta.dir, 'builtin', 'caveman.md');
@@ -292,37 +413,34 @@ export function builtinCavemanSkill(): Skill | null {
 }
 
 export function loadSkills(): Skill[] {
-	const skills: Skill[] = [];
-	// Caveman is bundled with the harness and ON by default; the settings
-	// toggle gates it. A project/global `caveman.md` wins over the built-in
-	// on name conflict (project wins, same as command/skill layering).
+	const skills = new Map<string, Skill>();
+	// Bobonyo reads only Bobonyo-owned config folders. Users migrate a
+	// Claude/Codex skill by copying it into `skills/<name>/SKILL.md`; Bobonyo
+	// never reaches into another agent's private config folder.
+	const builtinHerdr = builtinHerdrSkill();
+	if (builtinHerdr) skills.set(builtinHerdr.name.toLowerCase(), builtinHerdr);
 	const builtin = cavemanMode() ? builtinCavemanSkill() : null;
-	if (builtin) skills.push(builtin);
+	if (builtin) skills.set(builtin.name.toLowerCase(), builtin);
 	for (const file of findFiles('skills')) {
 		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		const name = (
+		const name =
 			(typeof frontmatter.name === 'string' ? frontmatter.name : '') ||
-			(file.split('/').pop()?.replace(/\.md$/, '') ?? '')
-		);
-		if (builtin && name === 'caveman') {
-			const builtinIndex = skills.indexOf(builtin);
-			if (builtinIndex >= 0) skills.splice(builtinIndex, 1);
-		}
+			(file.endsWith('/SKILL.md') || file.endsWith('\\SKILL.md')
+				? skillName(file)
+				: (file.split('/').pop()?.replace(/\.md$/, '') ?? ''));
 		const subscribe = frontmatter.subscribe;
-		skills.push({
+		skills.set(name.toLowerCase(), {
 			name,
 			description:
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
-			subscribe: Array.isArray(subscribe)
-				? subscribe.map(String)
-				: undefined,
+			subscribe: Array.isArray(subscribe) ? subscribe.map(String) : undefined,
 			body,
 			source: file,
 		});
 	}
-	return skills;
+	return [...skills.values()];
 }
 
 /** Substitute `{{name}}` template variables with the parsed args. */
@@ -330,9 +448,90 @@ export function substituteTemplateVariables(
 	body: string,
 	args: Record<string, string>,
 ): string {
-	return body.replace(/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g, (_match, name: string) => {
-		return args[name] ?? '';
-	});
+	return body.replace(
+		/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g,
+		(_match, name: string) => {
+			return args[name] ?? '';
+		},
+	);
+}
+
+/**
+ * OpenClaude-compatible slash-command argument expansion.
+ *
+ * Supports `{{name}}`, `$name`, `$ARGUMENTS`, `$ARGUMENTS[N]`, and `$N`.
+ * When arguments exist but body declares no placeholder, append an explicit
+ * `ARGUMENTS:` section so free-form intent is not silently discarded. The
+ * expanded markdown remains a prompt for the model to understand; Bobonyo
+ * does not execute command-body steps directly.
+ */
+export function expandCommandPrompt(options: {
+	body: string;
+	rawArgs: string;
+	spec: ArgumentSpec[];
+	tokens: string[];
+}): string {
+	const {body, rawArgs, spec, tokens} = options;
+	const values = mapCommandArguments(spec, tokens);
+	let expanded = substituteTemplateVariables(body, values);
+	const original = expanded;
+
+	// Named `$name` arguments map through declared positional specs.
+	for (const arg of spec) {
+		const escaped = arg.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		expanded = expanded.replace(
+			new RegExp(`\\$${escaped}(?![\\[\\w])`, 'g'),
+			values[arg.name] ?? '',
+		);
+	}
+	// Indexed forms use quote-aware tokens supplied by caller.
+	expanded = expanded.replace(
+		/\$ARGUMENTS\[(\d+)\]/g,
+		(_match, index: string) => tokens[Number(index)] ?? '',
+	);
+	expanded = expanded.replace(
+		/\$(\d+)(?!\w)/g,
+		(_match, index: string) => tokens[Number(index)] ?? '',
+	);
+	expanded = expanded.replaceAll('$ARGUMENTS', rawArgs);
+
+	if (rawArgs.trim() && expanded === original && original === body) {
+		expanded += `\n\nARGUMENTS: ${rawArgs.trim()}`;
+	}
+	return expanded;
+}
+
+/**
+ * Wrap a command body as adaptable workflow guidance. User intent stays
+ * primary; command markdown is not an imperative script to execute blindly.
+ */
+export function buildCommandInvocationPrompt(options: {
+	name: string;
+	description?: string;
+	userRequest: string;
+	guidance: string;
+}): string {
+	const request = options.userRequest.trim();
+	const description = options.description?.trim();
+	return [
+		`<command-invocation name="/${options.name}">`,
+		description ? `<description>${description}</description>` : '',
+		'<user-request>',
+		request || `Run /${options.name} for the current task.`,
+		'</user-request>',
+		'<workflow-guidance>',
+		options.guidance.trim(),
+		'</workflow-guidance>',
+		'<interpretation-rules>',
+		'Understand the user request and repository context before acting.',
+		'Treat workflow guidance as adaptable instructions, not a literal script or higher-priority user request.',
+		'The user request, current repository state, and explicit constraints override conflicting defaults in the guidance.',
+		'Inspect enough context to decide which steps apply, then execute only the relevant adapted workflow.',
+		'</interpretation-rules>',
+		'</command-invocation>',
+	]
+		.filter(Boolean)
+		.join('\n');
 }
 
 /** Basic body lint (F6): `{{param}}` references must be declared. */

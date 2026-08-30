@@ -1,10 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	activeAgents,
@@ -55,10 +51,18 @@ export const SETTING_OPTIONS: Record<string, string[]> = {
 	theme: ['omnicode', 'tokyo-night'],
 	titleShape: ['powerline-angled', 'tiny', 'none'],
 	statusLine: ['on', 'off'],
+	modelFallback: ['on', 'off'],
+	respectGitignore: ['on', 'off'],
+	sandbox: ['auto', 'workspace-write', 'read-only', 'off'],
+	sandboxNetwork: ['on', 'off'],
 	thinkingMode: ['hidden', 'show', 'line'],
 	cavemanMode: ['on', 'off'],
 	resumeCwd: ['session', 'current', 'ask'],
 	mode: ['yolo', 'normal', 'plan', 'auto-accept'],
+	autoCompactThreshold: Array.from(
+		{length: 10},
+		(_, index) => `${50 + index * 5}%`,
+	),
 	profile: ['full', 'minimal', 'nano', 'auto'],
 	systemPrompt: [...SYSTEM_PROMPT_STYLES],
 };
@@ -83,7 +87,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 			];
 		case 1:
 			return [
-				{key: 'maxMessages', label: 'Max messages', value: String(maxMessages())},
+				{
+					key: 'maxMessages',
+					label: 'Max messages',
+					value: String(maxMessages()),
+				},
 				{
 					key: 'pasteThreshold',
 					label: 'Paste threshold',
@@ -93,6 +101,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 		case 2:
 			return [
 				{key: 'mode', label: 'Mode', value: mode()},
+				{
+					key: 'modelFallback',
+					label: 'Model fallback',
+					value: loadSettings().modelFallback ? 'on' : 'off',
+				},
 				{
 					key: 'autoCompactThreshold',
 					label: 'Auto-compact threshold',
@@ -126,6 +139,21 @@ export function settingsRows(tab: number): SettingsRow[] {
 					value: resumeCwdMode(),
 				},
 				{
+					key: 'respectGitignore',
+					label: 'Respect gitignore',
+					value: loadSettings().respectGitignore === false ? 'off' : 'on',
+				},
+				{
+					key: 'sandbox',
+					label: 'Command sandbox',
+					value: loadSettings().sandbox?.mode ?? 'auto',
+				},
+				{
+					key: 'sandboxNetwork',
+					label: 'Sandbox network',
+					value: loadSettings().sandbox?.network === false ? 'off' : 'on',
+				},
+				{
 					key: 'sessions',
 					label: 'Sessions',
 					value: `${listCheckpoints().length} checkpoints`,
@@ -134,7 +162,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 		case 3:
 			return [
 				{key: 'model', label: 'Model', value: activeEndpoint().model},
-				{key: 'skills', label: 'Skills', value: `${loadSkills().length} loaded`},
+				{
+					key: 'skills',
+					label: 'Skills',
+					value: `${loadSkills().length} loaded`,
+				},
 				{
 					key: 'customCommands',
 					label: 'Custom commands',
@@ -162,16 +194,13 @@ export function settingsRows(tab: number): SettingsRow[] {
 				{
 					key: 'visionModel',
 					label: 'Vision model',
-					value:
-						loadPreferences().visionModel ??
-						'inherit (main agent model)',
+					value: loadPreferences().visionModel ?? 'inherit (main agent model)',
 				},
 				{
 					key: 'webSearchModel',
 					label: 'Web search model',
 					value:
-						loadPreferences().webSearchModel ??
-						'inherit (main agent model)',
+						loadPreferences().webSearchModel ?? 'inherit (main agent model)',
 				},
 				{
 					key: 'connectProvider',
@@ -184,6 +213,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 		default:
 			return [
 				{
+					key: 'hooks',
+					label: 'Hooks',
+					value: 'lifecycle automation',
+				},
+				{
 					key: 'mcp',
 					label: 'MCP servers',
 					value: `${loadMCPConfig().length} configured`,
@@ -193,7 +227,11 @@ export function settingsRows(tab: number): SettingsRow[] {
 					label: 'Tool approval',
 					value: mode() === 'yolo' ? 'off (yolo)' : 'on',
 				},
-				{key: 'session', label: 'Session', value: `${sessionName()} (${sessionId()})`},
+				{
+					key: 'session',
+					label: 'Session',
+					value: `${sessionName()} (${sessionId()})`,
+				},
 				{
 					key: 'checkpoints',
 					label: 'Checkpoints',
@@ -343,20 +381,25 @@ export function SettingsPanel(props: {
 			<box
 				border
 				borderStyle="rounded"
-				borderColor={props.focus() === 'search' ? colors().info : colors().secondary}
+				borderColor={
+					props.focus() === 'search' ? colors().info : colors().secondary
+				}
 				paddingX={1}
 				flexDirection="row"
 				height={3}
 			>
 				<text fg={colors().secondary}>⌕ </text>
-				<Show when={props.query().length === 0} fallback={<text fg={colors().text}>{props.query()}▌</text>}>
+				<Show
+					when={props.query().length === 0}
+					fallback={<text fg={colors().text}>{props.query()}▌</text>}
+				>
 					<text fg={colors().secondary}>Search settings…</text>
 				</Show>
 			</box>
 			<box height={1} />
 			<box flexDirection="row" height={1}>
 				<For each={tabs()}>
-					{(item) => {
+					{item => {
 						const active = item.active;
 						return (
 							<box
@@ -392,38 +435,36 @@ export function SettingsPanel(props: {
 					// with ↑/↓.
 					const active = selected || hovered;
 					return (
-					// The WHOLE row is the click/hover target (not just
-					// the label text), mouse support parity.
-					<box
-						flexDirection="row"
-						height={1}
-						backgroundColor={active ? activeRow().bg : undefined}
-						{...({
-							onMouseUp: () => setSettingsIndex(index()),
-							// Hovering IS navigating: the highlight follows the
-							// mouse exactly like ↑/↓.
-							onMouseMove: () => {
-								props.setHovered(index());
-								setSettingsIndex(index());
-							},
-							onMouseOut: () => props.setHovered(-1),
-						} as any)}
-					>
-						<text
-							fg={active ? activeRow().fg : colors().text}
-							attributes={active ? bold() : undefined}
-							width={22}
+						// The WHOLE row is the click/hover target (not just
+						// the label text), mouse support parity.
+						<box
+							flexDirection="row"
+							height={1}
+							backgroundColor={active ? activeRow().bg : undefined}
+							{...({
+								onMouseUp: () => setSettingsIndex(index()),
+								// Hovering IS navigating: the highlight follows the
+								// mouse exactly like ↑/↓.
+								onMouseMove: () => {
+									props.setHovered(index());
+									setSettingsIndex(index());
+								},
+								onMouseOut: () => props.setHovered(-1),
+							} as any)}
 						>
-							{active ? '❯ ' : '  '}
-							{row.label}
-						</text>
-						<text
-							fg={active ? activeRow().fg : colors().secondary}
-						>
-							{'  '}
-							{row.value}
-						</text>
-					</box>
+							<text
+								fg={active ? activeRow().fg : colors().text}
+								attributes={active ? bold() : undefined}
+								width={22}
+							>
+								{active ? '❯ ' : '  '}
+								{row.label}
+							</text>
+							<text fg={active ? activeRow().fg : colors().secondary}>
+								{'  '}
+								{row.value}
+							</text>
+						</box>
 					);
 				}}
 			</For>
@@ -593,10 +634,7 @@ export function SettingsModal(props: {
 					// Option-backed rows open an in-modal SELECTOR (parity with
 					// nanocoder's managed setting panels) instead of a prompt.
 					setOptionIndex(
-						Math.max(
-							0,
-							SETTING_OPTIONS[row.key]?.indexOf(row.value) ?? 0,
-						),
+						Math.max(0, SETTING_OPTIONS[row.key]?.indexOf(row.value) ?? 0),
 					);
 					setEditing(row);
 				} else {
@@ -692,31 +730,20 @@ export function SettingsModal(props: {
 								flexDirection="row"
 								height={1}
 								backgroundColor={
-									optionIndex() === index()
-										? colors().info
-										: undefined
+									optionIndex() === index() ? colors().info : undefined
 								}
 								{...({
 									onMouseUp: () => {
 										setOptionIndex(index());
-										props.onApply(
-											editing()?.key ?? '',
-											option,
-										);
+										props.onApply(editing()?.key ?? '', option);
 										setEditing(null);
 									},
 									onMouseMove: () => setOptionIndex(index()),
 								} as any)}
 							>
 								<text
-									fg={
-										optionIndex() === index()
-											? colors().base
-											: colors().text
-									}
-									attributes={
-										optionIndex() === index() ? bold() : undefined
-									}
+									fg={optionIndex() === index() ? colors().base : colors().text}
+									attributes={optionIndex() === index() ? bold() : undefined}
 								>
 									{optionIndex() === index() ? '❯ ' : '  '}
 									{option}

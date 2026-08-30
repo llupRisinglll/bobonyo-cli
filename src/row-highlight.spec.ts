@@ -7,11 +7,12 @@ import {
 	tokenizeFileDiff,
 	tokenizeFileRow,
 	tokenizeStatusRow,
+	tokenizeTaskRow,
 	tokenizeToolRow,
 	tokenizeUserMessage,
 	tokenizeWarningRow,
 } from './row-highlight';
-import {RGBA} from '@opentui/core';
+import {RGBA, createTextAttributes} from '@opentui/core';
 import {colors, type Colors} from './theme';
 import {historyFillWidth} from './history-width';
 import {formatToolEntry} from './tool-display';
@@ -150,6 +151,34 @@ describe('tokenizeFileDiff', () => {
 		expect(wordBgs.length).toBeGreaterThan(0);
 	});
 
+	test('asymmetric replacements highlight each row exact changed span', () => {
+		const diff = [
+			'✦ Edit app-delivery.spec.ts',
+			' ⎿ 1 line → 1 line',
+			'  97 - await page.getByLabel("To").fill(recipient);',
+			'  97 + await page.getByPlaceholder("you@example.com").fill(recipient);',
+		].join('\n');
+		const chunks = tokenizeFileDiff(
+			diff,
+			'app-delivery.spec.ts',
+			'done',
+			THEME,
+			100,
+		);
+		const lines = perLine(chunks);
+		const removedBg = themeRgb(colors().diffRemovedWord);
+		const addedBg = themeRgb(colors().diffAddedWord);
+		const highlighted = (line: TextChunk[], targetBg: string) =>
+			line
+				.filter(chunk => bg(chunk) === targetBg)
+				.map(chunk => chunk.text)
+				.join('');
+		// Closing `")` is shared suffix, so only differing middle is dark.
+		expect(highlighted(lines[2] ?? [], removedBg)).toBe('Label("To');
+		expect(highlighted(lines[3] ?? [], addedBg)).toBe(
+			'Placeholder("you@example.com',
+		);
+	});
 	test('rewritten pairs (>0.6 change ratio) skip the word background', () => {
 		const chunks = tokenizeFileDiff(DIFF_TEXT, 'src/foo.ts', 'done', THEME, 80);
 		const lines = perLine(chunks);
@@ -469,6 +498,17 @@ describe('tokenizeUserMessage', () => {
 		);
 	});
 
+	test('colors a real image token on a continuation line', () => {
+		const chunks = tokenizeUserMessage(
+			'❯ now for aug 4, 7, 9:\n[Image #1]',
+			colors(),
+			0,
+			'1',
+		);
+		expect(rgb(chunks.find(c => c.text === '[Image #1]')!)).toBe(
+			themeRgb(colors().primary),
+		);
+	});
 	test('MANUALLY typed [Image #N] tokens stay plain (not real attachments)', () => {
 		const chunks = tokenizeUserMessage(
 			'❯ [Image #1] is not attached',
@@ -483,6 +523,40 @@ describe('tokenizeUserMessage', () => {
 });
 
 describe('group header colors (compact tally)', () => {
+	test('activity tree header is white; actions primary; connectors secondary', () => {
+		const chunks = tokenizeToolRow(
+			'Explored\n  ├ Read src/a.ts\n  └ Search needle',
+			'done',
+			colors(),
+		);
+		expect(rgb(chunks.find(c => c.text === 'Explored')!)).toBe(
+			themeRgb(colors().text),
+		);
+		expect(rgb(chunks.find(c => c.text === 'Read')!)).toBe(
+			themeRgb(colors().primary),
+		);
+		expect(rgb(chunks.find(c => c.text === '  ├ ')!)).toBe(
+			themeRgb(colors().secondary),
+		);
+		expect(rgb(chunks.find(c => c.text === 'Search')!)).toBe(
+			themeRgb(colors().primary),
+		);
+	});
+
+	test('multi-word MCP action is primary; parenthesized details are normal text', () => {
+		const chunks = tokenizeToolRow(
+			'Codebase Memory MCP\n  └ search code(src/activity-groups.ts)',
+			'done',
+			colors(),
+		);
+		expect(rgb(chunks.find(c => c.text === 'search code')!)).toBe(
+			themeRgb(colors().primary),
+		);
+		expect(rgb(chunks.find(c => c.text === '(src/activity-groups.ts)')!)).toBe(
+			themeRgb(colors().text),
+		);
+	});
+
 	test('Ran and ×N stay white; only tool names are primary', () => {
 		const chunks = tokenizeToolRow(
 			'✦ Ran Bash ×10 (ctrl-o to expand)\n  └   tail',
@@ -592,5 +666,57 @@ describe('tokenizeWarningRow', () => {
 		expect(rgb(chunks.find(c => c.text.includes('Vision'))!)).toBe(
 			themeRgb(colors().warning),
 		);
+	});
+});
+
+describe('tokenizeTaskRow lifecycle', () => {
+	test('completed and cancelled labels are struck through', () => {
+		const chunks = tokenizeTaskRow(
+			'✦ Tasks (1 done, 1 in progress, 1 open)\n  └ ◆ Inspect code\n    › Running tests\n    × Skip obsolete step\n    · Build release',
+			'done',
+			colors(),
+		);
+		const completed = chunks.find(chunk => chunk.text === 'Inspect code');
+		const completedIcon = chunks.find(chunk => chunk.text === '◆');
+		const cancelled = chunks.find(chunk => chunk.text === 'Skip obsolete step');
+		const running = chunks.find(chunk => chunk.text === 'Running tests');
+		expect(completed?.attributes).toBe(
+			createTextAttributes({strikethrough: true, dim: true}),
+		);
+		expect(cancelled?.attributes).toBe(
+			createTextAttributes({strikethrough: true, dim: true}),
+		);
+		expect(rgb(completed!)).toBe(themeRgb(colors().secondary));
+		expect(rgb(completedIcon!)).toBe(themeRgb(colors().secondary));
+		expect(completedIcon?.attributes).toBe(
+			createTextAttributes({strikethrough: true, dim: true}),
+		);
+		expect(running?.attributes ?? 0).toBe(0);
+	});
+
+	test('task branch is secondary while first task keeps lifecycle color', () => {
+		const chunks = tokenizeTaskRow(
+			'✦ Deploy release (0 done, 1 in progress, 0 open)\n  └ › Checking build',
+			'running',
+			colors(),
+		);
+		expect(rgb(chunks.find(chunk => chunk.text === '└ ')!)).toBe(
+			themeRgb(colors().secondary),
+		);
+		expect(rgb(chunks.find(chunk => chunk.text === '›')!)).toBe(
+			themeRgb(colors().warning),
+		);
+	});
+	test('compact completed task snapshot title is dim, not primary', () => {
+		const chunks = tokenizeTaskRow(
+			'✦ Potential import history triggers Solid? okay...\n  └ Tasks (3 done, 1 in progress, 0 open)',
+			'done',
+			colors(),
+		);
+		const title = chunks.find(chunk =>
+			chunk.text.includes('Potential import history'),
+		);
+		expect(rgb(title!)).toBe(themeRgb(colors().secondary));
+		expect(title?.attributes).toBe(createTextAttributes({dim: true}));
 	});
 });

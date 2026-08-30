@@ -11,16 +11,56 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
 	convertNanocoderSession,
+	forkSession,
 	healResumedContext,
 	listSessions,
 	loadSession,
 	migrateNanocoderSessions,
 	newSessionId,
 	resolveSession,
+	saveCompactionTranscript,
 	saveSession,
 } from './session';
 import type {ChatMessage} from './state';
 import type {ChatMessageLike} from './client';
+
+describe('saveCompactionTranscript', () => {
+	test('writes exact display and provider history outside compacted session', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-compact-transcript-'));
+		const previous = process.env.BOBONYO_DATA_DIR;
+		process.env.BOBONYO_DATA_DIR = dir;
+		try {
+			const path = saveCompactionTranscript(
+				'sess:/unsafe',
+				[{role: 'user', content: 'exact display'}],
+				[{role: 'user', content: 'exact provider'}],
+				123,
+			);
+			expect(path).toBe(
+				join(dir, 'compaction-transcripts', 'sess__unsafe.jsonl'),
+			);
+			const saved = JSON.parse(readFileSync(path, 'utf8').trim()) as {
+				messages: ChatMessage[];
+				context: ChatMessageLike[];
+			};
+			expect(saved.messages[0]?.content).toBe('exact display');
+			expect(saved.context[0]?.content).toBe('exact provider');
+			saveCompactionTranscript(
+				'sess:/unsafe',
+				[{role: 'user', content: 'later display'}],
+				[{role: 'user', content: 'later provider'}],
+				456,
+			);
+			const records = readFileSync(path, 'utf8').trim().split('\n');
+			expect(records).toHaveLength(2);
+			expect(JSON.parse(records[1]!).createdAt).toBe(456);
+		} finally {
+			if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
+			else process.env.BOBONYO_DATA_DIR = previous;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+});
 
 describe('convertNanocoderSession', () => {
 	test('maps title/messages into bobonyo SessionData', () => {
@@ -58,7 +98,12 @@ describe('convertNanocoderSession', () => {
 						},
 					],
 				},
-				{role: 'tool', content: 'hi\n', tool_call_id: 'call_1', name: 'execute_bash'},
+				{
+					role: 'tool',
+					content: 'hi\n',
+					tool_call_id: 'call_1',
+					name: 'execute_bash',
+				},
 				{role: 'assistant', content: 'Done.'},
 			],
 		});
@@ -154,9 +199,7 @@ describe('convertNanocoderSession', () => {
 			'call_4',
 		]);
 		expect(
-			session!.context
-				.filter(m => m.role === 'tool')
-				.map(m => m.tool_call_id),
+			session!.context.filter(m => m.role === 'tool').map(m => m.tool_call_id),
 		).toEqual(['call_0', 'call_1', 'call_2', 'call_3', 'call_4']);
 	});
 });
@@ -181,8 +224,85 @@ describe('session cwd (resume folder filter)', () => {
 			const meta = listSessions().find(session => session.id === id);
 			expect(meta?.cwd).toBe('/mnt/data/KSProjects/Hilinga');
 			// Sessions without a cwd (legacy) surface as undefined, not junk.
-			const legacy = listSessions().find(session => session.id === 'missing-cwd');
+			const legacy = listSessions().find(
+				session => session.id === 'missing-cwd',
+			);
 			expect(legacy).toBeUndefined();
+		} finally {
+			process.env.NANOCODER_DATA_DIR = prev;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+
+	test('saveSession preserves subagent child history for resume', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-sess-agents-'));
+		const prev = process.env.NANOCODER_DATA_DIR;
+		process.env.NANOCODER_DATA_DIR = dir;
+		try {
+			const id = newSessionId();
+			saveSession({
+				id,
+				name: 'agent chat',
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				firstMessage: 'inspect routing',
+				messages: [{role: 'user', content: 'inspect routing'}],
+				context: [],
+				subagentRuns: [
+					{
+						id: 'agent:explore:1',
+						name: 'explore',
+						description: 'inspect routing',
+						output: 'Read src/tools.ts',
+						transcript: ['Task: inspect routing', 'Read src/tools.ts'],
+						streaming: '',
+						history: [
+							{role: 'user', content: 'Task: inspect routing'},
+							{role: 'assistant', content: 'Found it.'},
+						],
+						status: 'completed',
+					},
+				],
+			});
+			const restored = resolveSession(id)?.subagentRuns?.[0];
+			expect(restored?.status).toBe('completed');
+			expect(restored?.history.at(-1)?.content).toBe('Found it.');
+		} finally {
+			process.env.NANOCODER_DATA_DIR = prev;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+	test('saveSession preserves completed task statuses for resume', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-sess-tasks-'));
+		const prev = process.env.NANOCODER_DATA_DIR;
+		process.env.NANOCODER_DATA_DIR = dir;
+		try {
+			const id = newSessionId();
+			saveSession({
+				id,
+				name: 'task chat',
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				firstMessage: 'audit tasks',
+				messages: [{role: 'user', content: 'audit tasks'}],
+				context: [],
+				tasks: [
+					{title: 'Inspect code', status: 'completed'},
+					{
+						title: 'Run tests',
+						activeForm: 'Running tests',
+						status: 'in_progress',
+					},
+				],
+			});
+			expect(resolveSession(id)?.tasks).toEqual([
+				{title: 'Inspect code', status: 'completed'},
+				{
+					title: 'Run tests',
+					activeForm: 'Running tests',
+					status: 'in_progress',
+				},
+			]);
 		} finally {
 			process.env.NANOCODER_DATA_DIR = prev;
 			rmSync(dir, {recursive: true, force: true});
@@ -229,7 +349,11 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 			role: 'tool',
 			content: '✦ Skill(hilinga-prod-ops)',
 			toolId: 'call-1',
-			tool: {name: 'skill', detail: 'hilinga-prod-ops', output: 'Loaded skill …'},
+			tool: {
+				name: 'skill',
+				detail: 'hilinga-prod-ops',
+				output: 'Loaded skill …',
+			},
 		},
 		{
 			role: 'tool',
@@ -242,7 +366,11 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 				args: {command: 'ssh …'},
 			},
 		},
-		{role: 'assistant', content: 'Interrupted by user.', error: 'Interrupted by user.'},
+		{
+			role: 'assistant',
+			content: 'Interrupted by user.',
+			error: 'Interrupted by user.',
+		},
 		{role: 'user', content: 'continue'},
 	];
 
@@ -268,7 +396,11 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 				content: '',
 				tool_calls: [
 					{id: 'call-1', name: 'skill', arguments: '{}'},
-					{id: 'call-2', name: 'execute_bash', arguments: '{"command":"ssh …"}'},
+					{
+						id: 'call-2',
+						name: 'execute_bash',
+						arguments: '{"command":"ssh …"}',
+					},
 				],
 			},
 			{role: 'tool', content: 'Loaded skill …', tool_call_id: 'call-1'},
@@ -336,7 +468,10 @@ describe('healResumedContext (pre-fix sessions: context lagging the transcript)'
 			},
 			{role: 'assistant', content: 'ports are fine'},
 		];
-		const healed = healResumedContext([{role: 'user', content: 'old'}], transcript);
+		const healed = healResumedContext(
+			[{role: 'user', content: 'old'}],
+			transcript,
+		);
 		const declaration = healed.find(
 			message => message.role === 'assistant' && message.tool_calls,
 		);
@@ -415,9 +550,9 @@ describe('nanocoder session migration', () => {
 		// The bobonyo shape carries a rebuilt provider context.
 		expect(Array.isArray(data.context)).toBe(true);
 		// The legacy index file must NOT be treated as a session.
-		expect(
-			existsSync(join(bobonyoDir, 'sessions', 'sessions.json')),
-		).toBe(false);
+		expect(existsSync(join(bobonyoDir, 'sessions', 'sessions.json'))).toBe(
+			false,
+		);
 	});
 
 	test('migration is idempotent and skips already-present ids', () => {
@@ -441,9 +576,7 @@ describe('nanocoder session migration', () => {
 		expect(session).not.toBeNull();
 		expect(session!.name).toBe('return 403');
 		// The fallback persisted the converted copy for the next resume.
-		expect(
-			existsSync(join(bobonyoDir, 'sessions', `${id}.json`)),
-		).toBe(true);
+		expect(existsSync(join(bobonyoDir, 'sessions', `${id}.json`))).toBe(true);
 	});
 
 	test('listSessions includes migrated legacy sessions', () => {
@@ -459,8 +592,8 @@ describe('nanocoder session migration', () => {
 		);
 		writeFileSync(legacyFile('corrupt-session'), '{not json');
 		expect(migrateNanocoderSessions()).toBe(0);
-		expect(
-			existsSync(join(bobonyoDir, 'sessions', 'empty-session.json')),
-		).toBe(false);
+		expect(existsSync(join(bobonyoDir, 'sessions', 'empty-session.json'))).toBe(
+			false,
+		);
 	});
 });

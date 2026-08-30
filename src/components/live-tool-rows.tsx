@@ -30,7 +30,12 @@ import {settledGlyphColor} from '../row-highlight';
  */
 export function LiveToolRows(props: {
 	rows: Array<
-		LiveRowSegments & {lang?: string; brief?: string; batchBriefed?: boolean}
+		LiveRowSegments & {
+			lang?: string;
+			brief?: string;
+			batchBriefed?: boolean;
+			agentAggregate?: boolean;
+		}
 	>;
 	/** Markdown renderer bits for the pre-tool brief (formatted, not raw). */
 	md: MarkdownBriefRenderer;
@@ -100,7 +105,11 @@ export function LiveToolRows(props: {
 							    hidden frame keeps a space). HIDDEN for
 							    briefed/batch rows — the brief line carries
 							    the entry's single glyph (bash/file parity). */}
-							<Show when={!row.brief && !row.batchBriefed}>
+							<Show
+								when={
+									(!row.brief || row.lang === 'agentrow') && !row.batchBriefed
+								}
+							>
 								<text fg={colors().secondary} attributes={dim()}>
 									{glyphBlinkOn(spinnerFrame()) ? '✦' : ' '}{' '}
 								</text>
@@ -108,7 +117,11 @@ export function LiveToolRows(props: {
 							{/* Briefed/batch rows indent to the brief's text
 							    column (col 3: `✦` + 2-col gap) — width 3, the
 							    bash/file rows use the same box. */}
-							<Show when={row.brief || row.batchBriefed}>
+							<Show
+								when={
+									(row.brief && row.lang !== 'agentrow') || row.batchBriefed
+								}
+							>
 								<box width={3} />
 							</Show>
 							{/* ONE text renderable per header/body line,
@@ -141,10 +154,26 @@ export function LiveToolRows(props: {
 									{/* Body shifts with the brief too: the
 									    chunks carry their own 2-space lead, so
 									    the box is 1 wide (settled parity). */}
-									<Show when={row.brief || row.batchBriefed}>
+									<Show
+										when={
+											(row.brief && row.lang !== 'agentrow') || row.batchBriefed
+										}
+									>
 										<box width={1} />
 									</Show>
 									<text>
+										<Show
+											when={
+												row.agentAggregate &&
+												line.some(chunk => chunk.text.includes('agent:'))
+											}
+										>
+											<span style={{fg: colors().secondary as never}}>
+												{glyphBlinkOn(spinnerFrame() + agentBlinkPhase(line))
+													? '✦'
+													: ' '}{' '}
+											</span>
+										</Show>
 										<For each={line}>
 											{c => (
 												<span
@@ -166,4 +195,13 @@ export function LiveToolRows(props: {
 			)}
 		</For>
 	);
+}
+/** Stable blink phase per reviewer, so aggregate rows animate independently. */
+function agentBlinkPhase(line: Array<{text: string}>): number {
+	const value = line.map(chunk => chunk.text).join('');
+	let hash = 0;
+	for (let index = 0; index < value.length; index++) {
+		hash = (hash * 31 + value.charCodeAt(index)) | 0;
+	}
+	return Math.abs(hash) % 8;
 }

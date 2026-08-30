@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {mkdirSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, rmSync, unlinkSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {
 	buildResponsesInput,
@@ -20,9 +20,7 @@ describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () =>
 			{
 				role: 'assistant',
 				content: '',
-				tool_calls: [
-					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
-				],
+				tool_calls: [{id: 'call_1', name: 'execute_bash', arguments: '{}'}],
 			},
 			{role: 'tool', content: 'done', tool_call_id: 'call_1'},
 			{role: 'assistant', content: 'ok'},
@@ -35,9 +33,7 @@ describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () =>
 			{
 				role: 'assistant',
 				content: '',
-				tool_calls: [
-					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
-				],
+				tool_calls: [{id: 'call_1', name: 'execute_bash', arguments: '{}'}],
 			},
 			{role: 'tool', content: 'done', tool_call_id: ''},
 		]);
@@ -45,9 +41,7 @@ describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () =>
 			{
 				role: 'assistant',
 				content: '',
-				tool_calls: [
-					{id: 'call_1', name: 'execute_bash', arguments: '{}'},
-				],
+				tool_calls: [{id: 'call_1', name: 'execute_bash', arguments: '{}'}],
 			},
 			{role: 'tool', content: 'done', tool_call_id: 'call_1'},
 		]);
@@ -186,9 +180,7 @@ describe('stream stall guard (silent provider must not hang)', () => {
 					// retry path (MAX_STREAM_STALL_RETRIES) runs too.
 					{stallTimeoutMs: 30},
 				),
-			).rejects.toThrow(
-				/Stream produced no non-ping SSE event within 30ms/,
-			);
+			).rejects.toThrow(/Stream produced no non-ping SSE event within 30ms/);
 			// 3 attempts × 30ms + retry backoff ≈ 1.3s — far from the old
 			// indefinite hang (the stucked pane sat at "Working…" for 6+ min).
 			expect(Date.now() - started).toBeLessThan(10_000);
@@ -260,9 +252,7 @@ describe('parseToolCalls (recovery parser)', () => {
 	});
 
 	test('flags malformed JSON ("arguments" as a string)', () => {
-		const parsed = parseToolCalls(
-			'{"name":"Bash","arguments":"ls -la"}',
-		);
+		const parsed = parseToolCalls('{"name":"Bash","arguments":"ls -la"}');
 		expect(parsed.success).toBe(false);
 		expect(parsed.error).toContain('must be an object');
 	});
@@ -276,9 +266,7 @@ describe('parseToolCalls (recovery parser)', () => {
 
 	test('looksLikeToolCallText guards the recovery trigger', () => {
 		expect(looksLikeToolCallText('Use <tool_calls> now')).toBe(true);
-		expect(looksLikeToolCallText('{"name":"Bash","arguments":{}}')).toBe(
-			true,
-		);
+		expect(looksLikeToolCallText('{"name":"Bash","arguments":{}}')).toBe(true);
 		expect(looksLikeToolCallText('Just prose here')).toBe(false);
 	});
 });
@@ -332,27 +320,46 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			strict: null,
 		});
 		// Standard API mode uses strict: false (never null).
-		expect(
-			responsesToolBlocks([{name: 'aa_tool'}], false)[0]?.strict,
-		).toBe(false);
+		expect(responsesToolBlocks([{name: 'aa_tool'}], false)[0]?.strict).toBe(
+			false,
+		);
+		const codex = responsesToolBlocks(
+			[{name: 'web_search'}, {name: 'bash'}],
+			true,
+		);
+		expect(codex).toEqual([
+			{
+				type: 'function',
+				name: 'bash',
+				description: '',
+				parameters: {type: 'object', properties: {}},
+				strict: null,
+			},
+			{type: 'web_search'},
+		]);
+		const standard = responsesToolBlocks([{name: 'web_search'}], false);
+		expect(standard[0]?.type).toBe('function');
 	});
 
 	test('streams text, reasoning, tool calls and usage from response.* events', async () => {
 		const sse = [
 			'event: response.output_item.added',
-			'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":""}}',
-			'',
-			'event: response.function_call_arguments.delta',
-			'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"command\\":\\"ls\\"}"}',
-			'',
-			'event: response.output_text.delta',
-			'data: {"type":"response.output_text.delta","output_index":1,"delta":"Done"}',
+			'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}',
 			'',
 			'event: response.reasoning_summary_text.delta',
 			'data: {"type":"response.reasoning_summary_text.delta","summary_index":0,"delta":"think step 1"}',
 			'',
+			'event: response.output_item.added',
+			'data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":""}}',
+			'',
+			'event: response.function_call_arguments.delta',
+			'data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\\"command\\":\\"ls\\"}"}',
+			'',
+			'event: response.output_text.delta',
+			'data: {"type":"response.output_text.delta","output_index":2,"delta":"Done"}',
+			'',
 			'event: response.output_item.done',
-			'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":"{\\"command\\":\\"ls\\"}"}}',
+			'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Bash","arguments":"{\\"command\\":\\"ls\\"}"}}',
 			'',
 			'event: response.completed',
 			'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}',
@@ -366,11 +373,19 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			},
 		});
 		const realFetch = globalThis.fetch;
+		let capturedBody: Record<string, unknown> | undefined;
 		globalThis.fetch = (async () => ({
 			ok: true,
 			status: 200,
 			body: stream,
 		})) as unknown as typeof fetch;
+		globalThis.fetch = (async (_url: unknown, init: unknown) => {
+			capturedBody = JSON.parse((init as {body: string}).body) as Record<
+				string,
+				unknown
+			>;
+			return {ok: true, status: 200, body: stream};
+		}) as unknown as typeof fetch;
 		try {
 			setActiveEndpoint({
 				id: 'responses-test',
@@ -388,6 +403,7 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 				{
 					onText: delta => seen.push(`text:${delta}`),
 					onReasoning: delta => seen.push(`reasoning:${delta}`),
+					onReasoningStart: () => seen.push('reasoning:start'),
 				},
 				undefined,
 				[],
@@ -403,7 +419,13 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			expect(result.toolCalls[0]!.arguments).toEqual({command: 'ls'});
 			expect(result.finishReason).toBe('stop');
 			expect(result.usage).toMatchObject({input_tokens: 10});
-			expect(seen).toEqual(['text:Done', 'reasoning:think step 1']);
+			expect(seen).toEqual([
+				'reasoning:start',
+				'reasoning:think step 1',
+				'text:Done',
+			]);
+			expect(capturedBody?.reasoning).toEqual({summary: 'auto'});
+			expect(capturedBody?.include).toEqual(['reasoning.encrypted_content']);
 		} finally {
 			globalThis.fetch = realFetch;
 		}
@@ -433,7 +455,8 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			},
 		});
 		const realFetch = globalThis.fetch;
-		let captured: {url: string; headers: Record<string, string>; body: unknown} | undefined;
+		let captured:
+			{url: string; headers: Record<string, string>; body: unknown} | undefined;
 		globalThis.fetch = (async (url: unknown, init: unknown) => {
 			captured = {
 				url: String(url),
@@ -453,6 +476,7 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 				contextWindow: 400_000,
 				sdkProvider: 'responses',
 				codexAccount: true,
+				effort: 'high',
 			});
 			await streamChat(
 				[{role: 'user', content: 'hi'}],
@@ -472,6 +496,13 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			expect(
 				(captured?.body as {instructions?: string}).instructions,
 			).toContain('BoboNyo');
+			expect((captured?.body as {reasoning?: unknown}).reasoning).toEqual({
+				effort: 'high',
+				summary: 'auto',
+			});
+			expect((captured?.body as {include?: string[]}).include).toEqual([
+				'reasoning.encrypted_content',
+			]);
 		} finally {
 			globalThis.fetch = realFetch;
 			rmSync(process.env.CODEX_HOME, {recursive: true, force: true});
@@ -513,4 +544,93 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 			delete process.env.CODEX_HOME;
 		}
 	});
+});
+
+describe('Anthropic reasoning stream', () => {
+	test('thinking block starts phase before first thinking delta', async () => {
+		const sse = [
+			'event: message_start',
+			'data: {"type":"message_start","message":{"usage":{"input_tokens":4}}}',
+			'',
+			'event: content_block_start',
+			'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}',
+			'',
+			'event: content_block_delta',
+			'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"check facts"}}',
+			'',
+			'event: content_block_start',
+			'data: {"type":"content_block_start","index":1,"content_block":{"type":"text"}}',
+			'',
+			'event: content_block_delta',
+			'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Done"}}',
+			'',
+			'event: message_delta',
+			'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+			'',
+		].join('\n');
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(sse));
+				controller.close();
+			},
+		});
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({
+			ok: true,
+			status: 200,
+			body: stream,
+		})) as unknown as typeof fetch;
+		try {
+			setActiveEndpoint({
+				id: 'anthropic-test',
+				name: 'Anthropic Test',
+				baseUrl: 'https://api.anthropic.com',
+				apiKey: 'test',
+				model: 'claude-opus-test',
+				models: ['claude-opus-test'],
+				contextWindow: 200_000,
+				sdkProvider: 'anthropic',
+				effort: 'high',
+			});
+			const seen: string[] = [];
+			const result = await streamChat(
+				[{role: 'user', content: 'hi'}],
+				{
+					onText: delta => seen.push(`text:${delta}`),
+					onReasoning: delta => seen.push(`reasoning:${delta}`),
+					onReasoningStart: () => seen.push('reasoning:start'),
+				},
+				undefined,
+				[],
+				{stallTimeoutMs: 2000},
+			);
+			expect(result.reasoning).toBe('check facts');
+			expect(result.text).toBe('Done');
+			expect(seen).toEqual([
+				'reasoning:start',
+				'reasoning:check facts',
+				'text:Done',
+			]);
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
+});
+
+test('buildResponsesInput serializes Codex images as input_image blocks', () => {
+	const path = `${import.meta.dir}/.test-native-image.png`;
+	writeFileSync(path, Buffer.from([1, 2, 3]));
+	const input = buildResponsesInput([
+		{role: 'user', content: 'inspect [Image #1]', images: [path]},
+	]) as Array<{content?: Array<Record<string, unknown>>}>;
+	expect(input[0]?.content).toEqual([
+		{type: 'input_text', text: 'inspect [Image #1]'},
+		{
+			type: 'input_image',
+			image_url: 'data:image/png;base64,AQID',
+			detail: 'high',
+		},
+	]);
+	unlinkSync(path);
 });

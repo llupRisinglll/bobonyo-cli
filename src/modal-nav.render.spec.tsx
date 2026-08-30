@@ -162,11 +162,18 @@ describe('modal arrow navigation moves the VISIBLE selection', () => {
 	});
 
 	test('agents modal: ↓ moves the ❯ through the agent list', async () => {
-		const setup = await testRender(() => <AgentsModal onClose={() => {}} />, {
-			width: 80,
-			height: 24,
-			kittyKeyboard: true,
-		});
+		const setup = await testRender(
+			() => (
+				<AgentsModal
+					providers={[go('mock')]}
+					currentProvider="mock"
+					currentModel="mock-model-1"
+					onConnectProvider={() => {}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
 		try {
 			const {mockInput} = setup;
 			await setup.flush();

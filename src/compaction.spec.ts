@@ -2,9 +2,18 @@ import {describe, expect, test} from 'bun:test';
 import {ProviderError} from './client';
 import {
 	SUMMARY_PREFIX,
+	SUMMARIZATION_PROMPT,
+	buildSummarizationPrompt,
 	collectCompactedUserMessages,
 	compactedDisplayMessages,
+	dropOldestPreservedTurn,
+	isCompactionSummary,
+	isCompactionControlMessage,
 	isCompactOverflowError,
+	normalizeCompactionSummary,
+	partitionCompactionHistory,
+	prepareCompactionSummaryHistory,
+	trimOldestCompactionTurn,
 } from './app';
 import type {ChatMessageLike} from './client';
 
@@ -66,16 +75,32 @@ describe('collectCompactedUserMessages (codex build_compacted_history parity)', 
 
 	test('previous compaction summaries are not treated as user prompts', () => {
 		// Parity: codex `is_summary_message` — a second compaction must not
-		// re-summarize the previous summary.
+		// re-summarize either current or pre-upgrade summaries.
+		const legacy =
+			'Another language model started to solve this problem and produced a summary of its thinking process. Here is the summary:';
 		const selected = collectCompactedUserMessages([
 			user('real prompt 1'),
 			user(`${SUMMARY_PREFIX}\nprevious handoff...`),
+			user(`${legacy}\nolder handoff...`),
 			user('real prompt 2'),
 		]);
 		expect(selected.map(m => m.content)).toEqual([
 			'real prompt 1',
 			'real prompt 2',
 		]);
+		expect(isCompactionSummary(`${SUMMARY_PREFIX}\ncurrent`)).toBe(true);
+		expect(isCompactionSummary(`${legacy}\nold`)).toBe(true);
+		expect(isCompactionSummary('ordinary user prompt')).toBe(false);
+	});
+
+	test('generated state is never treated as an ordinary user prompt', () => {
+		const state = '[BOBONYO_AUTHORITATIVE_COMPACTION_STATE_V1]\n{"version":1}';
+		const selected = collectCompactedUserMessages([
+			user('real prompt'),
+			user(state),
+		]);
+		expect(selected.map(message => message.content)).toEqual(['real prompt']);
+		expect(isCompactionControlMessage(state)).toBe(true);
 	});
 
 	test('the summary is NOT part of the budget (caller appends it last)', () => {
@@ -83,6 +108,113 @@ describe('collectCompactedUserMessages (codex build_compacted_history parity)', 
 		// prompts: selection only counts user messages.
 		const ctx: ChatMessageLike[] = [user('recent')];
 		expect(collectCompactedUserMessages(ctx, 10).length).toBe(1);
+	});
+});
+
+describe('compaction checkpoint contract', () => {
+	test('preserves operating procedure and environment, not only task state', () => {
+		for (const required of [
+			'# Operating procedure',
+			'command templates',
+			'tool names',
+			'skill names',
+			'hosts/IPs',
+			'SSH user',
+			'verification queries',
+			'Failed approaches',
+		]) {
+			expect(SUMMARIZATION_PROMPT).toContain(required);
+		}
+		const prompt = buildSummarizationPrompt('/mnt/data/KSProjects/Hilinga');
+		expect(prompt).toContain(
+			'Current working directory at compaction: "/mnt/data/KSProjects/Hilinga"',
+		);
+		expect(prompt).toContain('NEVER copy secret values');
+	});
+
+	test('mentions retained verbatim turns when present', () => {
+		const prompt = buildSummarizationPrompt('/repo', 2);
+		expect(prompt).toContain('2 newest complete conversation turns');
+	});
+
+	test('strips common model drafting wrappers', () => {
+		expect(
+			normalizeCompactionSummary(
+				'<analysis>draft</analysis>\n<summary># Current state\nReady</summary>',
+			),
+		).toBe('# Current state\nReady');
+		expect(normalizeCompactionSummary('```markdown\n# State\nReady\n```')).toBe(
+			'# State\nReady',
+		);
+	});
+});
+
+describe('recent working-set compaction', () => {
+	const user = (content: string): ChatMessageLike => ({role: 'user', content});
+
+	test('preserves complete recent turns including tool calls and results', () => {
+		const ctx: ChatMessageLike[] = [
+			user('old request'),
+			{role: 'assistant', content: 'old answer'},
+			user('upload image'),
+			{
+				role: 'assistant',
+				content: 'running upload',
+				tool_calls: [{id: 'c1', name: 'execute_bash', arguments: '{}'}],
+			},
+			{role: 'tool', content: 'uploaded id=42', tool_call_id: 'c1'},
+			user('verify it'),
+			{role: 'assistant', content: 'verified'},
+		];
+		const partition = partitionCompactionHistory(ctx, 100, 'test-model');
+		expect(partition.summarize.map(message => message.content)).toEqual([
+			'old request',
+			'old answer',
+		]);
+		expect(partition.preserve).toEqual(ctx.slice(2));
+		expect(partition.preservedTurns).toBe(2);
+	});
+
+	test('overflow retry drops one whole oldest turn', () => {
+		const ctx: ChatMessageLike[] = [
+			user('old'),
+			{role: 'assistant', content: 'calling', tool_calls: []},
+			{role: 'tool', content: 'result', tool_call_id: 'c1'},
+			user('new'),
+			{role: 'assistant', content: 'answer'},
+		];
+		expect(trimOldestCompactionTurn(ctx)).toEqual(ctx.slice(3));
+		expect(trimOldestCompactionTurn(ctx.slice(3))).toEqual(ctx.slice(3));
+	});
+
+	test('post-compact guard can drop the final preserved turn', () => {
+		const turn = [user('only turn'), {role: 'assistant', content: 'reply'}];
+		expect(dropOldestPreservedTurn(turn)).toEqual([]);
+		expect(
+			dropOldestPreservedTurn([
+				...turn,
+				user('new turn'),
+				{role: 'assistant', content: 'new reply'},
+			]),
+		).toEqual([user('new turn'), {role: 'assistant', content: 'new reply'}]);
+	});
+
+	test('updates prior checkpoint deliberately and drops generated state', () => {
+		const previous = user(`${SUMMARY_PREFIX}\n# Current state\nold fact`);
+		const state = user(
+			'[BOBONYO_AUTHORITATIVE_COMPACTION_STATE_V1]\n{"version":1}',
+		);
+		const prepared = prepareCompactionSummaryHistory([
+			previous,
+			state,
+			user('new correction'),
+		]);
+		expect(prepared[0]?.content).toContain('PRIOR COMPACTION CHECKPOINT');
+		expect(prepared[0]?.content).toContain('old fact');
+		expect(prepared.some(message => message.content === state.content)).toBe(
+			false,
+		);
+		expect(prepared.at(-1)?.content).toBe('new correction');
 	});
 });
 
@@ -96,7 +228,21 @@ describe('isCompactOverflowError (codex ContextWindowExceeded parity)', () => {
 		).toBe(true);
 	});
 
-	test('other statuses and non-provider errors fail compaction', () => {
+	test('Responses SSE context-window failures are recoverable', () => {
+		expect(
+			isCompactOverflowError(
+				new Error(
+					'Your input exceeds the context window of this model. Please adjust your input and try again.',
+				),
+			),
+		).toBe(true);
+		expect(
+			isCompactOverflowError(
+				new Error('maximum context length is 400000 tokens'),
+			),
+		).toBe(true);
+	});
+	test('other statuses and unrelated errors fail compaction', () => {
 		expect(isCompactOverflowError(new ProviderError(429, 'rate limit'))).toBe(
 			false,
 		);
@@ -129,12 +275,15 @@ describe('compactedDisplayMessages (display parity: resume shows the compacted v
 			userMsg('recent prompt 2'),
 			asstMsg('reply 2'),
 		];
-		// The provider compaction kept the newest 2 user prompts; the
-		// display must keep from the NEWEST kept prompt onward (recent
-		// prompt 2 + its reply) — everything older is covered by the
-		// summary and never resurfaces.
+		// Provider context preserves two complete recent turns; display must
+		// retain those same turns instead of hiding one of them.
 		const display = compactedDisplayMessages(messages, 2);
-		expect(display.map(m => m.content)).toEqual(['recent prompt 2', 'reply 2']);
+		expect(display.map(m => m.content)).toEqual([
+			'recent prompt 1',
+			'reply 1',
+			'recent prompt 2',
+			'reply 2',
+		]);
 	});
 	test('a zero user-prompt count returns an empty display (summary-only)', () => {
 		expect(compactedDisplayMessages([userMsg('a'), asstMsg('b')], 0)).toEqual(

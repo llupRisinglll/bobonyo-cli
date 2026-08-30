@@ -26,7 +26,7 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
 	const cardWidth = () => Math.min(76, Math.max(52, dims().width - 8));
-	const cardY = () => Math.max(2, Math.floor(dims().height / 4));
+	const cardY = () => statusCardY(dims().height, cardHeight());
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const contentWidth = () => Math.max(1, cardWidth() - 4);
 	const labelWidth = () =>
@@ -128,6 +128,14 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 			</box>
 		</box>
 	);
+}
+
+/** Center the status card after async row updates, but keep tiny panes usable. */
+export function statusCardY(
+	viewportHeight: number,
+	cardHeight: number,
+): number {
+	return Math.max(1, Math.floor((viewportHeight - cardHeight) / 2));
 }
 
 /** Wrap status values to the available value column, including long URLs. */

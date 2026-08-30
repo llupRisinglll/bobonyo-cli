@@ -9,6 +9,7 @@
  */
 
 import {
+	appendFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -21,7 +22,8 @@ import {join} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
 import {displayToolName, toolArgsSummary} from './tools';
 import type {ChatMessageLike, MockToolCall} from './client';
-import type {ChatMessage} from './state';
+import type {ActiveAgentRun, ChatMessage, SessionTask} from './state';
+import type {LoopJob, SessionGoal} from './goal-loop';
 
 export interface SessionMeta {
 	id: string;
@@ -42,6 +44,15 @@ export interface SessionMeta {
 export interface SessionData extends SessionMeta {
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
+	/** Codex-style persisted long-running goal. */
+	goal?: SessionGoal;
+	/** Codex-style scheduled thread jobs created by /loop. */
+	loopJobs?: LoopJob[];
+	/** Recent subagent child histories, restored into /ps on resume. */
+	subagentRuns?: ActiveAgentRun[];
+	/** Current task checklist, restored on resume. */
+	/** Legacy sessions may omit task ids; resume normalization assigns them. */
+	tasks?: Array<Omit<SessionTask, 'id'> & {id?: string}>;
 }
 
 /** Normalize a session timestamp to epoch MILLISECONDS. */
@@ -63,6 +74,29 @@ function sessionsDir(): string {
 	// NOT the config dir; the legacy nanocoder sessions are migrated once.
 	const base = bobonyoDataDir();
 	return join(base, 'sessions');
+}
+
+function compactionTranscriptsDir(): string {
+	return join(bobonyoDataDir(), 'compaction-transcripts');
+}
+
+/** Durable pre-compaction transcript for exact-detail recovery. */
+export function saveCompactionTranscript(
+	sessionId: string,
+	messages: ChatMessage[],
+	context: ChatMessageLike[],
+	now = Date.now(),
+): string {
+	const dir = compactionTranscriptsDir();
+	mkdirSync(dir, {recursive: true});
+	const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+	const path = join(dir, `${safeId}.jsonl`);
+	appendFileSync(
+		path,
+		`${JSON.stringify({sessionId, createdAt: now, messages, context})}\n`,
+		'utf8',
+	);
+	return path;
 }
 
 /**
@@ -215,11 +249,31 @@ export function newSessionId(): string {
 	return `sess_${Date.now().toString(36)}_${idSeq}`;
 }
 
+/** Create independent Codex-style branch from current session snapshot. */
+export function forkSession(data: SessionData): SessionData {
+	const forked: SessionData = {
+		...data,
+		id: newSessionId(),
+		name: `${data.name} (fork)`,
+		createdAt: Date.now(),
+		updatedAt: Date.now(),
+		messages: structuredClone(data.messages),
+		context: structuredClone(data.context),
+		tasks: structuredClone(data.tasks ?? []),
+	};
+	saveSession(forked);
+	return forked;
+}
 export function saveSession(data: SessionData): void {
 	mkdirSync(sessionsDir(), {recursive: true});
 	// EMPTY conversations are never persisted, delete any stale empty file
 	// so they can't appear in the resume/save list.
-	if (!data.messages || data.messages.length === 0) {
+	if (
+		(!data.messages || data.messages.length === 0) &&
+		!data.goal &&
+		(data.loopJobs?.length ?? 0) === 0 &&
+		(data.tasks?.length ?? 0) === 0
+	) {
 		try {
 			rmSync(sessionPath(data.id), {force: true});
 		} catch {
@@ -253,7 +307,13 @@ export function listSessions(): SessionMeta[] {
 					};
 					// Skip EMPTY sessions (both formats).
 					const messageCount = data.messages?.length ?? data.messageCount ?? 0;
-					if (messageCount === 0) return null;
+					if (
+						messageCount === 0 &&
+						!data.goal &&
+						(data.loopJobs?.length ?? 0) === 0 &&
+						(data.tasks?.length ?? 0) === 0
+					)
+						return null;
 					const createdAt = toEpoch(data.createdAt);
 					const updatedAt = toEpoch(data.updatedAt) || createdAt;
 					const cwd =

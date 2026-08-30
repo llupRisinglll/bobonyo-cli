@@ -61,11 +61,17 @@ export function stableSettledBlocks(
 	cache: Map<string, SettledBlock>,
 	blocks: SettledBlock[],
 ): SettledBlock[] {
-	return blocks.map(block => {
+	const activeKeys = new Set<string>();
+	const stable = blocks.map(block => {
 		const key = settledBlockCacheKey(block);
+		activeKeys.add(key);
 		const cached = cache.get(key);
 		if (cached) return cached;
 		cache.set(key, block);
 		return block;
 	});
+	for (const key of cache.keys()) {
+		if (!activeKeys.has(key)) cache.delete(key);
+	}
+	return stable;
 }

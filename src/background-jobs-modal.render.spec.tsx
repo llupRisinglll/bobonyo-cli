@@ -35,7 +35,43 @@ function frameHas(frame: CapturedFrame, needle: string): boolean {
 }
 
 describe('BackgroundJobsModal', () => {
-	test('lists running + completed jobs with the bash-box format and a +N more lines footer', async () => {
+	test('goal tab opens directly and renders active goal details', async () => {
+		setBgTasks([]);
+		const setup = await testRender(
+			() => (
+				<BackgroundJobsModal
+					initialTab="goal"
+					goal={{
+						objective: 'Ship long-running work',
+						status: 'active',
+						tokensUsed: 1250,
+						iteration: 3,
+						maxIterations: 10,
+						timeUsedSeconds: 45,
+						createdAt: 1,
+						updatedAt: 2,
+					}}
+					onClose={() => {}}
+				/>
+			),
+			{width: 100, height: 24},
+		);
+		try {
+			await setup.flush();
+			const frame = setup.captureSpans();
+			expect(frameHas(frame, 'Process monitor [jobs | agents | *goal*]')).toBe(
+				true,
+			);
+			expect(frameHas(frame, 'Goal (active)')).toBe(true);
+			expect(frameHas(frame, 'Long-running goal')).toBe(true);
+			expect(frameHas(frame, 'Objective: Ship long-running work')).toBe(true);
+			expect(frameHas(frame, 'iteration 3/10')).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+
+	test('lists each running job with syntax command and four-line live tail', async () => {
 		setBgTasks([
 			{
 				id: 'bg_test_1',
@@ -64,10 +100,52 @@ describe('BackgroundJobsModal', () => {
 			await new Promise(resolve => setTimeout(resolve, 100));
 			const frame = setup.captureSpans();
 			expect(frameHas(frame, 'Process monitor')).toBe(true);
-			// Running command is listed inside its bordered box; completed jobs
-			// are intentionally absent from this live process view.
-			expect(frameHas(frame, 'npm run build')).toBe(true);
+			expect(frameHas(frame, '$ npm run build')).toBe(true);
+			// Exactly tail lines 12-15. Older output stays hidden.
+			expect(frameHas(frame, 'line 11')).toBe(false);
+			for (const line of [12, 13, 14, 15]) {
+				expect(frameHas(frame, `line ${line}`)).toBe(true);
+			}
 			expect(frameHas(frame, 'echo done')).toBe(false);
+		} finally {
+			setBgTasks([]);
+			setup.renderer.destroy();
+		}
+	});
+
+	test('Enter opens selected job details and output updates live', async () => {
+		setBgTasks([
+			{
+				id: 'bg_live',
+				command: 'bun test',
+				output: ['first', 'second'],
+				running: true,
+				exitCode: null,
+				startedAt: Date.now(),
+			},
+		]);
+		const setup = await testRender(
+			() => <BackgroundJobsModal onClose={() => {}} />,
+			{width: 100, height: 30},
+		);
+		try {
+			await setup.flush();
+			setup.mockInput.pressEnter();
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'Background job details')).toBe(
+				true,
+			);
+			expect(frameHas(setup.captureSpans(), 'second')).toBe(true);
+			setBgTasks(previous =>
+				previous.map(task =>
+					task.id === 'bg_live'
+						? {...task, output: [...task.output, 'third live line']}
+						: task,
+				),
+			);
+			await setup.flush();
+			expect(frameHas(setup.captureSpans(), 'third live line')).toBe(true);
+			expect(frameHas(setup.captureSpans(), 'LIVE · 3 lines')).toBe(true);
 		} finally {
 			setBgTasks([]);
 			setup.renderer.destroy();
@@ -160,4 +238,169 @@ describe('BackgroundJobsModal', () => {
 			setup.renderer.destroy();
 		}
 	});
+});
+
+test('agents tab supports selection, details, and live transcript updates', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_one',
+			name: 'explore',
+			description: 'inspect routing',
+			output: 'Implemented first slice.',
+			transcript: ['Task: inspect routing', 'Implemented first slice.'],
+			streaming: '',
+			history: [
+				{role: 'user', content: 'Task: inspect routing'},
+				{role: 'assistant', content: 'Implemented first slice.'},
+			],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 100, height: 30},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'Agents (1)')).toBe(true);
+		expect(frameHas(setup.captureSpans(), 'inspect routing')).toBe(true);
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'Subagent details')).toBe(true);
+		expect(frameHas(setup.captureSpans(), 'Task: inspect routing')).toBe(true);
+		expect(frameHas(setup.captureSpans(), '❯ Task: inspect routing')).toBe(
+			true,
+		);
+		setActiveAgentRuns(previous =>
+			previous.map(run =>
+				run.id === 'agent_one'
+					? {
+							...run,
+							output: 'Bash bun test',
+							transcript: [...run.transcript, 'Bash bun test'],
+							history: [
+								...run.history,
+								{
+									role: 'assistant',
+									content: '',
+									tool_calls: [
+										{
+											id: 'call_1',
+											name: 'execute_bash',
+											arguments: '{"command":"bun test"}',
+										},
+									],
+								},
+								{
+									role: 'tool',
+									content: '20 tests passed',
+									tool_call_id: 'call_1',
+								},
+							],
+						}
+					: run,
+			),
+		);
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'bun test')).toBe(true);
+		expect(frameHas(setup.captureSpans(), '20 tests passed')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});
+
+test('agents tab shows only running agents in a bounded item window', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		...Array.from({length: 6}, (_, index) => ({
+			id: `agent_${index}`,
+			name: 'explore',
+			description: `task ${index}`,
+			output: Array.from(
+				{length: 12},
+				(__, line) => `agent ${index} line ${line}`,
+			).join('\n'),
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'running' as const,
+		})),
+		{
+			id: 'agent_done',
+			name: 'explore',
+			description: 'stale completed task',
+			output: 'must not render',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'completed',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 100, height: 20},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		await setup.flush();
+		const initial = setup.captureSpans();
+		expect(frameHas(initial, 'Agents (6)')).toBe(true);
+		expect(frameHas(initial, 'task 0')).toBe(true);
+		expect(frameHas(initial, 'task 1')).toBe(true);
+		expect(frameHas(initial, 'task 2')).toBe(false);
+		expect(frameHas(initial, 'stale completed task')).toBe(false);
+		expect(frameHas(initial, 'agent 0 line 7')).toBe(false);
+		expect(frameHas(initial, 'agent 0 line 8')).toBe(true);
+		setup.mockInput.pressArrow('down');
+		setup.mockInput.pressArrow('down');
+		await setup.flush();
+		const moved = setup.captureSpans();
+		expect(frameHas(moved, 'task 0')).toBe(false);
+		expect(frameHas(moved, 'task 2')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});
+
+test('agents tab advertises per-agent and cancel-all controls', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_cancel_hint',
+			name: 'general',
+			description: 'long task',
+			output: 'Working…',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 100, height: 20},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		await setup.flush();
+		expect(
+			frameHas(
+				setup.captureSpans(),
+				'x cancel selected · c cancel all · Esc close',
+			),
+		).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
 });

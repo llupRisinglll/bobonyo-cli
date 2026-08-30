@@ -1,13 +1,13 @@
 import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
-import {
-	mkdirSync,
-	mkdtempSync,
-	rmSync,
-	writeFileSync,
-} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadSkills} from './custom';
+import {
+	customToolRegistryName,
+	expandCustomTool,
+	loadCustomTools,
+	loadSkills,
+} from './custom';
 import {cavemanMode, setCavemanMode} from './state';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
@@ -25,7 +25,8 @@ beforeEach(() => {
 
 afterEach(() => {
 	process.chdir(ORIGINAL_CWD);
-	if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+	if (ORIGINAL_CONFIG_DIR === undefined)
+		delete process.env.NANOCODER_CONFIG_DIR;
 	else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
 	setCavemanMode(true);
 	rmSync(root, {recursive: true, force: true});
@@ -52,24 +53,101 @@ describe('loadSkills (bobonyo-local discovery, flat files)', () => {
 	test('the config base skills dir loads too', () => {
 		const global = join(root, 'global', 'skills');
 		mkdirSync(global, {recursive: true});
-		writeFileSync(join(global, 'global-skill.md'), '---\nname: global-skill\n---\nbody');
+		writeFileSync(
+			join(global, 'global-skill.md'),
+			'---\nname: global-skill\n---\nbody',
+		);
 		expect(loadSkills().map(skill => skill.name)).toContain('global-skill');
 	});
 
-	test('does NOT scan .claude/skills or .agents/skills (copies, not discovery)', () => {
-		write('.claude/skills/prod-ops/SKILL.md', '---\nname: prod-ops\n---\nclaude body');
-		write('.agents/skills/worktree/SKILL.md', '---\nname: worktree\n---\nagents body');
-		expect(loadSkills().map(skill => skill.name)).not.toContain('prod-ops');
-		expect(loadSkills().map(skill => skill.name)).not.toContain('worktree');
+	test('does not read Claude or Codex-owned skill folders', () => {
+		write(
+			'.claude/skills/prod-ops/SKILL.md',
+			'---\nname: prod-ops\n---\nclaude body',
+		);
+		write(
+			'.agents/skills/worktree/SKILL.md',
+			'---\nname: worktree\n---\ncodex body',
+		);
+		const names = loadSkills().map(skill => skill.name);
+		expect(names).not.toContain('prod-ops');
+		expect(names).not.toContain('worktree');
 	});
 
-	test('nested skills/<name>/SKILL.md is NOT discovered (flat-only stays stable)', () => {
-		write('.nanocoder/skills/nested/SKILL.md', '---\nname: nested\n---\nbody');
-		expect(loadSkills().map(skill => skill.name)).not.toContain('nested');
+	test('loads copied SKILL.md from a Bobonyo-owned skill folder', () => {
+		write(
+			'.nanocoder/skills/worktree/SKILL.md',
+			'---\nname: worktree\n---\nowned body',
+		);
+		const skill = loadSkills().find(candidate => candidate.name === 'worktree');
+		expect(skill?.body).toContain('owned body');
+		expect(skill?.source).toMatch(
+			/\.(?:bobonyo|nanocoder)\/skills\/worktree\/SKILL\.md$/,
+		);
+	});
+
+	test('nested skills/<name>/SKILL.md loads like OpenClaude', () => {
+		write(
+			'.nanocoder/skills/nested/SKILL.md',
+			'---\ndescription: nested skill\n---\nbody',
+		);
+		const skill = loadSkills().find(candidate => candidate.name === 'nested');
+		expect(skill?.body).toBe('body');
 	});
 });
 
-describe('built-in caveman skill (harness-shipped)', () => {
+describe('custom tools', () => {
+	test('builds typed schemas and stable namespaced registry names', () => {
+		write(
+			'.bobonyo/tools/release-check.md',
+			'---\nname: Release Check\ndescription: Check one release\nreadOnly: true\narguments:\n  - name: tag\n    type: string\n    required: true\n---\nChecked {{tag}}',
+		);
+		const tool = loadCustomTools().find(item => item.name === 'Release Check');
+		expect(tool).toBeDefined();
+		expect(customToolRegistryName(tool!.name)).toBe('custom__release_check');
+		expect(tool!.parameters).toEqual({
+			type: 'object',
+			properties: {tag: {type: 'string'}},
+			required: ['tag'],
+			additionalProperties: false,
+		});
+	});
+
+	test('expands arguments in command and body', () => {
+		expect(
+			expandCustomTool(
+				{command: 'printf %s {{tag}}', body: 'Checked {{tag}}'},
+				{tag: 'v1.2.3'},
+			),
+		).toEqual({
+			command: "printf %s 'v1.2.3'",
+			body: 'Checked v1.2.3',
+		});
+	});
+
+	test('shell-quotes model arguments before command substitution', () => {
+		expect(
+			expandCustomTool(
+				{command: 'printf %s {{tag}}', body: '{{tag}}'},
+				{tag: "v1; touch /tmp/pwned's"},
+			).command,
+		).toBe(`printf %s 'v1; touch /tmp/pwned'"'"'s'`);
+	});
+
+	test('rejects names that cannot produce a safe registry name', () => {
+		expect(() => customToolRegistryName('---')).toThrow(
+			'Invalid custom tool name',
+		);
+	});
+});
+
+describe('built-in skills (harness-shipped)', () => {
+	test('ships Herdr globally', () => {
+		const herdr = loadSkills().find(skill => skill.name === 'herdr');
+		expect(herdr).toBeDefined();
+		expect(herdr!.body).toContain('HERDR_ENV');
+		expect(herdr!.body).toContain('herdr --help');
+	});
 	test('ships with the harness while caveman mode is ON (default)', () => {
 		expect(cavemanMode()).toBe(true);
 		const caveman = loadSkills().find(skill => skill.name === 'caveman');
@@ -90,7 +168,10 @@ describe('built-in caveman skill (harness-shipped)', () => {
 	});
 
 	test('a project caveman.md overrides the built-in (no duplicate)', () => {
-		write('.nanocoder/skills/caveman.md', '---\nname: caveman\n---\nproject body');
+		write(
+			'.nanocoder/skills/caveman.md',
+			'---\nname: caveman\n---\nproject body',
+		);
 		const caveman = loadSkills().filter(skill => skill.name === 'caveman');
 		expect(caveman).toHaveLength(1);
 		expect(caveman[0]!.body).toContain('project body');

@@ -3,11 +3,7 @@ import {mkdirSync, rmSync, writeFileSync} from 'node:fs';
 import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {
-	loadSubagents,
-	subagentModel,
-	subagentSystemPrompt,
-} from './subagents';
+import {loadSubagents, subagentModel, subagentSystemPrompt} from './subagents';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
 const ORIGINAL_CWD = process.cwd();
@@ -23,7 +19,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+	if (ORIGINAL_CONFIG_DIR === undefined)
+		delete process.env.NANOCODER_CONFIG_DIR;
 	else process.env.NANOCODER_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
 	process.chdir(ORIGINAL_CWD);
 	rmSync(root, {recursive: true, force: true});
@@ -71,10 +68,7 @@ describe('loadSubagents (nanocoder subagent-loader parity)', () => {
 	test('frontmatter tools/description parse and inherit model is undefined', () => {
 		writeFileSync(
 			join(root, 'project', '.nanocoder', 'agents', 'research.md'),
-			AGENT_MD(
-				'research',
-				'model: inherit\ntools:\n  - read_file\n  - grep\n',
-			),
+			AGENT_MD('research', 'model: inherit\ntools:\n  - read_file\n  - grep\n'),
 		);
 		const agent = loadSubagents()[0]!;
 		expect(agent.model).toBe('inherit');

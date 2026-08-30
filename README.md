@@ -131,21 +131,21 @@ juggle:
 
 ```json
 {
-  "nanocoder": {
-    "providers": [
-      {
-        "name": "DeepSeek",
-        "baseUrl": "https://api.deepseek.com/",
-        "apiKey": "sk-..."
-      },
-      {
-        "name": "Xiaomi",
-        "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
-        "apiKey": "tp-...",
-        "models": ["mimo-v2.5", "mimo-v2.5-pro"]
-      }
-    ]
-  }
+	"nanocoder": {
+		"providers": [
+			{
+				"name": "DeepSeek",
+				"baseUrl": "https://api.deepseek.com/",
+				"apiKey": "sk-..."
+			},
+			{
+				"name": "Xiaomi",
+				"baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
+				"apiKey": "tp-...",
+				"models": ["mimo-v2.5", "mimo-v2.5-pro"]
+			}
+		]
+	}
 }
 ```
 
@@ -277,20 +277,41 @@ the fallback model does that part, and the chat tells you who did what:
 
 Config and sessions stay in `~/.config/bobonyo` and
 `~/.local/share/bobonyo`. Nothing leaves your machine except the provider
-request itself. `@` file mentions and `[Image #N]` or `[Text #N]` pastes stay
-local until you submit. Steering rules in `steering.json` can block, inject,
-or stop turns before they reach the model.
+request itself. `@` mentions stay local until submit, then Bobonyo sends only
+bounded context for that workspace path. Directories are selectable and send a
+direct-child listing rather than every descendant file. File ranges use
+`@src/file.php#L7-9`; paths with spaces use `@"my folder/file.php"#L7-9`.
+`[Image #N]` or `[Text #N]` pastes follow the same submit boundary. Steering
+rules in `steering.json` can block, inject, or stop turns before they reach the
+model.
+
+## Command sandbox
+
+Shell commands use Linux bubblewrap when available. Default `auto` mode gives
+the command a read-only host filesystem plus write access to the current Git
+workspace and its Git common directory. `/tmp` and `/var/tmp` are private.
+Settings, Behavior exposes `Command sandbox` (`auto`, `workspace-write`,
+`read-only`, `off`) and `Sandbox network` (`on`, `off`). Explicit
+`workspace-write` or `read-only` fails closed when bubblewrap is unavailable;
+`auto` falls back for portability. Extra writable absolute paths can be added
+to `sandbox.writablePaths` in `~/.config/bobonyo/settings.json`.
+
+## Customization files
+
+Bobonyo reads only Bobonyo-owned configuration. It never reads `.claude/`,
+`.codex/`, or `.agents/` directly. Copy selected Claude Code or Codex files
+into `.bobonyo/` when migrating. See [docs/customization.md](docs/customization.md)
+for exact skill, command, hook, agent, and script paths.
 
 ## Agents
 
-Agents are markdown files with YAML frontmatter. bobonyo discovers them
-exactly like the original nanocoder: built-in personalities (General,
-Explore), your user agents (`~/.config/bobonyo/agents/`), and project
-agents (`.bobonyo/agents/` or legacy `.nanocoder/agents/`, project wins on
-name conflict). **Settings,
-Capabilities, Agents** lists every discoverable agent with a search box;
-Enter opens the full system prompt. The `agent` tool lets the main model
-delegate to any of them, using the agent's own prompt.
+Agents are Markdown files with YAML frontmatter. Bobonyo discovers built-in
+personalities (General, Explore), user agents from
+`~/.config/bobonyo/agents/<name>.md`, and project agents from
+`.bobonyo/agents/<name>.md` (legacy `.nanocoder/agents/<name>.md` remains
+supported). Project files win on name conflict. **Settings, Capabilities,
+Agents** lists every discoverable agent with a search box; Enter opens the full
+system prompt. The `agent` tool lets the main model delegate to any of them.
 
 ## Tool-call recovery
 

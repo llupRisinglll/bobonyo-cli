@@ -13,7 +13,8 @@ import {
 	setRetryingAttempt,
 } from './state';
 import {resolveRulesFile} from './rules-file';
-import {builtinCavemanSkill, loadSkills} from './custom';
+import {projectRoot} from './project-paths';
+import {builtinCavemanSkill, loadCustomCommands, loadSkills} from './custom';
 import {readCodexAuth} from './codex-auth';
 import {loadSettings} from './settings';
 import {
@@ -68,6 +69,12 @@ const SYSTEM_PROMPT =
 	'Be blunt and a little snobbish, never sycophantic: honesty matters more than pleasing the user, ' +
 	'so call out weak ideas directly instead of going along with them. ' +
 	'Use tools for anything stateful (files, shell, git, web). ' +
+	'Use write_tasks proactively for every non-trivial implementation, investigation, ' +
+	'or multi-step request. Skip it only for purely informational requests and genuinely ' +
+	'tiny one-step changes. Create the checklist before substantive work, keep exactly one ' +
+	'in_progress item while work remains, and update statuses immediately after each step. ' +
+	'Never claim completion while checklist has pending or in_progress items. Keep completed ' +
+	'items with status completed so the UI can strike them through. ' +
 	'Before each tool call, FIRST write one short line of text (in the same ' +
 	'message) explaining what you are about to do and why — never fire a ' +
 	'tool with no accompanying text. Explain once per batch of related ' +
@@ -81,11 +88,21 @@ const NANO_SYSTEM_PROMPT =
 	'You are BoboNyo, a terminal coding agent. Be concise. ' +
 	'Be blunt and a little snobbish, never sycophantic: honesty matters more than pleasing the user. ' +
 	'Use tools for anything stateful (files, shell, git, web). ' +
+	'Use write_tasks for non-trivial or multi-step work; skip only informational or tiny ' +
+	'one-step requests. Keep exactly one in_progress item and mark completed items immediately. ' +
 	'Before each tool call, FIRST write one short line of text (same ' +
 	'message) saying what you are about to do and why; never fire a tool ' +
 	'with no text unless it continues the goal you already explained. ' +
 	'Keep `git commit` messages to ONE single-line `-m` with no AI ' +
 	'attribution, and never credit an LLM in `gh pr create`.';
+
+const SUBAGENT_GUIDANCE =
+	'## Delegating work\n' +
+	'Use the `agent` tool proactively when delegation materially helps: broad codebase exploration, deep research, context-heavy investigation, isolated implementation, or independent verification. ' +
+	'Launch independent read-only investigations in parallel when they cover different questions. ' +
+	'Use direct `glob`, `grep`, and `read_file` calls for simple targeted searches; do not delegate tiny tasks. ' +
+	'Do not duplicate work already assigned to a subagent. Main agent owns synthesis, decisions, integration, and final verification. ' +
+	'If you are already a delegated subagent, execute assigned task directly and do not delegate again unless explicitly required.';
 
 /**
  * B1: volatile system-info block (cwd, AGENTS.md, skills). SESSION-STABLE in
@@ -97,7 +114,7 @@ const NANO_SYSTEM_PROMPT =
  * a day change never busts the head.
  */
 function buildVolatileSystemInfo(): string {
-	const cwd = process.cwd();
+	const cwd = projectRoot(process.cwd());
 	let agents = '';
 	// Nearest AGENTS.md walking UP from the cwd (cwd wins), the same
 	// resolution `/status` reports — the model always runs under the rules
@@ -121,15 +138,33 @@ function buildVolatileSystemInfo(): string {
 				skills
 					.map(
 						skill =>
-							`- ${skill.name}${skill.description ? `: ${skill.description}` : ''}`,
+							`- ${skill.name} (${skill.source})${skill.description ? `: ${skill.description}` : ''}`,
 					)
 					.join('\n') +
-				`\nUse the skill tool to load a skill's instructions before acting on its domain.`
+				`\nUse the skill tool to load a skill's instructions before acting on its domain. ` +
+				`A loaded skill's full instructions remain in conversation context across later turns. ` +
+				`Do not call the skill tool again while those instructions are still present in conversation context. ` +
+				`Reload only after context compaction removes them, after starting a new conversation, ` +
+				`or when the skill file changed and fresh instructions are required.`
+			: '';
+	const commands = loadCustomCommands();
+	const commandsBlock =
+		commands.length > 0
+			? `\n\n## AVAILABLE COMMANDS\n` +
+				commands
+					.map(
+						command =>
+							`- /${command.name} (${command.source})${command.description ? `: ${command.description}` : ''}`,
+					)
+					.join('\n') +
+				`\nWhen the user asks to run one of these commands now or later, invoke the command tool at the requested stage. Read its returned guidance, reconcile it with the user's request and repository state, then perform only the adapted applicable steps.`
 			: '';
 	return (
 		`## SYSTEM INFORMATION\n` +
 		`Current Working Directory: ${cwd}\n` +
-		`${agents}${skillsBlock}`
+		'Bash commands start in this directory. Do not prepend `cd` unless ' +
+		'you intentionally need a different directory.\n' +
+		`${agents}${skillsBlock}${commandsBlock}`
 	);
 }
 
@@ -167,7 +202,7 @@ export function buildSystemParts(toolProfile?: string): {
 	// opencode / claudecode / codex / custom (SYSTEM.md). A style change is
 	// a legitimate head change, never a per-turn one.
 	const style = (loadSettings().systemPrompt ?? 'default') as SystemPromptStyle;
-	const base = resolveSystemPrompt(style, defaultBase);
+	const base = `${resolveSystemPrompt(style, defaultBase)}\n\n${SUBAGENT_GUIDANCE}`;
 	// Built-in caveman mode (Settings → Behavior → Caveman mode). The
 	// instructions are part of the STABLE block so the cache head stays
 	// byte-identical per session; toggling the setting is a legitimate head
@@ -207,6 +242,8 @@ function isStreamStallMessage(message: string): boolean {
 export interface ChatMessageLike {
 	role: string;
 	content: string;
+	/** Local image paths serialized as native provider image blocks. */
+	images?: string[];
 	tool_call_id?: string;
 	tool_calls?: Array<{id: string; name: string; arguments: string}>;
 }
@@ -289,6 +326,8 @@ export interface TurnResult {
 export interface StreamHandlers {
 	onText: (delta: string) => void;
 	onReasoning: (delta: string) => void;
+	/** Provider entered a reasoning block before first readable summary delta. */
+	onReasoningStart?: () => void;
 }
 
 export interface ToolCatalogEntry {
@@ -340,6 +379,7 @@ export function buildOpenAIRequestBody(
 	endpoint: {
 		id: string;
 		model: string;
+		effort?: string;
 		promptCacheKey?: boolean;
 		providerOptions?: Record<string, unknown>;
 	},
@@ -376,6 +416,7 @@ export function buildOpenAIRequestBody(
 		],
 		...(toolBlocks.length > 0 ? {tools: toolBlocks} : {}),
 	};
+	if (endpoint.effort) body.reasoning_effort = endpoint.effort;
 	if (endpoint.promptCacheKey) {
 		body[`${endpoint.id.split('.')[0]}`] = {
 			prompt_cache_key: sessionIdValue,
@@ -392,6 +433,7 @@ export interface EndpointOverride {
 	baseUrl: string;
 	apiKey: string;
 	model: string;
+	effort?: string;
 	sdkProvider?: string;
 	/** Responses wire against the ChatGPT Codex backend (codex login). */
 	codexAccount?: boolean;
@@ -436,14 +478,18 @@ export async function streamChat(
 	toolProfile?: string,
 	/** Called when the ACTIVE provider failed and a fallback answered. */
 	onFallback?: (endpoint: EndpointOverride) => void,
-	/** Optional model override for isolated subagents; same provider/key. */
-	modelOverride?: string,
+	/** Optional isolated-subagent endpoint; string keeps active provider. */
+	subagentOverride?: string | EndpointOverride,
 ): Promise<TurnResult> {
 	const active = activeEndpoint();
+	const isolated =
+		typeof subagentOverride === 'string'
+			? subagentOverride !== active.model
+				? {...active, model: subagentOverride}
+				: undefined
+			: subagentOverride;
 	const candidates: Array<EndpointOverride | undefined> = [
-		modelOverride && modelOverride !== active.model
-			? {...active, model: modelOverride}
-			: undefined,
+		isolated,
 		...fallbackEndpoints,
 	];
 	let lastError: unknown;
@@ -964,6 +1010,9 @@ async function anthropicStreamOnce(
 			max_tokens: 8192,
 			stream: true,
 			system,
+			...(endpoint.effort
+				? {thinking: {type: 'enabled', budget_tokens: 4096}}
+				: {}),
 			...(toolBlocks.length > 0 ? {tools: toolBlocks} : {}),
 			messages: anthropicMessages,
 		}),
@@ -1050,11 +1099,24 @@ async function anthropicStreamOnce(
 							arguments: '',
 						});
 					}
+					if (chunk.content_block?.type === 'thinking') {
+						handlers.onReasoningStart?.();
+					}
 					break;
 				case 'content_block_delta':
 					if (chunk.delta?.type === 'text_delta' && chunk.delta.text) {
 						text += chunk.delta.text;
 						handlers.onText(chunk.delta.text);
+					}
+					if (
+						chunk.delta?.type === 'thinking_delta' &&
+						typeof (chunk.delta as {thinking?: unknown}).thinking === 'string'
+					) {
+						const thinking = (chunk.delta as {thinking: string}).thinking;
+						if (thinking) {
+							reasoning += thinking;
+							handlers.onReasoning(thinking);
+						}
 					}
 					if (
 						chunk.delta?.type === 'input_json_delta' &&
@@ -1098,7 +1160,8 @@ export function responsesToolBlocks(
 	tools: ToolCatalogEntry[],
 	codexAccount = false,
 ): Array<Record<string, unknown>> {
-	return [...tools]
+	const blocks: Array<Record<string, unknown>> = [...tools]
+		.filter(tool => !(codexAccount && tool.name === 'web_search'))
 		.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 		.map(tool => ({
 			type: 'function',
@@ -1109,6 +1172,8 @@ export function responsesToolBlocks(
 			// the codex CLI request body); the standard API takes a boolean.
 			strict: codexAccount ? null : false,
 		}));
+	if (codexAccount) blocks.push({type: 'web_search'});
+	return blocks;
 }
 
 /**
@@ -1119,14 +1184,42 @@ export function responsesToolBlocks(
  * precede its matching function_call_output (the model pairs them by
  * call_id).
  */
+function imageDataUrl(path: string): string | null {
+	try {
+		if (!existsSync(path)) return null;
+		const extension = path.split('.').pop()?.toLowerCase();
+		const mime =
+			extension === 'jpg' || extension === 'jpeg'
+				? 'image/jpeg'
+				: extension === 'gif'
+					? 'image/gif'
+					: extension === 'webp'
+						? 'image/webp'
+						: 'image/png';
+		return `data:${mime};base64,${readFileSync(path).toString('base64')}`;
+	} catch {
+		return null;
+	}
+}
+
 export function buildResponsesInput(messages: ChatMessageLike[]): unknown[] {
 	const input: unknown[] = [];
 	for (const message of messages) {
 		if (message.role === 'user') {
-			input.push({
-				role: 'user',
-				content: [{type: 'input_text', text: message.content}],
-			});
+			const content: Array<Record<string, unknown>> = [
+				{type: 'input_text', text: message.content},
+			];
+			for (const path of message.images ?? []) {
+				const imageUrl = imageDataUrl(path);
+				if (imageUrl) {
+					content.push({
+						type: 'input_image',
+						image_url: imageUrl,
+						detail: 'high',
+					});
+				}
+			}
+			input.push({role: 'user', content});
 		} else if (message.role === 'assistant') {
 			if (message.content) {
 				input.push({
@@ -1207,6 +1300,14 @@ async function responsesStreamOnce(
 		tools: responsesToolBlocks(tools, Boolean(endpoint.codexAccount)),
 		text: {verbosity: 'low'},
 	};
+	// Responses reasoning summaries are opt-in, including at provider-default
+	// effort. Without `summary: auto`, models can reason internally while the
+	// harness receives no phase/deltas, leaving line mode stuck on "Working".
+	body.reasoning = {
+		...(endpoint.effort ? {effort: endpoint.effort} : {}),
+		summary: 'auto',
+	};
+	body.include = ['reasoning.encrypted_content'];
 	if (endpoint.codexAccount) {
 		// Session affinity for the ChatGPT Codex backend: the request body
 		// carries the persisted session id so the provider can keep a warm
@@ -1329,6 +1430,9 @@ async function responsesStreamOnce(
 			switch (type) {
 				case 'response.output_item.added': {
 					const item = chunk.item;
+					if (item?.type === 'reasoning') {
+						handlers.onReasoningStart?.();
+					}
 					if (item?.type === 'function_call') {
 						toolCalls.set(chunk.output_index ?? toolCalls.size, {
 							id: item.call_id ?? item.id ?? '',
@@ -1655,10 +1759,11 @@ const XML_TOOL_ALIASES: Record<string, string> = {
 	bash: 'execute_bash',
 	read: 'read_file',
 	write: 'write_file',
-	edit: 'string_replace',
-	find: 'find_files',
-	grep: 'search_file_contents',
-	ls: 'list_directory',
+	edit: 'edit_file',
+	applypatch: 'apply_patch',
+	ls: 'glob',
+	glob: 'glob',
+	grep: 'grep',
 	websearch: 'web_search',
 	webfetch: 'fetch_url',
 	tasks: 'write_tasks',
@@ -1673,19 +1778,33 @@ const TOOL_POSITIONAL_ARGS: Record<string, string[]> = {
 	execute_bash: ['command'],
 	read_file: ['path'],
 	write_file: ['path', 'content'],
+	edit_file: ['path', 'old_string', 'new_string'],
 	string_replace: ['path', 'old_string', 'new_string'],
 	diff_edit: ['path', 'diff'],
-	git_status: ['cwd'],
-	git_log: ['cwd'],
-	git_diff: ['cwd'],
-	file_op: ['op', 'path', 'target'],
-	find_files: ['pattern', 'path'],
-	list_directory: ['path'],
-	search_file_contents: ['pattern', 'path'],
+	apply_patch: ['patchText'],
+	glob: ['pattern', 'path'],
+	grep: ['pattern', 'path'],
 	web_search: ['query'],
 	fetch_url: ['url'],
 	skill: ['name', 'path'],
 	check_skill: ['name', 'path'],
+	question: ['questions'],
+	request_permissions: ['permissions'],
+	process_start: ['command'],
+	process_input: ['process_id', 'input'],
+	process_status: ['process_id'],
+	process_stop: ['process_id'],
+	lsp: ['operation', 'query', 'path'],
+	agent: ['description', 'subagent_type', 'background'],
+	agent_message: ['agent_id', 'message', 'background'],
+	agent_status: ['agent_id'],
+	agent_wait: ['agent_id', 'timeout_ms'],
+	agent_cancel: ['agent_id'],
+	task_create: ['title', 'activeForm', 'owner', 'depends_on'],
+	task_get: ['task_id'],
+	task_update: ['task_id', 'status'],
+	enter_worktree: ['name', 'path', 'base'],
+	remove_worktree: ['path', 'delete_branch'],
 };
 
 /**

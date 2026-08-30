@@ -2,6 +2,10 @@ import {describe, expect, test} from 'bun:test';
 import {
 	colorDetailLine,
 	detailsCardHeight,
+	detailsCardWidth,
+	usageCalendarCellWidth,
+	usageGraphWidth,
+	usageVariantIndex,
 } from './components/details-modal';
 import {colors} from './theme';
 
@@ -40,7 +44,11 @@ describe('colorDetailLine', () => {
 	});
 
 	test('plain text stays text-colored', () => {
-		const [seg] = colorDetailLine('Diagnostics: no issues found.', colors(), attrs);
+		const [seg] = colorDetailLine(
+			'Diagnostics: no issues found.',
+			colors(),
+			attrs,
+		);
 		expect(seg!.fg).toBe(colors().text);
 	});
 });
@@ -64,5 +72,40 @@ describe('detailsCardHeight (fit short content, cap at terminal)', () => {
 	test('never collapses below a readable minimum', () => {
 		expect(detailsCardHeight('', 40)).toBe(7);
 		expect(detailsCardHeight('x', 8)).toBe(7);
+	});
+});
+
+describe('responsive details modal geometry', () => {
+	test('usage card never exceeds narrow terminal width', () => {
+		expect(detailsCardWidth('Usage', 72)).toBe(70);
+		expect(detailsCardWidth('Usage', 40)).toBe(38);
+		expect(detailsCardWidth('Usage', 160)).toBe(124);
+	});
+
+	test('calendar cells collapse when wide cells do not fit', () => {
+		expect(usageCalendarCellWidth(79)).toBe(1);
+		expect(usageCalendarCellWidth(80)).toBe(2);
+	});
+
+	test('calendar range follows measured graph width', () => {
+		const variants = [
+			'Su ' + '· '.repeat(53),
+			'Su ' + '· '.repeat(26),
+			'Su ' + '· '.repeat(13),
+		];
+		expect(usageGraphWidth(variants[0]!, 124)).toBe(109);
+		expect(usageVariantIndex(124, variants)).toBe(0);
+		expect(usageVariantIndex(80, variants)).toBe(1);
+		expect(usageVariantIndex(28, variants)).toBe(2);
+	});
+
+	test('content viewport has one row per content line', () => {
+		const content = Array.from(
+			{length: 15},
+			(_, index) => `line ${index}`,
+		).join('\n');
+		const height = detailsCardHeight(content, 40);
+		// Content box is cardHeight - 4; its border consumes 2 rows.
+		expect(height - 6).toBe(15);
 	});
 });

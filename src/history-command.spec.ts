@@ -1,7 +1,11 @@
 import {describe, expect, test} from 'bun:test';
 import type {TextChunk} from '@opentui/core';
-import {renderCommandBlock, renderUserBlock} from './components/history';
-import {renderInfoRow} from './components/history';
+import {
+	attachmentMarkerFromLanguage,
+	commandVisibleText,
+	renderInfoRow,
+	renderUserBlock,
+} from './components/history';
 import type {ChatMessage} from './state';
 import {tokenizeCommandRow} from './row-highlight';
 import {colors} from './theme';
@@ -22,38 +26,28 @@ function themeRgb(hex: string): string {
 	)},${parseInt(hex.slice(5, 7), 16)})`;
 }
 
-describe('renderCommandBlock (triggered command rows)', () => {
-	test('caps the body preview at 10 lines with a +N more lines footer', () => {
-		const {text} = renderCommandBlock(
-			{kind: 'command', name: 'worktree', body: longBody},
-			'command-0',
+describe('command invocation transcript', () => {
+	test('shows only typed command and never injected workflow body', () => {
+		const command = {
+			kind: 'command' as const,
+			name: 'create-pr',
+			original: '/create-pr for this new e2e',
+			body: longBody,
+		};
+		expect(commandVisibleText(command, 'fallback')).toBe(
+			'/create-pr for this new e2e',
 		);
-		expect(text).toContain('✦ Triggered a Command(worktree)');
-		expect(text).toContain('line 10');
-		expect(text).not.toContain('line 11');
-		expect(text).toContain('… +15 more lines');
+		expect(commandVisibleText(command, 'fallback')).not.toContain('line 1');
 	});
-
-	test('skill variants render Triggered a Skill(name)', () => {
-		const {text} = renderCommandBlock(
-			{kind: 'skill', name: 'frontend', body: 'short'},
-			'command-1',
-		);
-		expect(text).toContain('✦ Triggered a Skill(frontend)');
-		expect(text).toContain('  └   short');
-	});
-
-	test('short bodies render fully without a footer', () => {
-		const {text} = renderCommandBlock(
-			{kind: 'command', name: 'status', body: 'one\ntwo'},
-			'command-2',
-		);
-		expect(text).toContain('one');
-		expect(text).toContain('two');
-		expect(text).not.toMatch(/more lines/);
+	test('falls back to visible user content for legacy command rows', () => {
+		expect(
+			commandVisibleText(
+				{kind: 'skill', name: 'frontend', body: 'hidden guidance'},
+				'/frontend improve form',
+			),
+		).toBe('/frontend improve form');
 	});
 });
-
 describe('renderUserBlock (multi-line user messages)', () => {
 	const message = (content: string): ChatMessage => ({
 		role: 'user',
@@ -75,6 +69,16 @@ describe('renderUserBlock (multi-line user messages)', () => {
 		expect(text).toContain('❯ hello world');
 		expect(text).toContain('second line');
 		expect(text).not.toMatch(/more lines/);
+	});
+});
+
+describe('attachmentMarkerFromLanguage', () => {
+	test('finds real attachment keys after resize metadata', () => {
+		expect(attachmentMarkerFromLanguage('usermsg:done:w120:a23')).toBe('23');
+	});
+
+	test('supports legacy attachment metadata without width', () => {
+		expect(attachmentMarkerFromLanguage('usermsg:done:a1')).toBe('1');
 	});
 });
 
@@ -130,9 +134,8 @@ describe('renderInfoRow (background task completion)', () => {
 			'info-1',
 		);
 		const lines = text.split('\n');
-		// Leading history breakline + fence opener + blank + header, then
-		// wrapped body lines.
-		const body = lines.slice(4, lines.length - 1);
+		// Fence opener + blank + header, then wrapped body lines.
+		const body = lines.slice(3, lines.length - 1);
 		expect(body.length).toBeGreaterThan(2);
 		expect(body[0]!.startsWith('  └   ')).toBe(true);
 		for (const line of body.slice(1))

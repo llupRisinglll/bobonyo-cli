@@ -25,7 +25,7 @@ import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
 /**
  * Mode line, parity flavor of nanocoder's footer: mode · model · ctx.
  */
-export function Status() {
+export function Status(props: {cwd?: string} = {}) {
 	const terminalDimensions = useTerminalDimensions();
 	const bold = () => createTextAttributes({bold: true});
 	// The `bg: n` segment is GONE: background jobs now surface as a
@@ -85,7 +85,7 @@ export function Status() {
 		return label ? ` · ${label}` : '';
 	};
 	const cwdLabel = createMemo(() => {
-		const cwd = process.cwd();
+		const cwd = props.cwd ?? process.cwd();
 		const user = process.env.USER ?? 'user';
 		// Keep the footer on ONE row (a wrapped status line would paint over
 		// the input box's bottom border on narrow panes): size the path to the

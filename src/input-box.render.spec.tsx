@@ -6,11 +6,17 @@ import {For, Show} from 'solid-js';
 import type {TestRendererSetup} from '@opentui/core/testing';
 import {InputBox} from './components/input-box';
 import {
+	busy,
 	input,
+	reasoning,
+	setBusy,
 	setInput,
 	setModelOpen,
 	setPendingQueue,
+	setReasoning,
 	setSpinnerFrame,
+	setThinkingActive,
+	setThinkingMode,
 } from './state';
 import {colors} from './theme';
 import {activeRowPalette} from './row-highlight';
@@ -100,6 +106,100 @@ async function mountInput(): Promise<TestRendererSetup> {
 }
 
 describe('InputBox caret rendering (Shift+Enter regression, render-level)', () => {
+	test('typing ! immediately enters bash mode with ! prompt and primary border', async () => {
+		let submitted = '';
+		setInput('');
+		setSpinnerFrame(0);
+		const setup = await testRender(
+			() => <InputBox onSubmit={value => (submitted = value)} />,
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			await setup.mockInput.typeText('!');
+			await setup.flush();
+			let frame = setup.captureSpans();
+			let text = frame.lines
+				.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(input()).toBe('!');
+			expect(text).toContain('Bash mode');
+			const promptLine = frame.lines.find(line =>
+				line.spans
+					.map(span => span.text)
+					.join('')
+					.includes('! '),
+			);
+			expect(promptLine).toBeDefined();
+			expect(promptLine!.spans.map(span => span.text).join('')).not.toContain(
+				'! !',
+			);
+			const topBorder = frame.lines.find(line =>
+				line.spans
+					.map(span => span.text)
+					.join('')
+					.includes('╭'),
+			);
+			expect(topBorder).toBeDefined();
+			const primary = RGBA.fromHex(colors().primary);
+			expect(
+				topBorder!.spans.some(span => (span.fg as RGBA).equals(primary)),
+			).toBe(true);
+
+			await setup.mockInput.typeText('echo hi');
+			await setup.flush();
+			frame = setup.captureSpans();
+			const commandLine = frame.lines
+				.map(line => line.spans.map(span => span.text).join(''))
+				.find(line => line.includes('echo hi'));
+			expect(input()).toBe('!echo hi');
+			expect(commandLine).toContain('! echo hi');
+			expect(commandLine).not.toContain('! !echo hi');
+
+			setup.mockInput.pressEnter();
+			await setup.flush();
+			expect(submitted).toBe('!echo hi');
+		} finally {
+			setInput('');
+			setup.renderer.destroy();
+		}
+	});
+
+	test('line mode changes Working to Thinking when reasoning starts', async () => {
+		setBusy(true);
+		setThinkingMode('line');
+		setThinkingActive(false);
+		setReasoning('');
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+		});
+		try {
+			await setup.flush();
+			let text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('');
+			expect(text).toContain('Working');
+			expect(text).not.toContain('Thinking');
+
+			setThinkingActive(true);
+			setReasoning('Inspecting provider stream');
+			await setup.flush();
+			text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('');
+			expect(text).toContain('Thinking');
+			expect(text).toContain('Inspecting provider stream');
+		} finally {
+			setBusy(false);
+			setThinkingActive(false);
+			setReasoning('');
+			setThinkingMode('hidden');
+			setup.renderer.destroy();
+		}
+	});
+
 	test('herdr Shift+Enter: caret lands EXACTLY at the first content column of the empty continuation line, with no phantom cell', async () => {
 		const setup = await mountInput();
 		try {
@@ -260,6 +360,130 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 		}
 	});
 
+	test('external input then paste appends at caret end', async () => {
+		setInput('before');
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+			kittyKeyboard: true,
+		});
+		try {
+			await setup.flush();
+			await setup.mockInput.pasteBracketedText(' after');
+			await setup.flush();
+			expect(input()).toBe('before after');
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test('up arrow traverses explicit blank lines without left-arrow workaround', async () => {
+		setInput('Line 1\n\nLine 3\n\nLine 4');
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+			kittyKeyboard: true,
+		});
+		try {
+			await setup.flush();
+			setup.mockInput.pressArrow('up');
+			await setup.flush();
+			let hits = caretSpans(setup.captureSpans());
+			expect(hits).toHaveLength(1);
+			// Blank row above Line 4.
+			expect(hits[0]!.line).toBe(4);
+			setup.mockInput.pressArrow('up');
+			await setup.flush();
+			hits = caretSpans(setup.captureSpans());
+			// Then Line 3, without pressing left.
+			expect(hits[0]!.line).toBe(3);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test('typing at middle-line caret inserts under visible block caret', async () => {
+		setInput('top\nmiddle\nbottom');
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+			kittyKeyboard: true,
+		});
+		try {
+			await setup.flush();
+			// End -> up reaches same column on middle, then left twice.
+			setup.mockInput.pressArrow('up');
+			setup.mockInput.pressArrow('left');
+			setup.mockInput.pressArrow('left');
+			await setup.flush();
+			const before = caretSpans(setup.captureSpans())[0]!;
+			await setup.mockInput.typeText('X');
+			await setup.flush();
+			expect(input()).toBe('top\nmiddXle\nbottom');
+			const after = caretSpans(setup.captureSpans())[0]!;
+			expect(after.line).toBe(before.line);
+			expect(after.col).toBe(before.col + 1);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test('short multiline paste keeps exact navigation offsets', async () => {
+		setInput('head:');
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+			kittyKeyboard: true,
+		});
+		try {
+			await setup.flush();
+			await setup.mockInput.pasteBracketedText('A\n\nB\nC');
+			await setup.flush();
+			expect(input()).toBe('head:A\n\nB\nC');
+			setup.mockInput.pressArrow('up');
+			setup.mockInput.pressArrow('up');
+			await setup.flush();
+			await setup.mockInput.typeText('X');
+			await setup.flush();
+			// Two ups: C -> B -> blank; X belongs on blank, not adjacent word.
+			expect(input()).toBe('head:A\nX\nB\nC');
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
+	test('short CRLF paste on line 9 stays editable and participates in navigation', async () => {
+		const original = Array.from(
+			{length: 10},
+			(_, index) => `Line ${index + 1}`,
+		).join('\n');
+		setInput(original);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 100,
+			height: 40,
+			kittyKeyboard: true,
+		});
+		try {
+			await setup.flush();
+			// End of line 10 -> line 9, then paste three SHORT CRLF lines.
+			setup.mockInput.pressArrow('up');
+			await setup.flush();
+			await setup.mockInput.pasteBracketedText(
+				'\r\npasted-1\r\npasted-2\r\npasted-3',
+			);
+			await setup.flush();
+			expect(input()).toContain('pasted-1\npasted-2\npasted-3');
+			expect(input()).not.toContain('\r');
+			expect(input()).not.toContain('[Text #');
+			// Up from pasted-3 lands in pasted-2, not old Line 9.
+			setup.mockInput.pressArrow('up');
+			await setup.flush();
+			await setup.mockInput.typeText('Z');
+			await setup.flush();
+			expect(input()).toMatch(/pasted-2[^\n]*Z[^\n]*\npasted-3/);
+			setup.mockInput.pressBackspace();
+			await setup.flush();
+			expect(input()).not.toMatch(/pasted-2[^\n]*Z/);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test('paste is ignored while a modal is open (chat box is inert)', async () => {
 		setInput('');
 		setModelOpen(true);
@@ -325,4 +549,82 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			setup.renderer.destroy();
 		}
 	});
+});
+
+test('model-facing question options support arrows, Enter, and custom text', async () => {
+	const {setPendingPrompt} = await import('./state');
+	let answer = '';
+	setInput('');
+	setPendingPrompt({
+		question: '[Base] Which branch?',
+		options: ['main', 'staging'],
+		resolve: value => {
+			answer = value;
+		},
+	});
+	const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+		width: 80,
+		height: 24,
+		kittyKeyboard: true,
+	});
+	try {
+		await setup.flush();
+		let text = setup
+			.captureSpans()
+			.lines.flatMap(line => line.spans.map(span => span.text))
+			.join('');
+		expect(text).toContain('↑/↓ main · Enter select');
+		setup.mockInput.pressArrow('down');
+		await setup.flush();
+		text = setup
+			.captureSpans()
+			.lines.flatMap(line => line.spans.map(span => span.text))
+			.join('');
+		expect(text).toContain('↑/↓ staging · Enter select');
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		expect(answer).toBe('staging');
+	} finally {
+		setPendingPrompt(null);
+		setup.renderer.destroy();
+	}
+});
+
+test('resolving one model question may immediately open the next question', async () => {
+	const {setPendingPrompt} = await import('./state');
+	let secondAnswer = '';
+	setInput('');
+	setPendingPrompt({
+		question: 'First?',
+		options: ['one'],
+		resolve: () =>
+			setPendingPrompt({
+				question: 'Second?',
+				options: ['two'],
+				resolve: value => {
+					secondAnswer = value;
+				},
+			}),
+	});
+	const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+		width: 80,
+		height: 24,
+		kittyKeyboard: true,
+	});
+	try {
+		await setup.flush();
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		const text = setup
+			.captureSpans()
+			.lines.flatMap(line => line.spans.map(span => span.text))
+			.join('');
+		expect(text).toContain('Second?');
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		expect(secondAnswer).toBe('two');
+	} finally {
+		setPendingPrompt(null);
+		setup.renderer.destroy();
+	}
 });

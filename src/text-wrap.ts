@@ -58,8 +58,7 @@ export function wrapTextDetailed(
 					if (current.trim() && candidate.trim().length > safe) {
 						lines.push({text: current, start: lineStart});
 						current = word.trimStart();
-						lineStart =
-							wordStart + (word.length - word.trimStart().length);
+						lineStart = wordStart + (word.length - word.trimStart().length);
 					} else {
 						current = candidate;
 					}

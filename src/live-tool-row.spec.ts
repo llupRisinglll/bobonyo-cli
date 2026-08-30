@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test';
-import {liveRowSegments, splitChunksByLine} from './live-tool-row';
+import {
+	liveRowSegments,
+	shouldRenderRunningToolMessage,
+	splitChunksByLine,
+} from './live-tool-row';
 import {tokenizeBashRow} from './row-highlight';
 import {colors} from './theme';
 import {
@@ -47,6 +51,14 @@ describe('splitChunksByLine', () => {
 		expect(lines[0]!.map(c => c.text).join('')).toBe('Bash(echo hi)');
 		expect(lines[1]!.map(c => c.text).join('')).toBe('  └   line 1');
 		expect(lines[2]!.map(c => c.text).join('')).toBe('      line 2');
+	});
+});
+
+describe('running agent row ownership', () => {
+	test('active agent row suppresses duplicate generic Agent tool row', () => {
+		expect(shouldRenderRunningToolMessage('agent', true)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent', false)).toBe(true);
+		expect(shouldRenderRunningToolMessage('read_file', true)).toBe(true);
 	});
 });
 

@@ -9,6 +9,7 @@
 import {appendInfo} from './state';
 import {loadCustomCommands, loadSkills} from './custom';
 import {isPreviewTui} from './preview';
+import {herdrAvailable} from './herdr';
 
 export const BASE_COMMAND_NAMES = [
 	'help',
@@ -16,6 +17,9 @@ export const BASE_COMMAND_NAMES = [
 	'quit',
 	'clear',
 	'compact',
+	'goal',
+	'loop',
+	'fork',
 	'resume',
 	'retry',
 	'rename',
@@ -110,9 +114,10 @@ export const MOCK_COMMAND_NAMES = [
 
 /** All slash commands visible for the CURRENT mode (mocks only in preview). */
 export function commandNames(): string[] {
-	return isPreviewTui()
+	const commands = isPreviewTui()
 		? [...BASE_COMMAND_NAMES, ...MOCK_COMMAND_NAMES]
 		: [...BASE_COMMAND_NAMES];
+	return herdrAvailable() ? [...commands, 'herdr:fork'] : commands;
 }
 
 /** One-line descriptions for the built-in slash commands (suggestions UI). */
@@ -122,6 +127,10 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	quit: 'Quit bobonyo',
 	clear: 'Start a new conversation',
 	compact: 'Compact the conversation',
+	goal: 'Set or manage a long-running goal',
+	loop: 'Create, list, or stop scheduled thread jobs',
+	fork: 'Fork this conversation into a new session',
+	'herdr:fork': 'Fork into a new Herdr pane',
 	resume: 'Resume a session',
 	retry: 'Retry the last turn',
 	undo: 'Undo the last message',
@@ -219,6 +228,10 @@ export interface CommandContext {
 	exit: () => void;
 	clear: () => void;
 	compact: () => void;
+	goal: (args: string) => void;
+	loop: (args: string) => void;
+	fork: () => void;
+	herdrFork: (split: string) => void;
 	retry: () => void;
 	undo: () => void;
 	resume: (ref?: string) => void;
@@ -256,7 +269,15 @@ export interface CommandContext {
 	/** F2 catalog breadth: display-only info commands. */
 	help: () => void;
 	/** GAP-21: run a preview-mock scenario through the REAL chat pipeline. */
-	submitPrompt: (prompt: string) => void;
+	submitPrompt: (
+		prompt: string,
+		command?: {
+			kind: 'command' | 'skill';
+			name: string;
+			original?: string;
+			body: string;
+		},
+	) => void;
 	commandsList: () => void;
 	toolsList: () => void;
 	skillsList: () => void;
@@ -337,15 +358,19 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		ctx.submitPrompt(prompt);
 		return true;
 	}
-	// `/skill:<name>`, run a loaded skill's body as a prompt (suggestions
-	// show skills with a `[Skill]` prefix).
+	// `/skill:<name>` remains a compatibility alias for direct `/name` skills.
 	if (name.startsWith('skill:')) {
 		const skillName = name.slice(6);
 		const skill = loadSkills().find(
 			candidate => candidate.name.toLowerCase() === skillName.toLowerCase(),
 		);
 		if (skill) {
-			ctx.submitPrompt(skill.body);
+			ctx.submitPrompt(skill.body, {
+				kind: 'skill',
+				name: skill.name,
+				original: `/${name}`,
+				body: skill.body,
+			});
 			return true;
 		}
 		appendInfo(`Unknown skill '${skillName}'.`);
@@ -364,6 +389,22 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'compact':
 			ctx.compact();
+			return true;
+		case 'goal':
+			ctx.goal(args);
+			return true;
+		case 'loop':
+			ctx.loop(args);
+			return true;
+		case 'fork':
+			ctx.fork();
+			return true;
+		case 'herdr:fork':
+			if (!herdrAvailable()) {
+				appendInfo('/herdr:fork is only available inside Herdr.');
+				return true;
+			}
+			ctx.herdrFork(args || 'vertical');
 			return true;
 		case 'retry':
 			ctx.retry();
@@ -492,13 +533,28 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			ctx.setupMcpInfo();
 			return true;
 		default:
-			// F4: custom commands take precedence over the unknown-command
-			// notice. The app turns the substituted body into a chat prompt.
+			// One slash namespace: built-ins, then custom commands, then skills.
+			// `/skill:name` remains as a compatibility alias, but suggestions and
+			// normal invocation use the cleaner `/name` form.
 			if (findCustomCommand(name)) {
 				ctx.custom(name, args);
 				return true;
 			}
-			appendInfo(`Unknown command: /${name}. Type /help for the command list.`);
+			const skill = loadSkills().find(
+				candidate => candidate.name.toLowerCase() === name.toLowerCase(),
+			);
+			if (skill) {
+				ctx.submitPrompt(skill.body, {
+					kind: 'skill',
+					name: skill.name,
+					original: `/${name}`,
+					body: skill.body,
+				});
+				return true;
+			}
+			appendInfo(
+				`Unknown command or skill: /${name}. Type /help for the list.`,
+			);
 			return true;
 	}
 }
@@ -506,7 +562,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 export const HELP_TEXT = [
 	'/help       , this list',
 	'/clear     , new conversation (cancels in-flight runs)',
-	'/compact   , mechanically compact the context',
+	'/compact   , checkpoint and compact context',
+	'/goal <objective> [--tokens N] [--max-iterations N] [--completion-promise "TEXT"]',
+	'/loop <spec>, schedule after-turn or timed continuation work',
 	'/retry     , re-run the last prompt',
 	'/resume [last|N|id], load a previous session',
 	'/sessions  , list saved sessions',

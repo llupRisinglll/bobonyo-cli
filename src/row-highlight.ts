@@ -224,10 +224,18 @@ export function tokenizeToolRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
+	const activityHeader = lines.find(line => line.trim() !== '')?.trim() ?? '';
+	const mcpActivity = /(?:^|\s)MCP$/.test(activityHeader);
 	return emitLines(
 		lines,
 		(line, index, isHeader) => {
 			if (isHeader) {
+				const activity = line.match(
+					/^(?:[✦⚙]\s*)?(Explored|Navigated Web|.+ MCP)$/,
+				);
+				if (activity) {
+					return [chunk(activity[1] ?? line, defaultFg, bold())];
+				}
 				if (/^(?:[✦⚙]\s*)?Ran\s+/.test(line)) {
 					return groupHeaderChunks(line, status, palette);
 				}
@@ -243,6 +251,20 @@ export function tokenizeToolRow(
 			}
 			if (/^[✦⚙]/.test(line))
 				return headerChunks(line, status, palette, defaultFg);
+			const branch = line.match(/^(\s*[├└│]\s*)(.*)$/);
+			if (branch) {
+				const body = branch[2] ?? '';
+				const actionEnd = mcpActivity
+					? body.indexOf('(') === -1
+						? body.length
+						: body.indexOf('(')
+					: (body.match(/^[^\s(]+/)?.[0].length ?? 0);
+				return [
+					chunk(branch[1] ?? '', palette.fg.secondary, dim()),
+					chunk(body.slice(0, actionEnd), palette.fg.primary, bold()),
+					chunk(body.slice(actionEnd), defaultFg),
+				];
+			}
 			// Output / footer rows are secondary (container semantics).
 			return [chunk(line, palette.fg.secondary, dim())];
 		},
@@ -353,6 +375,7 @@ export function tokenizeFileRow(
 		.replace(/\n+$/, '')
 		.replace(/\t/g, '  ')
 		.split('\n');
+	const headerAt = lines.findIndex(line => line.trim() !== '');
 	return emitLines(
 		lines,
 		(line, index, isHeader) => {
@@ -484,6 +507,7 @@ export function tokenizeFileDiff(
 		.replace(/\n+$/, '')
 		.replace(/\t/g, '  ')
 		.split('\n');
+	const headerAt = lines.findIndex(line => line.trim() !== '');
 	// Parse the diff BODY (everything after the `✦ Edit`/`⎿` header rows)
 	// into structured rows so remove/add runs can be paired 1:1 like the
 	// original DiffView, never diff a line against an arbitrary neighbor.
@@ -494,21 +518,41 @@ export function tokenizeFileDiff(
 		sigil?: string;
 		number?: string;
 		text: string;
+		language: string;
 		// Word-diff middle span (char offsets within `text`); absent when the
 		// line is unpaired or too different to word-highlight (parity:
 		// computeDiffLines' changeRatioThreshold).
 		word?: [number, number];
 	}
 	const body: DiffBodyRow[] = [];
+	let bodyLanguage = language;
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? '';
-		const header = line.match(/^([✦⚙]\s*[A-Za-z]+\s+.+)$/);
-		if (header && i === 0) {
+		if (i === headerAt) {
+			const fileHeader = line.match(
+				/^(?:[✦⚙]\s*)?(?:[├└]\s+)?(?:Create|Edit|Delete|Move)\s+(.+?)(?:\s+→\s+(.+?))?\s+\(\+\d+\s+-\d+\)$/,
+			);
+			if (fileHeader)
+				bodyLanguage = languageForPath(fileHeader[2] ?? fileHeader[1] ?? '');
 			continue;
 		}
 		// ` ⎿ N lines → M lines` summary rows render through their own early
 		// branch in the emit callback (they never consume a body entry).
 		if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) continue;
+		const fileHeader = line.match(
+			/^\s*(?:[├└]\s+)?(?:Create|Edit|Delete|Move)\s+(.+?)(?:\s+→\s+(.+?))?\s+\(\+\d+\s+-\d+\)$/,
+		);
+		if (fileHeader) {
+			bodyLanguage = languageForPath(fileHeader[2] ?? fileHeader[1] ?? '');
+			body.push({
+				raw: line,
+				kind: 'context',
+				indent: '',
+				text: line,
+				language: bodyLanguage,
+			});
+			continue;
+		}
 		// Number-first gutter (parity: the reference DiffView):
 		// `   5 + function …` / `   5 - function …`. The sigil takes EXACTLY
 		// one separator space, so the code's own leading indentation (tabs
@@ -523,6 +567,7 @@ export function tokenizeFileDiff(
 				sigil: change[3],
 				number: change[2],
 				text: change[4] ?? '',
+				language: bodyLanguage,
 			});
 			continue;
 		}
@@ -534,12 +579,19 @@ export function tokenizeFileDiff(
 				indent: context[1] ?? '',
 				number: context[2],
 				text: context[3] ?? '',
+				language: bodyLanguage,
 			});
 			continue;
 		}
 		// Stray rows (not a numbered context line) are opaque body rows,
 		// they render dim and stay out of pairing.
-		body.push({raw: line, kind: 'context', indent: '', text: line});
+		body.push({
+			raw: line,
+			kind: 'context',
+			indent: '',
+			text: line,
+			language: bodyLanguage,
+		});
 	}
 	// Pair adjacent remove/add runs 1:1, in order (removal[i] <-> addition[i]),
 	// and mark only pairs within the 0.6 change-ratio threshold with a
@@ -561,14 +613,18 @@ export function tokenizeFileDiff(
 			for (let p = 0; p < pairCount; p++) {
 				const oldRow = removals[p]!;
 				const newRow = additions[p]!;
-				const [pre, mid, post] = commonAffix(oldRow.text, newRow.text);
+				const [pre, oldMiddle, post] = commonAffix(oldRow.text, newRow.text);
 				const unchanged = pre.length + post.length;
 				const ratio =
 					1 - unchanged / Math.max(oldRow.text.length, newRow.text.length, 1);
-				if (ratio <= 0.6 && mid.length > 0) {
-					const start = pre.length;
-					oldRow.word = [start, start + mid.length];
-					newRow.word = [start, start + mid.length];
+				const oldEnd = pre.length + oldMiddle.length;
+				const newEnd = newRow.text.length - post.length;
+				if (ratio <= 0.6 && oldEnd > pre.length && newEnd > pre.length) {
+					// Old/new changed spans can have different lengths. Reusing the
+					// removal length for the addition clipped long replacements
+					// (`getByLabel("To")` → `getByPlaceholder("you@example.com")`).
+					oldRow.word = [pre.length, oldEnd];
+					newRow.word = [pre.length, newEnd];
 				}
 			}
 			runStart = i + 1;
@@ -632,8 +688,8 @@ export function tokenizeFileDiff(
 		for (let i = 0; i < pieces.length; i++) {
 			for (const part of pieces[i]!) {
 				if (!part.text) continue;
-				const chunks = language
-					? tokenizeCode(part.text, language, palette, defaultFg)
+				const chunks = row.language
+					? tokenizeCode(part.text, row.language, palette, defaultFg)
 					: [chunk(part.text, fg)];
 				const partBg = part.word ? wordBg : rowBg;
 				if (i > 0 && part === pieces[i]![0]) {
@@ -703,6 +759,7 @@ export function tokenizeFileDiff(
 		indent: string,
 		number: string,
 		text: string,
+		rowLanguage = language,
 	): TextChunk[] => {
 		const prefixLen = indent.length + number.length;
 		const maxText = width > 0 ? Math.max(1, width - prefixLen) : text.length;
@@ -716,8 +773,8 @@ export function tokenizeFileDiff(
 				out.push(chunk(`\n${' '.repeat(prefixLen)}`, defaultFg));
 			}
 			out.push(
-				...(language
-					? tokenizeCode(piece, language, palette, defaultFg)
+				...(rowLanguage
+					? tokenizeCode(piece, rowLanguage, palette, defaultFg)
 					: [chunk(piece, defaultFg)]),
 			);
 		}
@@ -737,6 +794,24 @@ export function tokenizeFileDiff(
 		lines,
 		(line, index, isHeader) => {
 			if (isHeader) {
+				const patchFile = line.match(
+					/^([✦⚙]\s*)?([├└]\s+)?(Create|Edit|Delete|Move)(\s+.+?)(\s+\(\+\d+)(\s+)(-\d+\))$/,
+				);
+				if (patchFile) {
+					return [
+						...(patchFile[1]
+							? [chunk(patchFile[1], glyphColor(status, palette))]
+							: []),
+						...(patchFile[2]
+							? [chunk(patchFile[2], palette.fg.secondary, dim())]
+							: []),
+						chunk(patchFile[3] ?? '', palette.fg.primary, bold()),
+						chunk(patchFile[4] ?? '', defaultFg),
+						chunk(patchFile[5] ?? '', palette.fg.success),
+						chunk(patchFile[6] ?? '', defaultFg),
+						chunk(patchFile[7] ?? '', palette.fg.error),
+					];
+				}
 				// `✦ Edit <path>`, ONLY the action name (Edit) is primary bold;
 				// the glyph is status-colored and the path stays secondary.
 				// The path is capped to the renderable width (capToolHeader):
@@ -761,6 +836,23 @@ export function tokenizeFileDiff(
 			if (line.startsWith(' ⎿') || line.startsWith('  ⎿')) {
 				return [chunk(line, palette.fg.secondary, dim())];
 			}
+			const patchFile = line.match(
+				/^(\s*)([├└]\s+)?(Create|Edit|Delete|Move)(\s+.+?)(\s+\(\+\d+)(\s+)(-\d+\))$/,
+			);
+			if (patchFile) {
+				if (body[bodyCursor]?.raw === line) bodyCursor++;
+				return [
+					chunk(patchFile[1] ?? '', defaultFg),
+					...(patchFile[2]
+						? [chunk(patchFile[2], palette.fg.secondary, dim())]
+						: []),
+					chunk(patchFile[3] ?? '', palette.fg.primary, bold()),
+					chunk(patchFile[4] ?? '', defaultFg),
+					chunk(patchFile[5] ?? '', palette.fg.success),
+					chunk(patchFile[6] ?? '', defaultFg),
+					chunk(patchFile[7] ?? '', palette.fg.error),
+				];
+			}
 			// Diff body rows: consume from the parsed list in order. Header and
 			// summary rows do not consume a body entry (bodyCursor tracks only
 			// rows that were parsed above).
@@ -769,7 +861,12 @@ export function tokenizeFileDiff(
 				bodyCursor++;
 				if (row.kind === 'context') {
 					if (row.number !== undefined && row.text) {
-						return contextChunks(row.indent, row.number, row.text);
+						return contextChunks(
+							row.indent,
+							row.number,
+							row.text,
+							row.language,
+						);
 					}
 					// Summary / opaque row.
 					return [chunk(line, palette.fg.secondary, dim())];
@@ -802,7 +899,10 @@ export function tokenizeAgentRow(
 	return emitLines(
 		lines,
 		(line, index, isHeader) => {
-			if (isHeader) {
+			// Review aggregates contain several agent rows in one tool result.
+			// Treat every `Ran agent:` line as a header, not only first line.
+			const agentHeader = /^(?:[✦⚙]\s*)?Ran\s+agent:[^()\s]+/.test(line);
+			if (isHeader || agentHeader) {
 				// `✦ Ran agent:explore(<task>) <status>`, ONLY `agent:explore` is
 				// primary; `Ran `, `(<task>)` and the status stay secondary.
 				const m = line.match(/^([✦⚙]\s*)?(.*)$/);
@@ -812,12 +912,11 @@ export function tokenizeAgentRow(
 						/^(Ran\s+)(agent:[^()\s]+)((?:\([^)]*\))?)(.*)$/,
 					);
 					if (agentMatch) {
-						const agentChunks: TextChunk[] = [];
-						if (m[1]) {
-							agentChunks.push(chunk(m[1], glyphColor(status, palette)));
-						}
+						// Aggregate review output omits glyphs; renderer owns one glyph
+						// per agent row instead of treating them as pasted text.
+						// Glyph is rendered by SettledToolRow/LiveToolRows.
+						// Keep tokenizer output glyph-free or mock agent rows get `✦ ✦`.
 						return [
-							...agentChunks,
 							chunk(agentMatch[1] ?? '', palette.fg.secondary),
 							chunk(agentMatch[2] ?? '', palette.fg.primary, bold()),
 							chunk(agentMatch[3] ?? '', palette.fg.secondary),
@@ -963,14 +1062,17 @@ export function tokenizeUserMessage(
 					line.length,
 				);
 			}
-			return fill([{...chunk(line, palette.fg.text), bg}], line.length);
+			return fill(
+				contentChunks(line).map(c => ({...c, bg})),
+				line.length,
+			);
 		},
 		palette.fg.text,
 	);
 }
 
 /**
- * Task list: `✦ Tasks (N done, …)` header + `◐/✓/○` status icons, done
+ * Task list: `✦ Tasks (N done, …)` header + `›/◆/·` status icons, done
  * tasks in success green, in-progress in warning, pending in secondary.
  */
 export function tokenizeTaskRow(
@@ -981,23 +1083,41 @@ export function tokenizeTaskRow(
 	const palette = themeColors(colors);
 	const defaultFg = palette.fg.text;
 	const lines = text.replace(/\n+$/, '').split('\n');
+	const compactCompletedSnapshot =
+		status === 'done' &&
+		lines.length === 2 &&
+		/^✦\s+/.test(lines[0] ?? '') &&
+		/^\s*└\s+Tasks\s+\(/.test(lines[1] ?? '');
 	return emitLines(
 		lines,
 		(line, _index, isHeader) => {
-			if (isHeader) return headerChunks(line, status, palette, defaultFg);
-			const icon = line.match(/^(\s*)([◐✓○])(\s+)(.*)$/);
+			if (isHeader) {
+				if (compactCompletedSnapshot) {
+					return [chunk(line, palette.fg.secondary, dim())];
+				}
+				return headerChunks(line, status, palette, defaultFg);
+			}
+			const icon = line.match(/^(\s*)(?:(└)\s+)?([›◆·×])(\s+)(.*)$/);
 			if (icon) {
-				const fg =
-					icon[2] === '✓'
-						? palette.fg.success
-						: icon[2] === '◐'
-							? palette.fg.warning
-							: palette.fg.secondary;
+				const completed = icon[3] === '◆';
+				const cancelled = icon[3] === '×';
+				const fg = icon[3] === '›' ? palette.fg.warning : palette.fg.secondary;
+				const textAttributes =
+					completed || cancelled
+						? createTextAttributes({strikethrough: true, dim: true})
+						: 0;
 				return [
 					chunk(icon[1] ?? '', defaultFg),
-					chunk(icon[2] ?? '', fg, bold()),
-					chunk(icon[3] ?? '', defaultFg),
-					chunk(icon[4] ?? '', defaultFg),
+					...(icon[2]
+						? [chunk(`${icon[2]} `, palette.fg.secondary, dim())]
+						: []),
+					chunk(
+						icon[3] ?? '',
+						fg,
+						completed || cancelled ? textAttributes : bold(),
+					),
+					chunk(icon[4] ?? '', completed || cancelled ? fg : defaultFg),
+					chunk(icon[5] ?? '', fg, textAttributes),
 				];
 			}
 			return [chunk(line, palette.fg.secondary, dim())];

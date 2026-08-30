@@ -80,10 +80,20 @@ describe('providers tab is replaced by the connect-provider modal entry', () => 
 	});
 
 	test('MCP servers + tool approval moved to Advanced', () => {
-		const keys = settingsRows(
-			SETTINGS_TABS.indexOf('Advanced'),
-		).map(row => row.key);
+		const keys = settingsRows(SETTINGS_TABS.indexOf('Advanced')).map(
+			row => row.key,
+		);
 		expect(keys).toContain('mcp');
 		expect(keys).toContain('toolApproval');
+	});
+});
+
+describe('model fallback setting', () => {
+	test('Behavior exposes an on/off selector', () => {
+		const rows = settingsRows(SETTINGS_TABS.indexOf('Behavior'));
+		const row = rows.find(candidate => candidate.key === 'modelFallback');
+		expect(row?.label).toBe('Model fallback');
+		expect(row?.value).toBe('off');
+		expect(SETTING_OPTIONS.modelFallback).toEqual(['on', 'off']);
 	});
 });

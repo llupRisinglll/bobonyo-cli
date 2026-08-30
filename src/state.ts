@@ -1,3 +1,4 @@
+import {runHooks} from './hooks';
 import {createMemo, createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
 import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
@@ -113,7 +114,11 @@ export const [historyIndex, setHistoryIndex] = createSignal(-1);
  * works for queued prompts (the image paths would otherwise be lost).
  */
 export const [pendingQueue, setPendingQueue] = createSignal<
-	Array<{value: string; attachments?: Record<string, string>}>
+	Array<{
+		value: string;
+		attachments?: Record<string, string>;
+		source?: 'goal' | 'loop';
+	}>
 >([]);
 /** Per-turn usage snapshots for `/usage`. */
 export const [usageHistory, setUsageHistory] = createSignal<
@@ -173,12 +178,39 @@ export const [modelWindows, setModelWindows] = createSignal<
 >({});
 /** B21/C12: issue count from the last auto-diagnostics run (status line). */
 export const [diagnosticsCount, setDiagnosticsCount] = createSignal(0);
-/** A7/C9: task list from `write_tasks`, with live progress flags. */
-export const [tasks, setTasks] = createSignal<
-	Array<{title: string; done?: boolean; running?: boolean}>
->([]);
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+export interface SessionTask {
+	id: string;
+	title: string;
+	activeForm?: string;
+	status: TaskStatus;
+	dependsOn?: string[];
+	owner?: string;
+}
+/** A7/C9: explicit task list from `write_tasks`. */
+export const [tasks, setTasks] = createSignal<SessionTask[]>([]);
 /** C12: in-flight subagent count (status line `agents: N`). */
 export const [activeAgents, setActiveAgents] = createSignal(0);
+/** Live delegated-agent rows, including review lenses. */
+export interface ActiveAgentRun {
+	id: string;
+	name: string;
+	description: string;
+	/** Live compact tail shown under the running agent row. */
+	output: string;
+	/** Human-readable sidechain events for compact live tails. */
+	transcript: string[];
+	/** Current assistant text delta, rendered by embedded History. */
+	streaming: string;
+	/** Provider-format child history, persisted with parent session. */
+	history: ChatMessageLike[];
+	status: 'running' | 'completed' | 'error' | 'cancelled';
+	/** False until parent observes a background agent's settled result. */
+	retrieved?: boolean;
+}
+export const [activeAgentRuns, setActiveAgentRuns] = createSignal<
+	ActiveAgentRun[]
+>([]);
 /** C12: seconds since the current turn started (Working indicator). */
 export const [turnElapsed, setTurnElapsed] = createSignal(0);
 /**
@@ -342,10 +374,19 @@ export const [pendingApproval, setPendingApproval] = createSignal<{
  */
 export const [pendingPrompt, setPendingPrompt] = createSignal<{
 	question: string;
+	options?: string[];
 	resolve: (value: string) => void;
 	/** Called when the user presses Esc, prompts may require an explicit
 	 *  cancellation (e.g. the trust gate must NOT continue untrusted). */
 	onCancel?: () => void;
+} | null>(null);
+/** Structured model-facing question modal. */
+export const [pendingQuestion, setPendingQuestion] = createSignal<{
+	header?: string;
+	question: string;
+	options: Array<{label: string; description?: string}>;
+	multiple?: boolean;
+	resolve: (value: string) => void;
 } | null>(null);
 /**
  * First-run TRUST dialog (codex-style): a dedicated modal with explicit
@@ -391,7 +432,8 @@ export const anyModalOpen = createMemo(
 		psOpen() ||
 		Boolean(connectOpen()) ||
 		effortOpen() ||
-		Boolean(pendingTrust()),
+		Boolean(pendingTrust()) ||
+		Boolean(pendingQuestion()),
 );
 
 /** Estimated context usage % (E7): tokens / provider context window. */
@@ -440,6 +482,7 @@ export const [compacting, setCompacting] = createSignal(false);
 export const [toast, setToast] = createSignal('');
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 export function showToast(message: string): void {
+	void runHooks({event: 'Notification', message});
 	setToast(message);
 	if (toastTimer) clearTimeout(toastTimer);
 	toastTimer = setTimeout(() => setToast(''), 2500);
@@ -602,6 +645,7 @@ export function clearMessages(): void {
 	setPrs([]);
 	setRetrySnapshot(null);
 	setPendingQueue([]);
+	setActiveAgentRuns([]);
 	setUsageHistory([]);
 	setHistoryIndex(-1);
 	setLiveOutputs({});

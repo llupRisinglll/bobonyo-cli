@@ -10,7 +10,22 @@ import {loadPreferences} from '../config';
 import {wrapText} from '../text-wrap';
 
 /** Reasoning effort tiers a model can be selected at (parity: nanocoder). */
-export const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
+export const EFFORT_LEVELS = [
+	'minimal',
+	'low',
+	'medium',
+	'high',
+	'xhigh',
+	'max',
+] as const;
+
+/** API effort values supported by current GPT model families. */
+export function effortLevelsForModel(model: string): string[] {
+	const levels = ['minimal', 'low', 'medium', 'high'];
+	if (/gpt-5(?:\.[2-9])?(?:-|$)|codex-max/i.test(model)) levels.push('xhigh');
+	if (/gpt-5\.6/i.test(model)) levels.push('max');
+	return levels;
+}
 
 export interface ModelProvider {
 	id: string;
@@ -397,11 +412,15 @@ export function ModelModal(props: {
 	onSelect: (providerId: string, model: string, effort?: string) => void;
 	onConnectProvider: () => void;
 	onClose: () => void;
+	/** Optional heading for embedded selectors such as per-agent models. */
+	title?: string;
 	/** When set, a leading "Inherit" row restores the main agent model. */
 	inheritLabel?: string;
 	onInherit?: () => void;
 	/** Non-empty conversation ⇒ warn that switching resends all messages. */
 	hasMessages: boolean;
+	/** Suppress replayed Enter when embedded inside another keyboard modal. */
+	nestedReturnGuardMs?: number;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
@@ -422,6 +441,9 @@ export function ModelModal(props: {
 	// the user's first real outside click: click-twice-to-close).
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
+	const suppressInitialReturn = () =>
+		Boolean(props.nestedReturnGuardMs) &&
+		Date.now() - mountedAt < (props.nestedReturnGuardMs ?? 0);
 
 	const matches = (text: string): boolean => {
 		const q = query().trim().toLowerCase();
@@ -631,9 +653,9 @@ export function ModelModal(props: {
 	} | null>(null);
 	const [connectionIndex, setConnectionIndex] = createSignal(0);
 	const [effortIndex, setEffortIndex] = createSignal(0);
-	const EFFORT_OPTIONS: Array<{id: string; label: string}> = [
+	const effortOptions = (model: string): Array<{id: string; label: string}> => [
 		{id: 'default', label: 'Default'},
-		...EFFORT_LEVELS.map(level => ({id: level, label: level})),
+		...effortLevelsForModel(model).map(level => ({id: level, label: level})),
 	];
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
@@ -643,6 +665,7 @@ export function ModelModal(props: {
 		const cells = modelCells();
 		return cursor() >= 0 ? cells[cursor()] : undefined;
 	};
+	let suppressEffortReturn = false;
 	// Grid navigation (row-major per provider group). Moving past a group's
 	// last row jumps to the NEXT group's first cell so long catalogs stay
 	// reachable with ↓ alone; ↑ from a group's first ROW exits to the
@@ -669,6 +692,13 @@ export function ModelModal(props: {
 		accountSwitch?: boolean,
 		opencodeConnections?: ModelProvider[],
 	): void => {
+		const guardMs = props.nestedReturnGuardMs ?? 0;
+		suppressEffortReturn = guardMs > 0;
+		if (guardMs > 0) {
+			setTimeout(() => {
+				suppressEffortReturn = false;
+			}, guardMs);
+		}
 		setEffortStep({
 			providerId: provider.id,
 			model,
@@ -680,7 +710,9 @@ export function ModelModal(props: {
 			currentEffort
 				? Math.max(
 						0,
-						EFFORT_OPTIONS.findIndex(option => option.id === currentEffort),
+						effortOptions(model).findIndex(
+							option => option.id === currentEffort,
+						),
 					)
 				: 0,
 		);
@@ -889,7 +921,7 @@ export function ModelModal(props: {
 			return true;
 		}
 		if (effortStep()) {
-			const options = EFFORT_OPTIONS;
+			const options = effortOptions(effortStep()?.model ?? '');
 			if (event.name === 'up' || event.name === 'down') {
 				setEffortIndex(prev => {
 					const next = event.name === 'down' ? prev + 1 : prev - 1;
@@ -898,6 +930,7 @@ export function ModelModal(props: {
 				return true;
 			}
 			if (event.name === 'return') {
+				if (suppressEffortReturn) return true;
 				const step = effortStep();
 				if (!step) return true;
 				const chosen = options[effortIndex()]!;
@@ -982,13 +1015,11 @@ export function ModelModal(props: {
 			const cell = currentCell();
 			if (cell) {
 				const representative = cell.connections[0]!;
+				const levels = effortLevelsForModel(cell.model);
 				const current = effectiveEffort(representative, cell.model) ?? 'medium';
-				const base = EFFORT_LEVELS.indexOf(
-					current as (typeof EFFORT_LEVELS)[number],
-				);
-				const start = base === -1 ? EFFORT_LEVELS.indexOf('medium') : base;
-				const next =
-					EFFORT_LEVELS[(start + 1) % EFFORT_LEVELS.length] ?? 'medium';
+				const base = levels.indexOf(current);
+				const start = base === -1 ? levels.indexOf('medium') : base;
+				const next = levels[(start + 1) % levels.length] ?? 'medium';
 				setEffortOverrides(prev => ({
 					...prev,
 					[effortKey(representative.id, cell.model)]: next,
@@ -1001,6 +1032,7 @@ export function ModelModal(props: {
 			return true;
 		}
 		if (event.name === 'return') {
+			if (suppressInitialReturn()) return true;
 			if (cursor() === -1) {
 				props.onInherit?.();
 				return true;
@@ -1129,10 +1161,12 @@ export function ModelModal(props: {
 												<For
 													each={(() => {
 														const sel = effortIndex();
-														return EFFORT_OPTIONS.map((option, idx) => ({
-															option,
-															active: idx === sel,
-														}));
+														return effortOptions(effortStep()?.model ?? '').map(
+															(option, idx) => ({
+																option,
+																active: idx === sel,
+															}),
+														);
 													})()}
 												>
 													{({option, active}) => (
@@ -1145,7 +1179,9 @@ export function ModelModal(props: {
 															{...({
 																onMouseMove: () =>
 																	setEffortIndex(
-																		EFFORT_OPTIONS.indexOf(option),
+																		effortOptions(
+																			effortStep()?.model ?? '',
+																		).indexOf(option),
 																	),
 																onMouseUp: () => {
 																	const step = effortStep();
@@ -1337,7 +1373,7 @@ export function ModelModal(props: {
 				>
 					<box flexDirection="row" height={1}>
 						<text fg={colors().primary} attributes={bold()}>
-							Select a Model
+							{props.title ?? 'Select a Model'}
 						</text>
 						<box flexGrow={1} />
 						<text fg={colors().secondary} attributes={dim()}>

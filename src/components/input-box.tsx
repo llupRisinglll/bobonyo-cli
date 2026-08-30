@@ -2,15 +2,25 @@
 import {readdirSync} from 'node:fs';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
-import {createMemo, createSignal, For, Show} from 'solid-js';
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	COMMAND_DESCRIPTIONS,
 	commandNames,
 	customCommandNames,
 } from '../commands';
 import {loadCustomCommands, loadSkills} from '../custom';
-import {insertMention, listProjectFiles, mentionToken} from '../mentions';
-import {expandTextPlaceholders, processPaste} from '../attachments';
+import {
+	insertMention,
+	listProjectFiles,
+	mentionPathText,
+	mentionSearchToken,
+	mentionToken,
+} from '../mentions';
+import {
+	expandTextPlaceholders,
+	processPaste,
+	referencedImageAttachments,
+} from '../attachments';
 import {estimateTokens} from '../tokenize';
 import {wrapText, wrapTextDetailed} from '../text-wrap';
 import {
@@ -91,6 +101,50 @@ export function lineTickerVisible(
 	return mode === 'line' && isBusy && activelyThinking;
 }
 
+/** Leading `!` enters direct-shell mode; marker becomes prompt glyph. */
+export function isBashMode(value: string): boolean {
+	return value.startsWith('!');
+}
+
+/** Shell marker is UI state, not duplicated inside editable command text. */
+export function bashDisplayValue(value: string): string {
+	return isBashMode(value) ? value.slice(1) : value;
+}
+
+/** Bash-mode label occupies one row above input border. */
+export function bashModeIndicatorRows(value: string): number {
+	return isBashMode(value) ? 1 : 0;
+}
+
+/** Printable character from OpenTUI key event, including shifted punctuation. */
+export function typedInputChar(event: {name: string; shift?: boolean}): string {
+	const char = event.name;
+	if (char.length !== 1) return '';
+	if (!event.shift) return char;
+	const shiftedPunctuation: Record<string, string> = {
+		'1': '!',
+		'2': '@',
+		'3': '#',
+		'4': '$',
+		'5': '%',
+		'6': '^',
+		'7': '&',
+		'8': '*',
+		'9': '(',
+		'0': ')',
+		'-': '_',
+		'=': '+',
+		'[': '{',
+		']': '}',
+		';': ':',
+		"'": '"',
+		',': '<',
+		'.': '>',
+		'/': '?',
+	};
+	return shiftedPunctuation[char] ?? char.toUpperCase();
+}
+
 /**
  * Whether an OpenTUI key event should count as the SUBMIT Enter.
  *
@@ -164,23 +218,47 @@ export function InputBox(props: {
 	// move it; attachment tokens (`[Image #N]` / `[Text #N]`) and a leading
 	// `/command` are ATOMIC, arrows/backspace jump over them instead of
 	// landing inside the token.
-	const [cursorPos, setCursorPos] = createSignal(0);
+	const [cursorPos, setCursorPos] = createSignal(input().length);
+	// Keep desired column across short/blank lines. Without this, moving up
+	// through a blank row clamps to column 0 permanently, so next ↑ lands on
+	// the `L` of previous line instead of original column.
+	let verticalGoalColumn: number | null = null;
+	const resetVerticalGoal = (): void => {
+		verticalGoalColumn = null;
+	};
+	// App-level actions (/undo, command insertion, resume helpers) can replace
+	// input without knowing local caret. Treat those writes like terminal
+	// paste targets: caret belongs at end. Local edits mark their own value so
+	// this effect never overrides deliberate cursor movement.
+	let locallyWrittenInput = input();
+	const writeInput = (value: string): void => {
+		locallyWrittenInput = value;
+		setInput(value);
+	};
+	createEffect(() => {
+		const value = input();
+		if (value === locallyWrittenInput) return;
+		locallyWrittenInput = value;
+		setCursorPos(value.length);
+	});
 	const insertAtCursor = (text: string): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
-		setInput(value.slice(0, c) + text + value.slice(c));
+		writeInput(value.slice(0, c) + text + value.slice(c));
 		setCursorPos(c + text.length);
 	};
 	const setInputAt = (value: string, cursor = value.length): void => {
-		setInput(value);
+		writeInput(value);
 		setCursorPos(Math.min(Math.max(0, cursor), value.length));
 	};
 	const deleteBeforeCursor = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
 		if (c === 0) return;
 		const len = tokenEndingAt(value, c) ?? 1;
-		setInput(value.slice(0, c - len) + value.slice(c));
+		writeInput(value.slice(0, c - len) + value.slice(c));
 		setCursorPos(c - len);
 	};
 	// Fast-erase (parity: opencode): holding Backspace accelerates, deleting
@@ -192,13 +270,15 @@ export function InputBox(props: {
 		for (let i = 0; i <= extra; i++) deleteBeforeCursor();
 	};
 	const deleteAfterCursor = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
 		if (c >= value.length) return;
 		const len = tokenStartingAt(value, c) ?? 1;
-		setInput(value.slice(0, c) + value.slice(c + len));
+		writeInput(value.slice(0, c) + value.slice(c + len));
 	};
 	const moveCursorLeft = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
 		if (c === 0) return;
@@ -206,6 +286,7 @@ export function InputBox(props: {
 		setCursorPos(c - len);
 	};
 	const moveCursorRight = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
 		if (c >= value.length) return;
@@ -215,12 +296,19 @@ export function InputBox(props: {
 	/** Ctrl+Left: jump to the start of the previous word (parity: the
 	 *  original nanocoder text-input, readline Alt+B semantics). */
 	const moveCursorPrevWord = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
-		setCursorPos(snapOutOfAtomicToken(value, moveToPrevWord(value, c), 'left'));
+		setCursorPos(
+			Math.max(
+				isBashMode(value) ? 1 : 0,
+				snapOutOfAtomicToken(value, moveToPrevWord(value, c), 'left'),
+			),
+		);
 	};
 	/** Ctrl+Right: jump to just past the next word (readline Alt+F). */
 	const moveCursorNextWord = (): void => {
+		resetVerticalGoal();
 		const value = input();
 		const c = Math.min(cursorPos(), value.length);
 		setCursorPos(
@@ -240,7 +328,11 @@ export function InputBox(props: {
 		if (lines.length < 2) return false;
 		const target = direction === 'up' ? info.line - 1 : info.line + 1;
 		if (target < 0 || target >= lines.length) return false;
-		setCursorPos(offsetForLine(lines, target, info.column));
+		if (verticalGoalColumn === null) verticalGoalColumn = info.column;
+		setCursorPos(
+			offsetForLine(lines, target, verticalGoalColumn) +
+				(isBashMode(input()) ? 1 : 0),
+		);
 		return true;
 	};
 	const [selectedQueued, setSelectedQueued] = createSignal(-1);
@@ -256,7 +348,13 @@ export function InputBox(props: {
 		// modal's field, never leak into the chat box behind it.
 		if (anyModalOpen()) return;
 		const text = new TextDecoder().decode(event.bytes);
-		const {text: compact, attachments} = processPaste(text, pasteAttachments());
+		const {text: compact, attachments} = processPaste(
+			text,
+			pasteAttachments(),
+			{
+				sessionId: sessionId(),
+			},
+		);
 		setPasteAttachments(attachments);
 		insertAtCursor(compact);
 	});
@@ -274,17 +372,17 @@ export function InputBox(props: {
 		lastSubmittedValue = trimmed;
 		lastSubmittedAt = now;
 		const attachments = pasteAttachments();
+		const submittedAttachments = referencedImageAttachments(
+			trimmed,
+			attachments,
+		);
+		const expanded = expandTextPlaceholders(trimmed, attachments);
 		setInputAt('');
-		props.onSubmit(expandTextPlaceholders(trimmed, attachments), attachments);
+		setPasteAttachments({});
+		props.onSubmit(expanded, submittedAttachments);
 	};
 
-	/** Preserve letter case: OpenTUI reports `S` as `{name:'s', shift:true}`. */
-	const typedChar = (event: {name: string; shift?: boolean}): string => {
-		const char = event.name;
-		if (char.length !== 1) return '';
-		if (event.shift && /^[a-z]$/.test(char)) return char.toUpperCase();
-		return char;
-	};
+	const typedChar = typedInputChar;
 
 	// Bottom-border model/ctx label (parity: nanocoder's `╰─ model · ctx ~N% ─╯`).
 	// The MODEL name is primary-bold; `[effort]` and ` · ctx ~N%` stay
@@ -325,8 +423,6 @@ export function InputBox(props: {
 			name: string;
 			kind: 'command' | 'skill';
 			description: string;
-			// `[Command]`/`[Skill]` tag, only NON-built-in entries carry one
-			// (the built-ins would be noisy); renders BEFORE the description.
 			prefix: string;
 		}> = [];
 		for (const command of commandNames()) {
@@ -347,15 +443,15 @@ export function InputBox(props: {
 				name: command.name,
 				kind: 'command',
 				description: command.description,
-				prefix: '[Command]',
+				prefix: '',
 			});
 		}
 		for (const skill of loadSkills()) {
 			items.push({
-				name: `skill:${skill.name}`,
+				name: skill.name,
 				kind: 'skill',
 				description: skill.description,
-				prefix: '[Skill]',
+				prefix: '',
 			});
 		}
 		if (!name) {
@@ -419,29 +515,38 @@ export function InputBox(props: {
 	});
 	// `@` file-mention suggestions (parity: the reference mentions files).
 	const mentionFiles = createMemo(() => {
-		const token = mentionToken(input());
+		const token = mentionToken(input(), cursorPos());
 		if (token === null) return [];
 		const all = listProjectFiles();
-		const q = token.toLowerCase();
+		const cwd = process.cwd();
+		const q = mentionSearchToken(token).toLowerCase();
 		const scored = q
 			? all
-					.map(path => ({path, score: fuzzyScore(q, path)}))
+					.map(path => {
+						const mention = mentionPathText(path, cwd);
+						return {
+							path,
+							mention,
+							score: Math.max(fuzzyScore(q, mention), fuzzyScore(q, path)),
+						};
+					})
 					.filter(entry => entry.score > 0)
 					.sort((a, b) => b.score - a.score)
 					.slice(0, 6)
-			: all.slice(0, 6).map(path => ({path, score: 0}));
+			: all.slice(0, 6).map(path => ({
+					path,
+					mention: mentionPathText(path, cwd),
+					score: 0,
+				}));
 		// Fold the selection into the array, the reconciler's <For> only
 		// re-renders when the `each` reference changes.
 		return scored.map((entry, index) => ({
 			path: entry.path,
+			mention: entry.mention,
 			score: entry.score,
 			active: mentionSelected() === index,
 		}));
 	});
-	const relativePath = (path: string): string => {
-		const cwd = process.cwd();
-		return path.startsWith(cwd) ? path.slice(cwd.length + 1) : path;
-	};
 	// Box height grows with the command menu / task overlay (parity: the box
 	// is prompt + one empty row by default, +1 per menu/task line while shown).
 	const boxHeight = createMemo(() => {
@@ -460,12 +565,19 @@ export function InputBox(props: {
 	// hot-path waste, benchmarked in input-box.perf.spec.ts).
 	const inputWidth = (): number =>
 		Math.max(10, (terminalDimensions().width ?? 80) - 12);
-	const wrapped = createMemo(() => wrapTextDetailed(input(), inputWidth()));
+	const bashMode = createMemo(() => isBashMode(input()));
+	const displayValue = createMemo(() => bashDisplayValue(input()));
+	const wrapped = createMemo(() =>
+		wrapTextDetailed(displayValue(), inputWidth()),
+	);
 	const inputLines = createMemo(() => wrapped().map(entry => entry.text));
 	// Caret position inside the WRAPPED rows (line + column), derived from
 	// the raw-string cursor, never inside an atomic token.
 	const cursorInfo = createMemo(() =>
-		cursorPositionFromWrapped(wrapped(), cursorPos()),
+		cursorPositionFromWrapped(
+			wrapped(),
+			Math.max(0, cursorPos() - (bashMode() ? 1 : 0)),
+		),
 	);
 	// Known `/commands` (built-ins + custom + skills), built ONCE per frame,
 	// NOT per tokenized line (the tokenizer runs once per input row).
@@ -474,13 +586,18 @@ export function InputBox(props: {
 			new Set<string>([
 				...commandNames(),
 				...customCommandNames(),
-				...loadSkills().map(skill => `skill:${skill.name}`),
+				...loadSkills().map(skill => skill.name),
 			]),
 	);
 	// Active suggestion-row palette (info tint + guaranteed-readable fg).
 	const activeRow = createMemo(() => activeRowPalette(colors()));
 	const approval = createMemo(() => pendingApproval());
 	const prompt = createMemo(() => pendingPrompt());
+	const [promptOption, setPromptOption] = createSignal(0);
+	createEffect(() => {
+		prompt();
+		setPromptOption(0);
+	});
 	// Cursor blink: the App ticker advances `spinnerFrame` every 100ms; the
 	// caret toggles every 4 frames (400ms on/off, a standard terminal blink).
 	// TYPING forces the caret VISIBLE and pauses the blink; a debounce timer
@@ -511,13 +628,24 @@ export function InputBox(props: {
 				// Esc cancels: value editors just dismiss, but prompts with an
 				// explicit onCancel (e.g. the first-run trust gate) must NOT
 				// silently continue, cancelling there declines trust (exit).
-				pendingText.onCancel?.();
 				setPendingPrompt(null);
+				pendingText.onCancel?.();
+			} else if (
+				pendingText.options?.length &&
+				(event.name === 'up' || event.name === 'down')
+			) {
+				setPromptOption(index =>
+					event.name === 'down'
+						? (index + 1) % pendingText.options!.length
+						: (index - 1 + pendingText.options!.length) %
+							pendingText.options!.length,
+				);
 			} else if (event.name === 'return') {
-				const value = input().trim();
-				pendingText.resolve(value);
+				const value =
+					input().trim() || pendingText.options?.[promptOption()] || '';
 				setInputAt('');
 				setPendingPrompt(null);
+				pendingText.resolve(value);
 			} else if (isDeleteKey(event)) {
 				// Backspace deletes a WHOLE `[Image #N]`/`[Text #N]` token
 				// instead of nibbling inside it (atomic blocks).
@@ -579,20 +707,23 @@ export function InputBox(props: {
 					mentionMatches[
 						Math.min(mentionSelected(), mentionMatches.length - 1)
 					];
-				const token = mentionToken(input());
+				const cursor = cursorPos();
+				const token = mentionToken(input(), cursor);
 				if (item && token !== null) {
-					const at = input().lastIndexOf('@');
-					setInputAt(
-						insertMention(input(), item.path, token),
-						at + 1 + item.path.length + 1,
-					);
+					const current = input();
+					const next = insertMention(current, item.mention, token, cursor);
+					setInputAt(next, next.length - current.slice(cursor).length);
 				}
 				setMentionSelected(0);
 				return;
 			}
 			if (event.name === 'escape') {
 				event.preventDefault();
-				setInputAt(input().replace(/@[^\s]*$/, ''));
+				const cursor = cursorPos();
+				const at = input().lastIndexOf('@', cursor - 1);
+				setInputAt(
+					at >= 0 ? input().slice(0, at) + input().slice(cursor) : input(),
+				);
 				setMentionSelected(0);
 				return;
 			}
@@ -684,6 +815,13 @@ export function InputBox(props: {
 			// the FIRST line does it fall through to history (parity: the
 			// original's multiline PR + ink-text-input onEdgeArrow).
 			if (moveCursorVertical('up')) return;
+			// A non-empty multiline draft only moves to its first position when
+			// caret is not already at the first raw line. At first-line edge,
+			// allow prompt-history navigation instead of trapping ↑ at column 0.
+			if (input().length > 0 && cursorPos() > 0) {
+				setCursorPos(bashMode() ? 1 : 0);
+				return;
+			}
 			const history = promptHistory();
 			if (history.length === 0) return;
 			const index = historyIndex();
@@ -709,6 +847,12 @@ export function InputBox(props: {
 			// Multiline input: ↓ moves the caret down a VISUAL line; only on
 			// the LAST line does it fall through to history.
 			if (moveCursorVertical('down')) return;
+			// Existing draft owns arrows. At bottom edge, move to end; history
+			// navigation remains available only from an empty input.
+			if (input().length > 0) {
+				setCursorPos(input().length);
+				return;
+			}
 			const history = promptHistory();
 			if (history.length === 0) return;
 			const index = historyIndex();
@@ -729,6 +873,7 @@ export function InputBox(props: {
 		// never lands inside a block; Home/End jump to the ends.
 		if (event.name === 'left') {
 			event.preventDefault();
+			if (bashMode() && cursorPos() <= 1) return;
 			// Ctrl+Left jumps WORD-WISE (parity: the original nanocoder
 			// text-input); plain ← still walks char-by-char over tokens.
 			if (event.ctrl) moveCursorPrevWord();
@@ -743,11 +888,13 @@ export function InputBox(props: {
 		}
 		if (event.name === 'home') {
 			event.preventDefault();
-			setCursorPos(0);
+			resetVerticalGoal();
+			setCursorPos(bashMode() ? 1 : 0);
 			return;
 		}
 		if (event.name === 'end') {
 			event.preventDefault();
+			resetVerticalGoal();
 			setCursorPos(input().length);
 			return;
 		}
@@ -860,6 +1007,13 @@ export function InputBox(props: {
 	const dim = () => createTextAttributes({dim: true});
 	return (
 		<box flexDirection="column">
+			<Show when={bashMode()}>
+				<box height={1}>
+					<text fg={colors().primary} attributes={bold()}>
+						Bash mode
+					</text>
+				</box>
+			</Show>
 			{/* Working indicator: FIXED above the input box (parity with
 			    nanocoder's live region, never scrolled away). */}
 			<Show when={busy()}>
@@ -1015,12 +1169,19 @@ export function InputBox(props: {
 									backgroundColor={active ? activeRow().bg : undefined}
 									{...({
 										onMouseUp: () => {
-											const token = mentionToken(input());
+											const cursor = cursorPos();
+											const token = mentionToken(input(), cursor);
 											if (token !== null) {
-												const at = input().lastIndexOf('@');
+												const current = input();
+												const next = insertMention(
+													current,
+													item.mention,
+													token,
+													cursor,
+												);
 												setInputAt(
-													insertMention(input(), item.path, token),
-													at + 1 + item.path.length + 1,
+													next,
+													next.length - current.slice(cursor).length,
 												);
 											}
 											setMentionSelected(0);
@@ -1032,7 +1193,7 @@ export function InputBox(props: {
 										fg={active ? activeRow().fg : colors().text}
 										attributes={active ? bold() : undefined}
 									>
-										{active ? '❯ ' : '  '}@{relativePath(item.path)}
+										{active ? '❯ ' : '  '}@{item.mention}
 									</text>
 								</box>
 							);
@@ -1045,7 +1206,7 @@ export function InputBox(props: {
 			    ALL matches via the rendered window; each row is a command
 			    column + a ONE-LINE description column (the 2-line wrap is
 			    only for the settings modal lists) with the
-			    `[Command]`/`[Skill]` tag BEFORE the description. */}
+			    description beside the slash name. */}
 			<Show when={completions().length > 0}>
 				<box flexDirection="column" height={completionWindow().length}>
 					<For each={completionWindow()}>
@@ -1114,7 +1275,7 @@ export function InputBox(props: {
 				<box
 					border
 					borderStyle="rounded"
-					borderColor={colors().secondary}
+					borderColor={bashMode() ? colors().primary : colors().secondary}
 					paddingLeft={1}
 					flexDirection="column"
 					height={boxHeight()}
@@ -1124,7 +1285,11 @@ export function InputBox(props: {
 							{prompt()?.question ?? ''}: {input()}▌
 						</text>
 						<box height={1} />
-						<text fg={colors().secondary}>Press Esc to cancel</text>
+						<text fg={colors().secondary}>
+							{prompt()?.options?.length
+								? `↑/↓ ${prompt()?.options?.[promptOption()] ?? ''} · Enter select · type custom · Esc cancel`
+								: 'Press Esc to cancel'}
+						</text>
 					</Show>
 					<Show when={approval()}>
 						<text fg={colors().error} attributes={bold()}>
@@ -1141,7 +1306,9 @@ export function InputBox(props: {
 							{(line, index) => (
 								<box flexDirection="row">
 									<text fg={colors().primary} attributes={bold()}>
-										{index() === 0 ? `${colors().promptChar ?? '❯'} ` : '  '}
+										{index() === 0
+											? `${bashMode() ? '!' : (colors().promptChar ?? '❯')} `
+											: '  '}
 									</text>
 									{/* The caret line splits at the cursor column (prefix
 							    + caret + suffix); other lines render whole.
@@ -1268,7 +1435,8 @@ export function computeInputBoxHeight(
 	// The input GROWS with its wrapped lines, long text no longer clips.
 	let interior = Math.max(
 		1,
-		wrapText(inputText, Math.max(10, terminalWidth - 12)).length,
+		wrapText(bashDisplayValue(inputText), Math.max(10, terminalWidth - 12))
+			.length,
 	);
 	// Cancelling row (`Press Esc to cancel` while the abort unwinds).
 	if (isCancelling && !isBusy) interior += 1;
@@ -1300,7 +1468,7 @@ export function completionPopupHeight(inputText: string, _width = 100): number {
 	const all: string[] = [
 		...commandNames(),
 		...customCommandNames(),
-		...loadSkills().map(skill => `skill:${skill.name}`),
+		...loadSkills().map(skill => skill.name),
 	];
 	const matches: Array<{command: string; score: number}> = name
 		? all
@@ -1321,9 +1489,15 @@ export function mentionPopupHeight(inputText: string): number {
 	const token = mentionToken(inputText);
 	if (token === null) return 0;
 	const all = listProjectFiles();
-	const q = token.toLowerCase();
+	const cwd = process.cwd();
+	const q = mentionSearchToken(token).toLowerCase();
 	const matches = q
-		? all.filter(path => fuzzyScore(q, path) > 0).slice(0, 6)
+		? all
+				.filter(path => {
+					const mention = mentionPathText(path, cwd);
+					return Math.max(fuzzyScore(q, mention), fuzzyScore(q, path)) > 0;
+				})
+				.slice(0, 6)
 		: all.slice(0, 6);
 	return matches.length > 0 ? matches.length + 2 : 0;
 }
@@ -1351,7 +1525,7 @@ export function tokenizeInputLine(
 		new Set<string>([
 			...commandNames(),
 			...customCommandNames(),
-			...loadSkills().map(skill => `skill:${skill.name}`),
+			...loadSkills().map(skill => skill.name),
 		]);
 	let cursor = 0;
 	for (const match of line.matchAll(/\[(?:Image|Text) #\d+\]|\/[^\s]*/g)) {
@@ -1490,12 +1664,18 @@ export function cursorPositionFromWrapped(
 	const target = Math.min(Math.max(0, cursor), total);
 	for (let i = 0; i < wrapped.length; i++) {
 		const entry = wrapped[i]!;
+		const end = entry.start + entry.text.length;
+		const next = wrapped[i + 1];
+		// Empty explicit lines own their exact raw offset.
+		if (entry.text.length === 0 && target === entry.start) {
+			return {line: i, column: 0};
+		}
+		// At a SOFT-wrap boundary next.start === end, caret belongs to next
+		// visual row. At a NEWLINE boundary next.start > end, caret at end
+		// belongs after current line's last character.
 		if (
-			// STRICT `<` at the line end: a wrapped line that keeps its
-			// trailing space ends at start+len, but the NEXT raw char belongs
-			// to the following line, so the caret must land there instead of
-			// snapping back to the trailing space.
-			target < entry.start + entry.text.length ||
+			target < end ||
+			(target === end && (!next || next.start > end)) ||
 			i === wrapped.length - 1
 		) {
 			return {

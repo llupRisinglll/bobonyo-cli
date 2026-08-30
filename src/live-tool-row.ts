@@ -20,6 +20,19 @@ export interface LiveRowSegments {
 }
 
 /**
+ * A running Agent call has two state records: the generic tool message and
+ * the richer active-agent run. The active run owns the live row; rendering
+ * both produces a duplicate `agent(...)` entry whose fallback tokenizer also
+ * paints the whole header primary.
+ */
+export function shouldRenderRunningToolMessage(
+	toolName: string,
+	hasRunningAgent: boolean,
+): boolean {
+	return toolName !== 'agent' || !hasRunningAgent;
+}
+
+/**
  * LIVE tool-row chunk building (pure, unit-tested).
  *
  * Running tool rows MUST NOT go through OpenTUI's `<markdown>` pipeline:

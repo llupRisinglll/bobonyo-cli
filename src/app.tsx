@@ -30,6 +30,7 @@ import {
 	loadConfig,
 	loadPreferences,
 	discoverCodexAccountModels,
+	effectiveContextWindow,
 	resolveApiKey,
 	resolveContextWindow,
 	resolveProvider,
@@ -39,29 +40,46 @@ import {
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
-import {beginFileUndoExchange, undoFileExchange} from './file-undo';
+import {imageSourceContext, persistImageAttachments} from './attachments';
+import {buildMentionContext} from './mentions';
 import {
+	beginFileUndoExchange,
+	resetFileUndoStack,
+	undoFileExchange,
+} from './file-undo';
+import {
+	buildCommandInvocationPrompt,
+	customToolRegistryName,
+	expandCommandPrompt,
+	expandCustomTool,
 	loadCustomCommands,
 	loadCustomTools,
 	loadSkills,
-	mapCommandArguments,
-	substituteTemplateVariables,
 } from './custom';
 import {
 	displayToolName,
 	executeTool,
 	isReadOnlyTool,
+	isParallelSafeTool,
 	isSingleToolProfile,
 	listTools,
+	normalizeTaskList,
 	registerTool,
 	requiresApproval,
-	toolCatalog,
+	resolveToolName,
+	toolCatalogForModel,
 	toolDisplayDetail,
 	toolAvailability,
 	toolArgsSummary,
 	toolResultTail,
 } from './tools';
-import {activeBgCount, bgTasks, runBash} from './bash';
+import {
+	activeBgCount,
+	bgTasks,
+	cancelRunningBackgroundTasks,
+	normalizeBashCommand,
+	runBash,
+} from './bash';
 import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
 import {
 	loadSettings,
@@ -80,16 +98,28 @@ import {
 	loadSteeringConfig,
 	type SteeringConfig,
 } from './steering';
-import {connectMCPServer, loadMCPConfig, type MCPTool} from './mcp';
+import {
+	evaluateRepeatedToolCalls,
+	INITIAL_REPEATED_TOOL_STATE,
+	type RepeatedToolState,
+} from './repeated-tool-guard';
+import {
+	closeMCPServers,
+	loadMCPServerTools,
+	loadMCPConfig,
+	type MCPTool,
+} from './mcp';
 import {
 	deleteSession,
 	firstMessagePreview,
 	healResumedContext,
 	listCheckpoints,
 	loadCheckpoint,
+	forkSession,
 	listSessions,
 	newSessionId,
 	resolveSession,
+	saveCompactionTranscript,
 	saveCheckpoint,
 	saveSession,
 	type SessionData,
@@ -97,6 +127,7 @@ import {
 import {History} from './components/history';
 import {
 	computeInputBoxHeight,
+	bashModeIndicatorRows,
 	completionMessageRows,
 	completionPopupHeight,
 	lineTickerVisible,
@@ -117,16 +148,22 @@ import {CommandsModal} from './components/commands-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
-import {EFFORT_LEVELS} from './components/model-modal';
+import {effortLevelsForModel} from './components/model-modal';
+import {projectRoot} from './project-paths';
 import {ConnectProviderModal} from './components/connect-provider-modal';
 import {BackgroundJobsModal} from './components/background-jobs-modal';
+import {ActivityIndicator} from './components/activity-indicator';
 import {EffortModal} from './components/effort-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {buildStatusRows, providerStatusLabel} from './status-rows';
 import {consumeCodexReset, fetchCodexLimits} from './codex-limits';
-import {analyzeImageWithFallback, resolveVisionFallback} from './vision';
+import {
+	analyzeImageWithFallback,
+	resolveVisionFallback,
+	supportsNativeImageInput,
+} from './vision';
 import {detectLanguageServers} from './lsp';
 import {
 	cachedDeepSeekModels,
@@ -149,6 +186,50 @@ import {
 import {buildBannerBox} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
+import {QuestionModal} from './components/question-modal';
+import {listHooks, runHooks} from './hooks';
+import {forkInHerdrPane, herdrAvailable, type HerdrSplit} from './herdr';
+import {
+	notifyTaskComplete,
+	shouldNotifyTurnComplete,
+	releaseHerdrAgent,
+	reportHerdrAgent,
+	reportHerdrSession,
+} from './notifications';
+import {
+	formatGoal,
+	formatLoopJob,
+	goalContinuationPrompt,
+	goalStatusFromResponse,
+	loopIntervalMs,
+	newLoopJob,
+	parseGoalSpec,
+	parseLoopControl,
+	parseLoopSpec,
+	type LoopJob,
+	type SessionGoal,
+} from './goal-loop';
+import {
+	AUTO_COMPACT_SAFETY_BUFFER_TOKENS,
+	COMPACTION_FAILURE_COOLDOWN_MS,
+	COMPACTION_FAILURE_LIMIT,
+	INITIAL_COMPACTION_FAILURE_STATE,
+	autoCompactReentryFloor,
+	autoCompactTokenLimit,
+	buildCompactionStateSnapshot,
+	canAttemptAutoCompaction,
+	compactionSnapshotBudgets,
+	estimateContextTokens,
+	isCompactionStateSnapshot,
+	microcompactToolResults,
+	recordCompactionFailure,
+	recordCompactionSuccess,
+	shouldAutoCompactContext,
+	truncateCompactionText,
+	type CompactionFailureState,
+} from './compaction-state';
+import {oneSentencePreToolBrief, toolCallBrief} from './pre-tool-brief';
+import {shouldPersistTaskCloseoutReply} from './task-closeout';
 
 const VERSION = '0.1.0';
 import {CompletionPopup} from './components/completion-popup';
@@ -197,6 +278,8 @@ import {
 	pendingQueue,
 	pendingApproval,
 	pendingPrompt,
+	pendingQuestion,
+	setPendingQuestion,
 	pendingTrust,
 	prs,
 	providerUsage,
@@ -209,6 +292,8 @@ import {
 	setBusy,
 	setCancelling,
 	setActiveEndpoint,
+	activeAgentRuns,
+	setActiveAgentRuns,
 	setContextPercent,
 	setContext,
 	setCompletionMessage,
@@ -307,7 +392,6 @@ import {
 // InnerDaemon audit row shows `budget N/24`); it is not enforced anywhere.
 const TOOL_LOOP_BUDGET = 24;
 const MAX_EMPTY_TURNS = 2;
-const MAX_REPEATED_TOOL_CALLS = 3;
 const MAX_MALFORMED_RETRIES = 2;
 /**
  * Minimum time a tool row stays in its RUNNING state. A fast tool call
@@ -335,13 +419,118 @@ export function toolRunningRemainingMs(
 // returned handoff summary REPLACES the history (prefixed + recent user
 // prompts kept). The main conversation's provider prefix stays short, so the
 // next turn starts a fresh cache head instead of resending the old blob.
-const SUMMARIZATION_PROMPT =
-	'You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.\n\n' +
-	'Include:\n- Current progress and key decisions made\n- Important context, constraints, or user preferences\n' +
-	'- What remains to be done (clear next steps)\n- Any critical data, examples, or references needed to continue\n\n' +
-	'Be concise, structured, and focused on helping the next LLM seamlessly continue the work.';
+export const SUMMARIZATION_PROMPT = `CRITICAL: Respond with text only. Do not call tools. You already have the conversation context needed for this task.
+
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create an authoritative handoff for another coding agent that will resume the task.
+
+The checkpoint must preserve both WHAT is being done and HOW work is performed. Do not reduce a proven workflow to vague prose such as "connect to production" or "upload the image".
+
+Review the conversation chronologically before writing. Resolve conflicts in favor of the user's latest correction and the latest verified successful procedure. Output only the checkpoint, with no preamble or commentary.
+
+Use these sections:
+# Current state
+- Active objective, completed work, pending work, and immediate next action.
+# Operating procedure
+- Exact proven sequence of steps. Preserve command templates, tool names, skill names, file paths, scripts, and verification queries needed to repeat the work.
+- Prefer the latest successful procedure over earlier failed attempts.
+# Environment and access
+- Working directory, repository, branch/worktree, hosts/IPs, SSH user, ports, remote paths, env files, service names, database schemas/tables, storage destinations, and relevant IDs.
+- Preserve variable names and placeholders, but NEVER copy secret values, passwords, tokens, private keys, or credentials.
+# Decisions and constraints
+- User preferences, safety rules, approvals, assumptions, and decisions already made.
+# Failures and corrections
+- Failed approaches, exact useful errors, user corrections, and what must not be repeated.
+# Important artifacts and results
+- Files changed or created, durable image/file paths, transaction/record IDs, URLs, outputs, and verified facts needed later.
+# User requests and corrections
+- Preserve every still-relevant explicit user request, preference, correction, rejection, and acceptance. Mark superseded requests as superseded instead of reviving them.
+# Next steps
+- Concrete ordered continuation steps and how to verify completion.
+
+Rules:
+- Be concise but information-dense. Exact operational facts beat narrative.
+- Preserve reusable procedures even when the immediate record or date changes.
+- If a skill or repository rule supplied the workflow, record its name and relevant procedure.
+- Do not tell the next agent to rescan the repository or rediscover infrastructure when the conversation already established it.
+- Clearly distinguish verified facts from unresolved guesses.
+- Never claim a test, build, deployment, upload, database write, or verification succeeded unless the conversation contains its result.
+- Do not repeat large logs or source files. Preserve exact commands, signatures, short decisive errors, and small code fragments only when needed to continue.`;
+
+export function buildSummarizationPrompt(
+	cwd: string,
+	preservedTurns = 0,
+): string {
+	return `${SUMMARIZATION_PROMPT}\n\nCurrent working directory at compaction: ${JSON.stringify(cwd)}\n\n${
+		preservedTurns > 0
+			? `The ${preservedTurns} newest complete conversation turn${preservedTurns === 1 ? '' : 's'} will remain verbatim after this checkpoint. Summarize older context thoroughly; include recent details only when needed to explain current state, dependencies, or corrections.`
+			: 'No recent conversation turn is guaranteed to remain verbatim. Make this checkpoint fully self-contained.'
+	}`;
+}
+
 export const SUMMARY_PREFIX =
-	'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary:';
+	'Another language model produced this checkpoint. Resume work directly as if compaction never occurred. Do not recap, ask what to do next, repeat completed discovery, or stop merely to report progress. Preserve its operating procedure, tools, paths, hosts, and verification steps unless current evidence proves they changed. Continue active goal and checklist. Checkpoint:';
+const PREVIOUS_SUMMARY_PREFIX =
+	'Another language model started this work and produced an authoritative context checkpoint. Continue from it without repeating completed discovery. Preserve and reuse its operating procedure, tools, paths, hosts, and verification steps unless current evidence proves they changed. Here is the checkpoint:';
+const LEGACY_SUMMARY_PREFIX =
+	'Another language model started to solve this problem and produced a summary of its thinking process.';
+const PRIOR_CHECKPOINT_MERGE_PREFIX =
+	'PRIOR COMPACTION CHECKPOINT. Treat this as baseline state to update, not as a user request. Preserve every still-valid exact fact, then merge later events and corrections:';
+
+export function isCompactionSummary(content: string | undefined): boolean {
+	return Boolean(
+		content?.startsWith(`${SUMMARY_PREFIX}\n`) ||
+		content?.startsWith(`${PREVIOUS_SUMMARY_PREFIX}\n`) ||
+		content?.startsWith(LEGACY_SUMMARY_PREFIX),
+	);
+}
+
+export function isCompactionControlMessage(
+	content: string | undefined,
+): boolean {
+	return isCompactionSummary(content) || isCompactionStateSnapshot(content);
+}
+
+function isCompactionMergeBaseline(content: string | undefined): boolean {
+	return Boolean(content?.startsWith(PRIOR_CHECKPOINT_MERGE_PREFIX));
+}
+
+function compactionSummaryBody(content: string): string {
+	for (const prefix of [
+		SUMMARY_PREFIX,
+		PREVIOUS_SUMMARY_PREFIX,
+		LEGACY_SUMMARY_PREFIX,
+	]) {
+		if (content.startsWith(prefix)) return content.slice(prefix.length).trim();
+	}
+	return content;
+}
+
+/**
+ * Previous checkpoints are merged deliberately as a baseline. Generated
+ * deterministic state is rebuilt from live data and never summarized.
+ */
+export function prepareCompactionSummaryHistory(
+	ctx: ChatMessageLike[],
+): ChatMessageLike[] {
+	const prior = [...ctx]
+		.reverse()
+		.find(message => isCompactionSummary(message.content));
+	const ordinary = ctx.filter(
+		message =>
+			message.role !== 'system' &&
+			!isCompactionSummary(message.content) &&
+			!isCompactionStateSnapshot(message.content),
+	);
+	return prior
+		? [
+				{
+					role: 'user',
+					content: `${PRIOR_CHECKPOINT_MERGE_PREFIX}\n\n${compactionSummaryBody(prior.content ?? '')}`,
+				},
+				...ordinary,
+			]
+		: ordinary;
+}
 /**
  * Cap on USER messages kept verbatim under the compaction summary (parity:
  * codex COMPACT_USER_MESSAGE_MAX_TOKENS). The newest user messages are kept
@@ -350,6 +539,14 @@ export const SUMMARY_PREFIX =
  * never part of this budget.
  */
 const COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000;
+/** OpenClaude-style protected recent working set, kept as complete turns. */
+const COMPACT_RECENT_TAIL_MAX_TOKENS = 20_000;
+
+export interface CompactionPartition {
+	summarize: ChatMessageLike[];
+	preserve: ChatMessageLike[];
+	preservedTurns: number;
+}
 
 /**
  * App shell, routing (A5), the agent turn loop, sessions (A8) and the
@@ -362,6 +559,21 @@ export function App() {
 	// Resume may switch process.cwd() to the saved session directory. Keep
 	// launch CWD so `/clear` returns to the directory outside the TUI.
 	const launchCwd = process.cwd();
+	// Sandbox boundary belongs to launch workspace, not mutable shell cwd.
+	// Recomputing it after `cd` into a nested checkout makes parent project
+	// files read-only inside bubblewrap.
+	const workspaceRoot = projectRoot(launchCwd);
+	const [workspaceCwd, setWorkspaceCwd] = createSignal(launchCwd);
+	// Keep process.cwd(), tool cwd, system prompt, and status line identical.
+	// A signal alone leaves the model believing it is still in launch CWD.
+	const updateWorkspaceCwd = (next: string) => {
+		try {
+			process.chdir(next);
+		} catch {
+			return;
+		}
+		setWorkspaceCwd(process.cwd());
+	};
 	const [statusRows, setStatusRows] = createSignal<StatusRow[]>([]);
 	const [settingsList, setSettingsList] = createSignal<{
 		title: string;
@@ -401,7 +613,27 @@ export function App() {
 		() => setCompletionPopup(false),
 	);
 	let currentSession: SessionData | null = null;
+	let currentGoal: SessionGoal | undefined;
+	const [goalRevision, setGoalRevision] = createSignal(0);
+	const visibleGoal = () => {
+		goalRevision();
+		return currentGoal;
+	};
+	const setCurrentGoal = (next: SessionGoal | undefined) => {
+		currentGoal = next;
+		setGoalRevision(revision => revision + 1);
+	};
+	const [psInitialTab, setPsInitialTab] = createSignal<
+		'jobs' | 'agents' | 'goal'
+	>('jobs');
+	let loopJobsRef: LoopJob[] = [];
+	const loopTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	let autonomousTurnRef = false;
+	let loopTurnRef = false;
+	let goalAccountingTurnRef = false;
+	let goalContinuationPending = false;
 	let interruptedRef = false;
+	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
 	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
 	// can still be registering tools when the app paints, so the FIRST LLM
@@ -419,8 +651,12 @@ export function App() {
 	const AUTO_COMPACT_MESSAGE_MARGIN = 100;
 	const autoCompactRef: {enabled: boolean; threshold: number} = {
 		enabled: false,
-		threshold: 75,
+		threshold: 80,
 	};
+	let compactionFailureRef: CompactionFailureState = {
+		...INITIAL_COMPACTION_FAILURE_STATE,
+	};
+	let autoCompactReentryFloorRef = 0;
 	let steeringRef: SteeringConfig = {enabled: false, rules: []};
 	let watchdogMsRef = 0;
 	let streamGuardRef: {maxOutputChars?: number; maxDurationMs?: number} = {};
@@ -564,18 +800,20 @@ export function App() {
 			// E2: fallback chain, every OTHER provider, in order, tried when
 			// the active one fails.
 			setFallbackEndpoints(
-				listProviders()
-					.filter(provider => provider.id !== activeEndpoint().id)
-					.map(provider => ({
-						id: provider.id,
-						baseUrl: provider.baseUrl,
-						apiKey: provider.apiKeyResolved,
-						model: provider.models[0] ?? 'mock-model-1',
-						sdkProvider: provider.sdkProvider,
-						codexAccount: provider.codexAccount,
-						providerOptions: provider.providerOptions,
-						promptCacheKey: provider.promptCacheKey,
-					})),
+				loadSettings().modelFallback
+					? listProviders()
+							.filter(provider => provider.id !== activeEndpoint().id)
+							.map(provider => ({
+								id: provider.id,
+								baseUrl: provider.baseUrl,
+								apiKey: provider.apiKeyResolved,
+								model: provider.models[0] ?? 'mock-model-1',
+								sdkProvider: provider.sdkProvider,
+								codexAccount: provider.codexAccount,
+								providerOptions: provider.providerOptions,
+								promptCacheKey: provider.promptCacheKey,
+							}))
+					: [],
 			);
 		})();
 	}
@@ -650,25 +888,52 @@ export function App() {
 		};
 		try {
 			for (const tool of loadCustomTools()) {
-				registerTool(tool.name, {
+				const registeredName = customToolRegistryName(tool.name);
+				registerTool(registeredName, {
+					source: 'custom',
 					readOnly: tool.readOnly,
-					execute: async () => {
-						if (tool.command) {
-							const result = await runBash(tool.command);
-							return `${result.content}\n${tool.body.trim()}`;
+					approvalRequired: tool.approval || !tool.readOnly,
+					description: tool.description,
+					parameters: tool.parameters,
+					execute: async (args, ctx) => {
+						const expanded = expandCustomTool(tool, args);
+						if (expanded.command) {
+							const result = await runBash(
+								expanded.command,
+								ctx.onProgress,
+								ctx.signal,
+								ctx.cwd,
+								ctx.onCwdChange,
+								ctx.backgroundOwner ?? 'user',
+								ctx.workspaceRoot,
+							);
+							return [result.content, expanded.body].filter(Boolean).join('\n');
 						}
-						return tool.body.trim();
+						return expanded.body;
 					},
 				});
 			}
 			finish('skills');
 			for (const server of loadMCPConfig()) {
 				try {
-					const tools = await connectMCPServer(server);
+					const tools = await loadMCPServerTools(server);
 					for (const tool of tools) {
 						mcpToolsRef.push(tool);
-						registerTool(tool.name, {
-							readOnly: true,
+						const safeServer = server.id
+							.toLowerCase()
+							.replace(/[^a-z0-9]+/g, '_')
+							.replace(/^_+|_+$/g, '');
+						const safeTool = tool.name
+							.toLowerCase()
+							.replace(/[^a-z0-9]+/g, '_')
+							.replace(/^_+|_+$/g, '');
+						const registeredName = `mcp__${safeServer}__${safeTool}`;
+						registerTool(registeredName, {
+							source: 'mcp',
+							readOnly: tool.readOnly,
+							approvalRequired: !tool.readOnly,
+							description: tool.description,
+							parameters: tool.parameters,
 							execute: args => tool.call(args),
 						});
 					}
@@ -697,6 +962,8 @@ export function App() {
 			// The catalog is final (built-ins + custom + MCP + LSP tool) once
 			// lazy init settles; allow LLM turns from here on.
 			startupReadyRef = true;
+			if (currentGoal?.status === 'active') queueGoalContinuation();
+			for (const job of loopJobsRef) scheduleLoopTimer(job);
 		}
 	};
 	// F5: register markdown-defined custom tools from the config dirs.
@@ -716,10 +983,15 @@ export function App() {
 		if (!currentSession) return;
 		currentSession = {
 			...currentSession,
+			cwd: workspaceCwd(),
 			updatedAt: Date.now(),
 			firstMessage: firstMessagePreview(messages()),
 			messages: messages().filter(message => message.kind !== 'info'),
 			context: context(),
+			goal: currentGoal,
+			loopJobs: [...loopJobsRef],
+			tasks: tasks().map(task => ({...task})),
+			subagentRuns: activeAgentRuns().map(run => structuredClone(run)),
 			// Record the model this conversation is running on, so a later
 			// /resume can restore it instead of the most-recently used one.
 			provider: activeEndpoint().id,
@@ -731,6 +1003,8 @@ export function App() {
 
 	const exit = () => {
 		persist();
+		void closeMCPServers();
+		releaseHerdrAgent();
 		renderer.destroy();
 		// Goodbye screen (parity: the reference exit banner): the mascot banner
 		// WITHOUT the box border + the session / continue hints. Written
@@ -761,6 +1035,7 @@ export function App() {
 
 	const clear = () => {
 		abortRef?.abort();
+		resetFileUndoStack();
 		setInput('');
 		setCompletionMessage('');
 		// /clear starts a fresh conversation: stop the COMPLETED popup.
@@ -779,11 +1054,27 @@ export function App() {
 		} catch {
 			// Launch directory may have been removed; keep current CWD.
 		}
+		updateWorkspaceCwd(process.cwd());
+		setCurrentGoal(undefined);
+		loopJobsRef = [];
+		for (const timer of loopTimers.values()) clearTimeout(timer);
+		loopTimers.clear();
 		startNewSession();
 		persist();
 	};
 
 	const startNewSession = (resumeRef?: string) => {
+		compactionFailureRef = {...INITIAL_COMPACTION_FAILURE_STATE};
+		autoCompactReentryFloorRef = 0;
+		resetFileUndoStack();
+		void runHooks({
+			event: 'SessionStart',
+			sessionSource: resumeRef
+				? 'resume'
+				: messages().length > 0
+					? 'clear'
+					: 'startup',
+		});
 		if (resumeRef) {
 			const resumed = resolveSession(resumeRef);
 			if (!resumed) {
@@ -868,6 +1159,7 @@ export function App() {
 						cwdChanged = tryChdir();
 					}
 				}
+				updateWorkspaceCwd(process.cwd());
 				// Arrow-up history parity: rebuild the prompt history from the
 				// resumed conversation so ↑/↓ recall the prompts this session
 				// actually sent (live sessions build the same list per turn,
@@ -876,8 +1168,47 @@ export function App() {
 				setHistoryIndex(-1);
 				setSessionId(resumed.id);
 				setSessionName(resumed.name);
+				reportHerdrSession(resumed.id, process.cwd());
+				reportHerdrAgent('idle', {
+					message: `Resumed ${resumed.name}`,
+					sessionId: resumed.id,
+				});
 				setUsageHistory([]);
 				currentSession = {...resumed};
+				setCurrentGoal(resumed.goal);
+				loopJobsRef = [...(resumed.loopJobs ?? [])];
+				const restoredTasks =
+					resumed.tasks ??
+					normalizeTaskList(
+						[...resumed.messages]
+							.reverse()
+							.find(message => message.tool?.name === 'write_tasks')?.tool?.args
+							?.tasks,
+					);
+				setTasks(
+					restoredTasks.map((task, index) => ({
+						...task,
+						id: task.id || `task_${index + 1}`,
+					})),
+				);
+				setActiveAgentRuns(
+					(resumed.subagentRuns ?? [])
+						.map(run =>
+							run.status === 'running'
+								? {
+										...run,
+										status: 'cancelled' as const,
+										streaming: '',
+										output:
+											`${run.output}\nInterrupted by session restart.`.trim(),
+									}
+								: {...run},
+						)
+						.slice(-20),
+				);
+				for (const timer of loopTimers.values()) clearTimeout(timer);
+				loopTimers.clear();
+				for (const job of loopJobsRef) scheduleLoopTimer(job);
 				// Model parity: the conversation keeps the model it ran on, NOT
 				// the most-recently used one. If the session's provider/model is
 				// no longer configured, fall back to the current model and tell
@@ -900,10 +1231,10 @@ export function App() {
 							model: sessionModel,
 							models: discoveredModels()[provider.id] ?? provider.models,
 							modelEfforts: provider.modelEfforts,
-							contextWindow:
-								modelWindows()[provider.id]?.[sessionModel] ??
-								provider.contextWindow ??
-								128_000,
+							contextWindow: effectiveContextWindow(
+								provider.contextWindow,
+								modelWindows()[provider.id]?.[sessionModel],
+							),
 							sdkProvider: provider.sdkProvider,
 							codexAccount: provider.codexAccount,
 							providerOptions: provider.providerOptions,
@@ -944,6 +1275,10 @@ export function App() {
 			return;
 		}
 		const id = newSessionId();
+		setCurrentGoal(undefined);
+		loopJobsRef = [];
+		for (const timer of loopTimers.values()) clearTimeout(timer);
+		loopTimers.clear();
 		currentSession = {
 			id,
 			name: 'New conversation',
@@ -957,9 +1292,18 @@ export function App() {
 			model: activeEndpoint().model,
 			messages: [],
 			context: [],
+			goal: undefined,
+			loopJobs: [],
+			tasks: [],
+			subagentRuns: [],
 		};
 		setSessionId(id);
 		setSessionName('New conversation');
+		reportHerdrSession(id, process.cwd());
+		reportHerdrAgent('idle', {
+			message: 'Ready for input',
+			sessionId: id,
+		});
 		saveSession(currentSession);
 	};
 
@@ -986,6 +1330,15 @@ export function App() {
 			setSettingsList({title, rows});
 		};
 		switch (row.key) {
+			case 'hooks':
+				openSettingsList(
+					'Hooks',
+					listHooks().map(hook => ({
+						label: `${hook.event} · ${hook.matcher}`,
+						value: `${hook.source} · ${hook.type}${hook.async ? ' · async' : ''} · ${hook.target || '(empty)'}`,
+					})),
+				);
+				return;
 			case 'customCommands':
 				openSettingsList('Custom commands', [
 					...loadCustomCommands().map(command => ({
@@ -1181,15 +1534,305 @@ export function App() {
 	});
 
 	const processQueue = () => {
-		if (pendingQueue().length === 0) return;
+		if (busy() || pendingQueue().length === 0) return;
 		const next = pendingQueue()[0]!;
 		setPendingQueue(prev => prev.slice(1));
+		autonomousTurnRef = next.source === 'goal';
+		loopTurnRef = next.source === 'loop';
 		void submit(next.value, next.attachments);
 	};
 
-	/** B16: one confirmation per call; the input row resolves y/n. */
-	const approvalGate = (name: string, detail: string): Promise<boolean> =>
+	function saveGoal(next: SessionGoal | undefined): void {
+		setCurrentGoal(next);
+		if (currentSession) currentSession.goal = next;
+		persist();
+	}
+
+	function goalCommand(args: string): void {
+		const input = args.trim();
+		if (!input) {
+			if (currentGoal) openInfoModal('Goal', formatGoal(currentGoal));
+			else appendInfo('No goal is currently set. Usage: /goal <objective>');
+			return;
+		}
+		const control = input.toLowerCase();
+		if (control === 'edit') {
+			if (!currentGoal) {
+				appendInfo('No goal is currently set. Usage: /goal <objective>');
+				return;
+			}
+			setPendingPrompt({
+				question: 'Edit goal objective',
+				resolve: objective => {
+					const text = objective.trim();
+					if (!text || !currentGoal) return;
+					saveGoal({...currentGoal, objective: text, updatedAt: Date.now()});
+					showToast('Goal updated');
+				},
+			});
+			return;
+		}
+		if (control === 'clear') {
+			const hadGoal = Boolean(currentGoal);
+			saveGoal(undefined);
+			cancelRunningBackgroundTasks('goal');
+			goalContinuationPending = false;
+			showToast(hadGoal ? 'Goal cleared' : 'No goal to clear');
+			return;
+		}
+		if (['pause', 'resume', 'complete', 'blocked'].includes(control)) {
+			if (!currentGoal) {
+				appendInfo('No goal is currently set. Usage: /goal <objective>');
+				return;
+			}
+			const status =
+				control === 'pause'
+					? 'paused'
+					: control === 'resume'
+						? 'active'
+						: control === 'blocked'
+							? 'blocked'
+							: 'complete';
+			const next = {
+				...currentGoal,
+				status,
+				updatedAt: Date.now(),
+			} as SessionGoal;
+			saveGoal(next);
+			if (status !== 'active') cancelRunningBackgroundTasks('goal');
+			showToast(`Goal ${status}`);
+			if (status === 'active' && !busy()) queueGoalContinuation();
+			return;
+		}
+		const parsed = parseGoalSpec(input);
+		if (!parsed) {
+			appendInfo(
+				'Usage: /goal <objective> [--tokens N] [--max-iterations N] [--completion-promise "TEXT"]',
+			);
+			return;
+		}
+		const now = Date.now();
+		const goal: SessionGoal = {
+			objective: parsed.objective,
+			status: 'active',
+			...(parsed.tokenBudget ? {tokenBudget: parsed.tokenBudget} : {}),
+			...(parsed.maxIterations ? {maxIterations: parsed.maxIterations} : {}),
+			...(parsed.completionPromise
+				? {completionPromise: parsed.completionPromise}
+				: {}),
+			tokensUsed: 0,
+			iteration: 0,
+			timeUsedSeconds: 0,
+			createdAt: now,
+			updatedAt: now,
+		};
+		saveGoal(goal);
+		showToast('Goal active');
+		if (!busy()) queueGoalContinuation();
+	}
+
+	function loopCommand(args: string): void {
+		const input = args.trim();
+		if (!input) {
+			openInfoModal(
+				'Loop jobs',
+				loopJobsRef.length > 0
+					? loopJobsRef.map(formatLoopJob).join('\n')
+					: 'No thread jobs are scheduled.\nUse /loop <spec> to create one.',
+			);
+			return;
+		}
+		const control = parseLoopControl(input);
+		if (control === 'clear' || control === 'stop') {
+			for (const timer of loopTimers.values()) clearTimeout(timer);
+			loopTimers.clear();
+			loopJobsRef = [];
+			setPendingQueue(previous =>
+				control === 'stop'
+					? previous.filter(item => item.source !== 'loop')
+					: previous,
+			);
+			cancelRunningBackgroundTasks('loop');
+			persist();
+			showToast(control === 'stop' ? 'Loop stopped' : 'Loop jobs cleared');
+			return;
+		}
+		if (control && typeof control === 'object') {
+			const id = control.deleteId;
+			const before = loopJobsRef.length;
+			loopJobsRef = loopJobsRef.filter(job => job.id !== id);
+			const timer = loopTimers.get(id);
+			if (timer) clearTimeout(timer);
+			loopTimers.delete(id);
+			persist();
+			showToast(
+				before === loopJobsRef.length
+					? `Loop job not found: ${id}`
+					: `Loop job deleted: ${id}`,
+			);
+			return;
+		}
+		const parsed = parseLoopSpec(input);
+		if (!parsed) {
+			appendInfo(
+				'Usage: /loop [@after-turn <prompt> | @every 5m <prompt> | once after 30s <prompt> | stop | delete <id> | clear]',
+			);
+			return;
+		}
+		const job = newLoopJob(parsed);
+		loopJobsRef = [...loopJobsRef, job];
+		scheduleLoopTimer(job);
+		persist();
+		showToast(`Loop job created: ${job.cronExpression}`);
+	}
+
+	function scheduleLoopTimer(job: LoopJob): void {
+		const existing = loopTimers.get(job.id);
+		if (existing) clearTimeout(existing);
+		const interval = loopIntervalMs(job.cronExpression);
+		if (!interval) return;
+		const delay = Math.max(
+			0,
+			(job.nextRunAt ?? Date.now() + interval) - Date.now(),
+		);
+		const timer = setTimeout(() => {
+			loopTimers.delete(job.id);
+			if (!loopJobsRef.some(candidate => candidate.id === job.id)) return;
+			if (busy() || startupReadyRef === false) {
+				job.nextRunAt = Date.now() + 1000;
+				scheduleLoopTimer(job);
+				return;
+			}
+			fireLoopJob(job);
+		}, delay);
+		timer.unref?.();
+		loopTimers.set(job.id, timer);
+	}
+
+	function fireLoopJob(job: LoopJob): void {
+		job.lastRunAt = Date.now();
+		if (job.runOnce) {
+			loopJobsRef = loopJobsRef.filter(candidate => candidate.id !== job.id);
+		} else {
+			const interval = loopIntervalMs(job.cronExpression);
+			if (interval) {
+				job.nextRunAt = Date.now() + interval;
+				scheduleLoopTimer(job);
+			}
+		}
+		persist();
+		setPendingQueue(previous => [
+			...previous,
+			{value: job.prompt, source: 'loop'},
+		]);
+		queueMicrotask(processQueue);
+	}
+
+	function fireAfterTurnJobs(): void {
+		const jobs = loopJobsRef.filter(
+			job => job.cronExpression === '@after-turn',
+		);
+		if (jobs.length === 0) return;
+		setPendingQueue(previous => [
+			...previous,
+			...jobs.map(job => ({value: job.prompt, source: 'loop' as const})),
+		]);
+		for (const job of jobs) {
+			job.lastRunAt = Date.now();
+			if (job.runOnce) {
+				loopJobsRef = loopJobsRef.filter(candidate => candidate.id !== job.id);
+			}
+		}
+	}
+
+	function queueGoalContinuation(): void {
+		if (
+			!currentGoal ||
+			currentGoal.status !== 'active' ||
+			goalContinuationPending
+		)
+			return;
+		if (pendingQueue().some(item => item.source === 'goal')) return;
+		if (
+			currentGoal.tokenBudget &&
+			currentGoal.tokensUsed >= currentGoal.tokenBudget
+		) {
+			saveGoal({
+				...currentGoal,
+				status: 'budget-limited',
+				updatedAt: Date.now(),
+			});
+			showToast('Goal limited by token budget');
+			return;
+		}
+		const iteration = currentGoal.iteration ?? 0;
+		if (currentGoal.maxIterations && iteration >= currentGoal.maxIterations) {
+			saveGoal({
+				...currentGoal,
+				status: 'iteration-limited',
+				updatedAt: Date.now(),
+			});
+			showToast('Goal reached iteration limit');
+			return;
+		}
+		const nextGoal = {
+			...currentGoal,
+			iteration: iteration + 1,
+			updatedAt: Date.now(),
+		};
+		saveGoal(nextGoal);
+		goalContinuationPending = true;
+		const prompt = goalContinuationPrompt(nextGoal);
+		setPendingQueue(previous =>
+			previous.some(item => item.source === 'goal')
+				? previous
+				: [...previous, {value: prompt, source: 'goal'}],
+		);
+		goalContinuationPending = false;
+		queueMicrotask(processQueue);
+	}
+
+	/** Model-facing question tool: input row resolves one explicit answer. */
+	const askUser = async (
+		question: string,
+		options?: Array<{label: string; description?: string}>,
+		multiple?: boolean,
+	): Promise<string> =>
 		new Promise(resolve => {
+			reportHerdrAgent('blocked', {
+				message: 'Question requires user input',
+				sessionId: sessionId(),
+			});
+			if (process.env.NANOCODER_NONINTERACTIVE) {
+				resolve('');
+				return;
+			}
+			const headerMatch = /^\[([^\]]+)\]\s*/.exec(question);
+			setPendingQuestion({
+				header: headerMatch?.[1],
+				question: question.replace(/^\[[^\]]+\]\s*/, ''),
+				options: options ?? [],
+				multiple,
+				resolve,
+			});
+		});
+
+	/** B16: one confirmation per call; the input row resolves y/n. */
+	const approvalGate = async (
+		name: string,
+		detail: string,
+	): Promise<boolean> => {
+		const hook = await runHooks({
+			event: 'PermissionRequest',
+			toolName: name,
+			toolInput: {detail},
+		});
+		if (hook.denied) return false;
+		return new Promise(resolve => {
+			reportHerdrAgent('blocked', {
+				message: `${name}: approval required`,
+				sessionId: sessionId(),
+			});
 			// B16: non-interactive stdin (piped/CI) auto-DECLINES mutations.
 			if (process.env.NANOCODER_NONINTERACTIVE) {
 				resolve(false);
@@ -1197,40 +1840,48 @@ export function App() {
 			}
 			setPendingApproval({name, detail, resolve});
 		});
+	};
 
 	const refreshContextPercent = () => {
-		const allText = context().reduce(
-			(total, message) => total + (message.content ?? ''),
-			'',
+		const model = activeEndpoint().model;
+		const tokens = estimateContextTokens(
+			context(),
+			model,
+			`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
 		);
-		const tokens = estimateTokens(allText, activeEndpoint().model);
 		const window = activeEndpoint().contextWindow;
 		setContextPercent(
 			window > 0 ? Math.min(100, Math.round((tokens / window) * 100)) : 0,
 		);
 	};
 
-	/** B11: LLM auto-compact when ctx% crosses the threshold (codex-style). */
-	const triggerAutoCompact = () => {
-		// The LLM compaction is a separate summarization request; it runs in
-		// the background AFTER the current turn settles (busy flips false in
-		// the turn's finally block) and the next prompt AUTO-RESUMES from the
-		// short summary, the compaction never interrupts the conversation.
-		setTimeout(() => void compact(), 0);
+	/** Codex-style threshold check against history about to be sampled. */
+	const shouldAutoCompactHistory = (history: ChatMessageLike[]): boolean => {
+		if (
+			!autoCompactRef.enabled ||
+			!canAttemptAutoCompaction(compactionFailureRef)
+		)
+			return false;
+		const model = activeEndpoint().model;
+		const tokens = estimateContextTokens(
+			history,
+			model,
+			`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
+		);
+		const window = activeEndpoint().contextWindow;
+		const messageTriggered = shouldAutoCompactContext({
+			estimatedTokens: 0,
+			contextWindow: window,
+			thresholdPercent: autoCompactRef.threshold,
+			messageCount: history.length,
+			messageCap: maxMessages(),
+			messageMargin: AUTO_COMPACT_MESSAGE_MARGIN,
+		});
+		if (messageTriggered) return true;
+		if (tokens < autoCompactReentryFloorRef) return false;
+		if (autoCompactReentryFloorRef > 0) autoCompactReentryFloorRef = 0;
+		return tokens >= autoCompactTokenLimit(window, autoCompactRef.threshold);
 	};
-
-	/**
-	 * Auto-compact when the token share of the context window crosses the
-	 * threshold OR the conversation approaches the MESSAGE cap (the cap
-	 * trims the oldest message once exceeded, silently changing the cache
-	 * head — compact before that happens so the head change is a deliberate
-	 * one-time summary, never a per-turn miss).
-	 */
-	const shouldAutoCompact = (): boolean =>
-		autoCompactRef.enabled &&
-		(contextPercent() >= autoCompactRef.threshold ||
-			context().length >= maxMessages() - AUTO_COMPACT_MESSAGE_MARGIN);
-
 	const runCustomCommand = (name: string, args: string) => {
 		const command = findCustomCommand(name);
 		if (!command) {
@@ -1254,19 +1905,32 @@ export function App() {
 			);
 			return;
 		}
-		// Positional args map one token each; a `rest: true` arg captures
-		// everything after them as ONE value (multi-word purposes).
-		const values = mapCommandArguments(spec, tokens);
-		const prompt = substituteTemplateVariables(command.body, values).trim();
+		// Expand command arguments into the MODEL prompt. Free-form trailing
+		// intent is appended as `ARGUMENTS:` when the command declares no
+		// placeholder (OpenClaude parity), never silently discarded.
+		const prompt = expandCommandPrompt({
+			body: command.body,
+			rawArgs: args,
+			spec,
+			tokens,
+		}).trim();
 		if (!prompt) {
 			appendInfo(`Custom command /${name} has an empty prompt.`);
 			return;
 		}
-		const workflowReview =
-			/^(create-pr|release-to-prod|release-branch-to-prod)$/i.test(command.name)
-				? '\n\nMANDATORY WORKFLOW GATE: Before any push, PR creation, or merge, call the `review_changes` tool. Wait for all configured review-* subagents. Do not bypass REVIEW_FINDINGS or REVIEW_UNAVAILABLE without explicit user approval.'
-				: '';
-		void submit(prompt + workflowReview, undefined, {
+		// Reviewer lenses belong to PR creation only. Release commands may
+		// merge an already-reviewed PR; rerunning every lens there wastes time
+		// and differs from Claude/OpenClaude/OpenCode command behavior.
+		const workflowReview = /^create-pr$/i.test(command.name)
+			? '\n\nMANDATORY WORKFLOW GATE: Before pushing or creating the PR, call the `review_changes` tool. Wait for all configured review-* subagents. Do not bypass REVIEW_FINDINGS or REVIEW_UNAVAILABLE without explicit user approval.'
+			: '';
+		const interpretedPrompt = buildCommandInvocationPrompt({
+			name: command.name,
+			description: command.description,
+			userRequest: args,
+			guidance: prompt + workflowReview,
+		});
+		void submit(interpretedPrompt, undefined, {
 			kind: 'command',
 			name: command.name,
 			// The ORIGINAL typed command (e.g. `/worktree purpose: hello
@@ -1436,8 +2100,39 @@ export function App() {
 				saveSettings({...settings, maxMessages: num});
 				return;
 			}
+			case 'modelFallback': {
+				const enabled = ['on', 'true', '1'].includes(
+					value.trim().toLowerCase(),
+				);
+				const disabled = ['off', 'false', '0'].includes(
+					value.trim().toLowerCase(),
+				);
+				if (!enabled && !disabled) {
+					appendInfo(`Invalid model fallback '${value}'. Use on/off.`);
+					return;
+				}
+				saveSettings({...settings, modelFallback: enabled});
+				setFallbackEndpoints(
+					enabled
+						? listProviders()
+								.filter(provider => provider.id !== activeEndpoint().id)
+								.map(provider => ({
+									id: provider.id,
+									baseUrl: provider.baseUrl,
+									apiKey: provider.apiKeyResolved,
+									model: provider.models[0] ?? 'mock-model-1',
+									sdkProvider: provider.sdkProvider,
+									codexAccount: provider.codexAccount,
+									providerOptions: provider.providerOptions,
+									promptCacheKey: provider.promptCacheKey,
+								}))
+						: [],
+				);
+				showToast(`Model fallback: ${enabled ? 'on' : 'off'}`);
+				return;
+			}
 			case 'autoCompactThreshold': {
-				const num = Math.max(50, Math.min(95, Number(value)));
+				const num = Math.max(50, Math.min(95, Number(value.replace(/%$/, ''))));
 				if (!Number.isFinite(num)) {
 					appendInfo(`Invalid threshold '${value}'.`);
 					return;
@@ -1552,6 +2247,60 @@ export function App() {
 				}
 				return;
 			}
+			case 'respectGitignore': {
+				const next = value.trim().toLowerCase();
+				const on = next === 'on' || next === 'true' || next === '1';
+				const off = next === 'off' || next === 'false' || next === '0';
+				if (!on && !off) {
+					appendInfo(`Invalid gitignore setting '${value}'. Use on/off.`);
+					return;
+				}
+				saveSettings({...settings, respectGitignore: on});
+				showToast(`Respect gitignore: ${on ? 'on' : 'off'}`);
+				return;
+			}
+			case 'sandbox': {
+				const next = value.trim().toLowerCase();
+				if (!['auto', 'workspace-write', 'read-only', 'off'].includes(next)) {
+					appendInfo(
+						`Invalid sandbox mode '${value}'. Use auto, workspace-write, read-only or off.`,
+					);
+					return;
+				}
+				saveSettings({
+					...settings,
+					sandbox: {
+						...(settings.sandbox ?? {
+							network: true,
+							writablePaths: [],
+						}),
+						mode: next as 'auto' | 'workspace-write' | 'read-only' | 'off',
+					},
+				});
+				showToast(`Command sandbox: ${next}`);
+				return;
+			}
+			case 'sandboxNetwork': {
+				const next = value.trim().toLowerCase();
+				const on = next === 'on' || next === 'true' || next === '1';
+				const off = next === 'off' || next === 'false' || next === '0';
+				if (!on && !off) {
+					appendInfo(`Invalid sandbox network '${value}'. Use on/off.`);
+					return;
+				}
+				saveSettings({
+					...settings,
+					sandbox: {
+						...(settings.sandbox ?? {
+							mode: 'auto',
+							writablePaths: [],
+						}),
+						network: on,
+					},
+				});
+				showToast(`Sandbox network: ${on ? 'on' : 'off'}`);
+				return;
+			}
 			case 'resumeCwd': {
 				const next = value.trim().toLowerCase() as ResumeCwdMode;
 				if (!['session', 'current', 'ask'].includes(next)) {
@@ -1566,7 +2315,7 @@ export function App() {
 			}
 			default:
 				appendInfo(
-					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, thinkingMode, cavemanMode, resumeCwd`,
+					`Unknown setting '${key}'. Available: mode, profile, maxMessages, autoCompactThreshold, theme, watchdog, streamGuard, titleShape, statusLine, thinkingMode, cavemanMode, respectGitignore, resumeCwd`,
 				);
 		}
 	};
@@ -1726,6 +2475,9 @@ export function App() {
 	) => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
+		if (attachments && Object.keys(attachments).length > 0) {
+			attachments = persistImageAttachments(trimmed, attachments, sessionId());
+		}
 
 		// Vision fallback (Settings → Capabilities → Vision model): when the
 		// prompt carries `[Image #N]` attachments and a vision model is
@@ -1735,7 +2487,13 @@ export function App() {
 		let prompt = trimmed;
 		const imageTokens = [...trimmed.matchAll(/\[Image #(\d+)\]/g)];
 		const visionFallback = resolveVisionFallback();
-		if (imageTokens.length > 0 && visionFallback && attachments) {
+		const nativeVision = supportsNativeImageInput(activeEndpoint());
+		if (
+			imageTokens.length > 0 &&
+			visionFallback &&
+			attachments &&
+			!nativeVision
+		) {
 			let replaced = 0;
 			for (const match of imageTokens) {
 				const path = attachments[match[1] ?? ''];
@@ -1777,7 +2535,19 @@ export function App() {
 		if (prompt.startsWith('!')) {
 			setInput('');
 			const command = prompt.slice(1).trim();
-			const result = await runBash(command);
+			const result = await runBash(
+				command,
+				undefined,
+				undefined,
+				workspaceCwd(),
+				next => {
+					updateWorkspaceCwd(next);
+					persist();
+				},
+				'user',
+				workspaceRoot,
+			);
+			if (result.cwd) setWorkspaceCwd(result.cwd);
 			appendMessage({
 				role: 'tool',
 				content: `✦ Executed Bash(${command})`,
@@ -1798,7 +2568,11 @@ export function App() {
 				exit,
 				clear,
 				compact,
-				submitPrompt: prompt => {
+				goal: goalCommand,
+				loop: loopCommand,
+				fork,
+				herdrFork,
+				submitPrompt: (prompt, command) => {
 					// /mock:confirm previews the LIVE approval box, approval
 					// only prompts in `normal` mode, so switch first.
 					if (prompt === 'confirm' && mode() !== 'normal') {
@@ -1806,7 +2580,7 @@ export function App() {
 						saveSettings({...loadSettings(), mode: 'normal'});
 						appendInfo('Switched to normal mode for the confirmation preview.');
 					}
-					void submit(prompt);
+					void submit(prompt, undefined, command);
 				},
 				retry: retryLast,
 				undo: undoLast,
@@ -1837,7 +2611,18 @@ export function App() {
 				toolsList,
 				skillsList,
 				tasksList,
-				ps: () => setPsOpen(true),
+				ps: () => {
+					setPsInitialTab(
+						activeBgCount() > 0
+							? 'jobs'
+							: activeAgents() > 0
+								? 'agents'
+								: visibleGoal()?.status === 'active'
+									? 'goal'
+									: 'jobs',
+					);
+					setPsOpen(true);
+				},
 				version: versionInfo,
 				credits,
 				doctor,
@@ -1853,6 +2638,18 @@ export function App() {
 				setupMcpInfo,
 			});
 			return;
+		}
+
+		const promptHook = await runHooks({event: 'UserPromptSubmit', prompt});
+		if (promptHook.denied) {
+			appendWarning(promptHook.denied);
+			return;
+		}
+		if (typeof promptHook.updatedInput?.prompt === 'string') {
+			prompt = promptHook.updatedInput.prompt;
+		}
+		if (promptHook.additionalContext.length > 0) {
+			prompt += `\n\n${promptHook.additionalContext.join('\n')}`;
 		}
 
 		// Chat while busy → queued (submitted when the turn settles).
@@ -1902,12 +2699,22 @@ export function App() {
 			body: string;
 		},
 	) => {
+		const autonomousTurn = autonomousTurnRef;
+		const loopTurn = loopTurnRef;
+		goalAccountingTurnRef = autonomousTurn;
+		autonomousTurnRef = false;
+		loopTurnRef = false;
 		// /undo file parity (openclaude rewind): every REAL LLM turn starts a
 		// file-undo exchange — the file tools snapshot their targets during
 		// the turn, and /undo restores them with the transcript. Slash
 		// commands and `!bash` never reach here, so they can't push dummy
 		// exchanges that would swallow the previous exchange's file undo.
 		beginFileUndoExchange(value);
+		// Codex pre-sampling behavior: compact prior history, then continue
+		// this same submitted prompt automatically against the summary.
+		if (shouldAutoCompactHistory(context())) {
+			await tryAutoCompactHistory(context());
+		}
 		// Snapshot for `/retry` BEFORE the user message lands.
 		setRetrySnapshot({
 			messages: [...messages()],
@@ -1933,9 +2740,18 @@ export function App() {
 		// turn must still appear in `/resume`; waiting for finally means a
 		// process exit or crash loses the latest prompt for several minutes.
 		persist();
+		const nativeImagePaths = supportsNativeImageInput(activeEndpoint())
+			? Object.entries(attachments ?? {})
+					.filter(([index]) => providerValue.includes(`[Image #${index}]`))
+					.map(([, path]) => path)
+			: [];
+		const sourceContext = imageSourceContext(value, attachments ?? {});
+		const mentionContext = buildMentionContext(value, workspaceCwd());
 		const userMsg = {
 			role: 'user' as const,
-			content: scrubberRef.scrub(providerValue),
+			content:
+				scrubberRef.scrub(providerValue) + sourceContext + mentionContext,
+			...(nativeImagePaths.length > 0 ? {images: nativeImagePaths} : {}),
 		};
 		// CACHE HEAD PARITY (codex): the current DATE rides the request
 		// TAIL, not the system head. The dated message is what the provider
@@ -1969,6 +2785,13 @@ export function App() {
 		const controller = new AbortController();
 		abortRef = controller;
 		const startedAt = Date.now();
+		let completionFailed = false;
+		let completionInterrupted = false;
+		let completionSummary = value.replace(/\s+/g, ' ').trim().slice(0, 180);
+		reportHerdrAgent('working', {
+			message: completionSummary || 'Working',
+			sessionId: sessionId(),
+		});
 
 		let history: ChatMessageLike[] = [...context(), datedUserMsg];
 		// F4: subscribe blocks auto-trigger, a custom command whose
@@ -2018,9 +2841,13 @@ export function App() {
 		}
 		history = capMessages(history, maxMessages());
 		let emptyTurnCount = 0;
-		let lastToolSignature: string | null = null;
-		let repeatedToolCount = 0;
+		let repeatedToolState: RepeatedToolState = INITIAL_REPEATED_TOOL_STATE;
 		let malformedRetryCount = 0;
+		let taskCloseoutNudgeCount = 0;
+		let lastTaskCloseoutDraft = '';
+		let taskToolRanAfterCloseoutDraft = false;
+		let toolBriefActive = false;
+		let reactiveCompactRetries = 0;
 		setDiagnosticsCount(0);
 		let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 		if (watchdogMsRef > 0) {
@@ -2074,44 +2901,65 @@ export function App() {
 						thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
 						Date.now(),
 					);
-				let result = await streamChat(
-					history,
-					{
-						onText: delta => {
-							// Reply text streaming ⇒ the thinking phase is over.
-							if (delta) setThinkingActive(false);
-							setStreaming(prev => prev + delta);
+				let result: Awaited<ReturnType<typeof streamChat>>;
+				const beginThinkingPhase = () => {
+					if (thinkingActive()) return;
+					setThinkingActive(true);
+					thinkingStartedAt = Date.now();
+				};
+				try {
+					result = await streamChat(
+						history,
+						{
+							onText: delta => {
+								// Reply text streaming ⇒ the thinking phase is over.
+								if (delta) setThinkingActive(false);
+								setStreaming(prev => prev + delta);
+							},
+							onReasoning: delta => {
+								if (delta) beginThinkingPhase();
+								setReasoning(prev => prev + delta);
+							},
+							onReasoningStart: beginThinkingPhase,
 						},
-						onReasoning: delta => {
-							if (delta) setThinkingActive(true);
-							// Anchor the thinking timer on the FIRST reasoning
-							// chunk of this phase (reasoning() is reset at the
-							// end of every round).
-							if (delta && !reasoning()) {
-								thinkingStartedAt = Date.now();
-							}
-							setReasoning(prev => prev + delta);
-						},
-					},
-					controller.signal,
-					toolCatalog(),
-					streamGuardRef,
-					toolProfile(),
-					// The primary provider failed and a FALLBACK answered —
-					// surface it, or the user thinks the active model lost
-					// its memory (it was never the one that replied).
-					fallback => {
-						setCompletionTone('default');
-						setCompletionMessage(
-							`⚠ ${fallback.id} answered · ${fallback.model} (primary failed)`,
-						);
-						if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
-						resumeNoticeTimer = setTimeout(() => {
-							setCompletionMessage('');
+						controller.signal,
+						toolCatalogForModel(activeEndpoint().model),
+						streamGuardRef,
+						toolProfile(),
+						// The primary provider failed and a FALLBACK answered —
+						// surface it, or the user thinks the active model lost
+						// its memory (it was never the one that replied).
+						fallback => {
 							setCompletionTone('default');
-						}, 8000);
-					},
-				);
+							setCompletionMessage(
+								`⚠ ${fallback.id} answered · ${fallback.model} (primary failed)`,
+							);
+							if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+							resumeNoticeTimer = setTimeout(() => {
+								setCompletionMessage('');
+								setCompletionTone('default');
+							}, 8000);
+						},
+					);
+				} catch (error) {
+					if (isCompactOverflowError(error) && reactiveCompactRetries < 2) {
+						reactiveCompactRetries += 1;
+						setStreaming('');
+						setReasoning('');
+						setThinkingActive(false);
+						try {
+							history = await compactHistory(history);
+						} catch (compactionError) {
+							appendWarning(
+								`Reactive compaction failed: ${compactionError instanceof Error ? compactionError.message : String(compactionError)}`,
+							);
+							throw error;
+						}
+						round -= 1;
+						continue;
+					}
+					throw error;
+				}
 				// The round's stream ended — if the model only reasoned and
 				// called tools, the tool phase is WORKING, not thinking.
 				setThinkingActive(false);
@@ -2170,25 +3018,88 @@ export function App() {
 
 				if (result.toolCalls.length === 0) {
 					if (result.text.trim()) {
-						appendAssistantMessage(scrubberRef.rehydrate(result.text), {
-							reasoning: result.reasoning.trim() || undefined,
-							durationSec: thoughtDuration(),
-						});
+						const unfinishedTasks = tasks().filter(
+							task =>
+								task.status === 'pending' || task.status === 'in_progress',
+						);
+						if (unfinishedTasks.length > 0 && taskCloseoutNudgeCount < 2) {
+							taskCloseoutNudgeCount += 1;
+							// This text already rendered as the normal live Markdown reply. Persist
+							// it before clearing streaming for the checklist closeout round; otherwise
+							// calling write_tasks makes the visible response disappear.
+							const visibleDraft = scrubberRef.rehydrate(result.text);
+							if (visibleDraft !== lastTaskCloseoutDraft) {
+								appendAssistantMessage(visibleDraft, {
+									reasoning: result.reasoning.trim() || undefined,
+									durationSec: thoughtDuration(),
+								});
+								lastTaskCloseoutDraft = visibleDraft;
+								taskToolRanAfterCloseoutDraft = false;
+							}
+							history = [
+								...history,
+								{role: 'assistant', content: result.text},
+								{
+									role: 'user',
+									content:
+										'You still have unfinished checklist items. Before giving the final response, call write_tasks with the full list and mark each genuinely finished item completed. Keep blocked or incomplete work in_progress/pending. Do not merely describe the update in prose.',
+								},
+							];
+							setStreaming('');
+							setReasoning('');
+							recordUsage(result.usage);
+							continue;
+						}
+						// Never fabricate checklist completion. If the model ignored two
+						// explicit closeout nudges, preserve exact task state and withhold
+						// the completion signal instead of lying to the next iteration.
+						const remainingUnfinishedTasks = unfinishedTasks;
+						completionSummary =
+							result.text.replace(/\s+/g, ' ').trim().slice(0, 180) ||
+							completionSummary;
+						if (currentGoal && autonomousTurn) {
+							const status = goalStatusFromResponse(
+								result.text,
+								currentGoal.status,
+								currentGoal.completionPromise,
+							);
+							if (status !== currentGoal.status) {
+								saveGoal({...currentGoal, status, updatedAt: Date.now()});
+								if (status === 'complete' || status === 'blocked') {
+									cancelRunningBackgroundTasks('goal');
+								}
+							}
+						}
+						const visibleReply = scrubberRef.rehydrate(result.text);
+						if (
+							shouldPersistTaskCloseoutReply(
+								visibleReply,
+								lastTaskCloseoutDraft,
+								taskToolRanAfterCloseoutDraft,
+							)
+						) {
+							appendAssistantMessage(visibleReply, {
+								reasoning: result.reasoning.trim() || undefined,
+								durationSec: thoughtDuration(),
+							});
+						}
 						const completionUsage = usageSignal(result.usage);
 						const cacheLabel = formatCacheHitLabel(cacheStats(result.usage));
 						// Static completion line ABOVE the input (diamond glyph,
 						// secondary), not a transcript row. Expires after a
 						// few seconds like the exit confirmation.
-						setCompletionMessage(
-							`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-								(completionUsage?.total_tokens
-									? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
-									: '') +
-								(cacheLabel ? ` · ${cacheLabel}` : ''),
-						);
-						// COMPLETED attention modal: a finished task arms the
-						// idle window (shows only after a full idle period).
-						completionPopupController.arm();
+						if (remainingUnfinishedTasks.length === 0) {
+							setCompletionMessage(
+								`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+									(completionUsage?.total_tokens
+										? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
+										: '') +
+									(cacheLabel ? ` · ${cacheLabel}` : ''),
+							);
+							// COMPLETED attention modal: a finished task arms the
+							// idle window (shows only after a full idle period).
+							completionPopupController.arm();
+						}
 						capturePRs(result.text);
 						// Keep the LOCAL history (what the provider saw) in
 						// sync, the post-loop `setContext(history)` below is
@@ -2199,7 +3110,6 @@ export function App() {
 						setContext(history);
 						refreshContextPercent();
 						recordUsage(result.usage);
-						if (shouldAutoCompact()) triggerAutoCompact();
 						break;
 					}
 
@@ -2230,21 +3140,20 @@ export function App() {
 					continue;
 				}
 
-				// B14: repeated identical tool signature across turns → loop guard.
-				const signature = result.toolCalls
-					.map(call => `${call.name}:${JSON.stringify(call.arguments)}`)
-					.join('|');
-				if (signature === lastToolSignature) {
-					repeatedToolCount += 1;
-					if (repeatedToolCount >= MAX_REPEATED_TOOL_CALLS) {
-						appendError(
-							`Repeated tool call detected (${repeatedToolCount}× identical calls), stopping the loop.`,
-						);
-						break;
-					}
-				} else {
-					lastToolSignature = signature;
-					repeatedToolCount = 1;
+				// B14: repeated identical EFFECTFUL tool signature across turns →
+				// loop guard. Checklist bookkeeping (`write_tasks`) is excluded:
+				// models legitimately repeat it while advancing and closing tasks.
+				// Other tools remain guarded, including skill loading.
+				const repeated = evaluateRepeatedToolCalls(
+					result.toolCalls,
+					repeatedToolState,
+				);
+				repeatedToolState = repeated.state;
+				if (repeated.stop) {
+					appendError(
+						`Repeated tool call detected (${repeated.state.count}× identical calls), stopping the loop.`,
+					);
+					break;
 				}
 
 				// Tool turn: execute every call, render each row, feed the
@@ -2263,16 +3172,41 @@ export function App() {
 				// attached to the FIRST tool message of the batch and renders
 				// once as part of the tool entry — never repeated per tool.
 				const briefText = result.text.trim()
-					? scrubberRef.rehydrate(result.text).trim()
+					? oneSentencePreToolBrief(scrubberRef.rehydrate(result.text))
 					: '';
+				const priorRoundBriefed = toolBriefActive;
+				if (briefText) toolBriefActive = true;
+				// Text became pre-tool brief. Remove live-reply copy immediately;
+				// otherwise same narration paints above tool and again below it
+				// until next streaming throttle tick.
+				setStreaming('');
 				const toolResults: Array<{
 					tool_call_id: string;
 					content: string;
+					displayArgs?: Record<string, unknown>;
 				}> = [];
 				// B8: single-tool profiles truncate to one call per turn.
-				const calls = isSingleToolProfile(toolProfile(), activeEndpoint().model)
+				const selectedCalls = isSingleToolProfile(
+					toolProfile(),
+					activeEndpoint().model,
+				)
 					? result.toolCalls.slice(0, 1)
 					: result.toolCalls;
+				// Normalize BEFORE rendering and provider-history persistence. Doing
+				// this only inside executeTool still shows redundant `cd <cwd> &&`
+				// in the visible call and teaches the model to repeat it.
+				const calls: MockToolCall[] = selectedCalls.map(call => {
+					if (resolveToolName(call.name) !== 'execute_bash') return call;
+					const command = call.arguments.command;
+					if (typeof command !== 'string') return call;
+					const normalized = normalizeBashCommand(command, workspaceCwd());
+					if (normalized === command) return call;
+					const args = {...call.arguments, command: normalized};
+					return {...call, arguments: args, rawArguments: JSON.stringify(args)};
+				});
+				if (calls.some(call => resolveToolName(call.name) === 'write_tasks')) {
+					taskToolRanAfterCloseoutDraft = true;
+				}
 				let declined = false;
 				// B17: read-only batches run in PARALLEL (results keep order);
 				// mutation tools always run sequentially.
@@ -2286,6 +3220,7 @@ export function App() {
 					return (
 						availability.available &&
 						isReadOnlyTool(call.name) &&
+						isParallelSafeTool(call.name) &&
 						!evaluateToolConstraint(call.name, steeringRef, {
 							intent: classifyIntent(value),
 							model: activeEndpoint().model,
@@ -2299,12 +3234,6 @@ export function App() {
 				// PARALLEL batch so the compact tally streams LIVE instead of
 				// appearing only after the whole batch settles.
 				const batchStartedAt = Date.now();
-				// A7/C9: live task progress, first pending task shows running.
-				setTasks(prev =>
-					prev.map((task, index) =>
-						index === 0 && !task.done ? {...task, running: true} : task,
-					),
-				);
 				if (allReadOnly) {
 					for (const [callIndex, call] of calls.entries()) {
 						const detail = toolDisplayDetail(call);
@@ -2316,11 +3245,7 @@ export function App() {
 							// First message carries the brief TEXT; every
 							// message marks the batch so later boxes share
 							// the single glyph and indent to the brief column.
-							brief: briefText
-								? callIndex === 0
-									? briefText
-									: ' '
-								: undefined,
+							brief: toolCallBrief(briefText, callIndex, priorRoundBriefed),
 							tool: {name: call.name, detail, output: '', args: call.arguments},
 						});
 					}
@@ -2335,6 +3260,11 @@ export function App() {
 											[call.id]: content,
 										})),
 									signal: controller.signal,
+									cwd: workspaceCwd(),
+									workspaceRoot,
+									onCwdChange: updateWorkspaceCwd,
+									askUser,
+									onStateChange: persist,
 								}),
 							),
 						)
@@ -2353,7 +3283,7 @@ export function App() {
 							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
 							running: true,
 							toolId: call.id,
-							brief: briefText ? (index === 0 ? briefText : ' ') : undefined,
+							brief: toolCallBrief(briefText, index, priorRoundBriefed),
 							tool: {name: call.name, detail, output: '', args: call.arguments},
 						});
 					}
@@ -2462,6 +3392,10 @@ export function App() {
 							displayToolName(call.name),
 							detail,
 						);
+						reportHerdrAgent('working', {
+							message: completionSummary || 'Working',
+							sessionId: sessionId(),
+						});
 						if (!approved) {
 							declined = true; // decline cancels the REST
 							const declinedContent = 'Declined by user.';
@@ -2494,6 +3428,19 @@ export function App() {
 							onProgress: content =>
 								setLiveOutputs(prev => ({...prev, [call.id]: content})),
 							signal: controller.signal,
+							cwd: workspaceCwd(),
+							workspaceRoot,
+							askUser,
+							onStateChange: persist,
+							backgroundOwner: autonomousTurn
+								? 'goal'
+								: loopTurn
+									? 'loop'
+									: 'user',
+							onCwdChange: next => {
+								updateWorkspaceCwd(next);
+								persist();
+							},
 						}));
 					if (call.arguments._malformed) {
 						// B7: malformed arguments → corrective nudge so the model
@@ -2534,7 +3481,11 @@ export function App() {
 								? {
 										...message,
 										running: false,
-										tool: {...message.tool!, output: toolResult.content},
+										tool: {
+											...message.tool!,
+											output: toolResult.content,
+											args: toolResult.displayArgs ?? message.tool!.args,
+										},
 										toolStats: {
 											durationSec: Math.max(
 												0,
@@ -2552,17 +3503,11 @@ export function App() {
 						return next;
 					});
 				}
-				// C9: this tool turn is done, mark the active task complete.
-				setTasks(prev =>
-					prev.map(task =>
-						task.running ? {...task, running: false, done: true} : task,
-					),
-				);
 
 				const assistantToolMsg: ChatMessageLike = {
 					role: 'assistant',
 					content: result.text,
-					tool_calls: result.toolCalls.map((call: MockToolCall) => ({
+					tool_calls: calls.map((call: MockToolCall) => ({
 						id: call.id,
 						name: call.name,
 						arguments: call.rawArguments,
@@ -2570,6 +3515,11 @@ export function App() {
 				};
 				history = [...history, assistantToolMsg, ...toolMessages];
 				refreshContextPercent();
+				// Codex true mid-turn continuation: compact after tool output,
+				// replace local history, then sample again in this SAME loop.
+				if (shouldAutoCompactHistory(history)) {
+					history = await tryAutoCompactHistory(history);
+				}
 				// B4: cap the provider context to the newest N messages.
 				history = capMessages(history, maxMessages());
 				// B21: auto-diagnostics after a tool turn, run the LSP
@@ -2620,7 +3570,6 @@ export function App() {
 			// Compaction check AFTER the whole turn (tool rounds included) —
 			// the text branch checks it too, but a tool-heavy turn grows the
 			// history past the message cap without ever hitting a text turn.
-			if (shouldAutoCompact()) triggerAutoCompact();
 			// Completion line also shows after TOOL-only turns (the loop can
 			// end on tools with no final text round, the text branch above
 			// already set it; this covers the other path).
@@ -2635,6 +3584,7 @@ export function App() {
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
+				completionInterrupted = true;
 				// ESC interrupt: commit the partial stream AND the turn's
 				// history to the provider context (B20). `/clear` aborts
 				// without the flag and leaves the wiped state.
@@ -2679,6 +3629,12 @@ export function App() {
 				}
 				return;
 			}
+			completionFailed = true;
+			completionSummary =
+				(error instanceof Error ? error.message : String(error))
+					.replace(/\s+/g, ' ')
+					.trim()
+					.slice(0, 180) || 'Task failed';
 			appendError(error instanceof Error ? error.message : String(error));
 		} finally {
 			clearInterval(turnTimer);
@@ -2711,7 +3667,75 @@ export function App() {
 			setThinkingActive(false);
 			thinkingStartedAt = 0;
 			setThinkingElapsed(0);
+			void runHooks({event: 'Stop', data: {interrupted: interruptedRef}});
+			if (currentGoal && autonomousTurn) {
+				let nextGoal: SessionGoal = {
+					...currentGoal,
+					timeUsedSeconds:
+						currentGoal.timeUsedSeconds +
+						Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+					updatedAt: Date.now(),
+				};
+				if (
+					nextGoal.status === 'active' &&
+					nextGoal.maxIterations &&
+					(nextGoal.iteration ?? 0) >= nextGoal.maxIterations
+				) {
+					nextGoal = {...nextGoal, status: 'iteration-limited'};
+				}
+				setCurrentGoal(nextGoal);
+			}
 			persist();
+			goalAccountingTurnRef = false;
+			const terminalGoalState =
+				autonomousTurn && currentGoal ? currentGoal.status : undefined;
+			const completionBlocked = terminalGoalState === 'blocked';
+			const goalWillContinue = currentGoal?.status === 'active';
+			const afterTurnWillContinue =
+				!loopTurn &&
+				loopJobsRef.some(job => job.cronExpression === '@after-turn');
+			const queuedWillContinue = pendingQueue().length > 0;
+			const willContinue =
+				!completionFailed &&
+				!completionInterrupted &&
+				!interruptedRef &&
+				(goalWillContinue || afterTurnWillContinue || queuedWillContinue);
+			reportHerdrAgent(
+				completionBlocked ? 'blocked' : willContinue ? 'working' : 'idle',
+				{
+					message: completionBlocked
+						? 'Goal needs input'
+						: completionFailed
+							? 'Task failed'
+							: completionInterrupted
+								? 'Task interrupted'
+								: willContinue
+									? 'Continuing queued work'
+									: 'Task complete',
+					sessionId: sessionId(),
+				},
+			);
+			const shouldNotify = shouldNotifyTurnComplete({
+				interrupted: completionInterrupted || interruptedRef,
+			});
+			if (shouldNotify) {
+				notifyTaskComplete({
+					title: completionFailed
+						? 'BoboNyo task failed'
+						: terminalGoalState === 'blocked'
+							? 'BoboNyo needs input'
+							: terminalGoalState === 'budget-limited'
+								? 'BoboNyo goal paused'
+								: willContinue
+									? 'BoboNyo step finished'
+									: 'BoboNyo finished',
+					body: completionSummary || 'Task complete',
+				});
+			}
+			if (!completionFailed && !completionInterrupted && !interruptedRef) {
+				if (!loopTurn) fireAfterTurnJobs();
+				if (currentGoal?.status === 'active') queueGoalContinuation();
+			}
 		}
 	};
 
@@ -2734,6 +3758,21 @@ export function App() {
 		// survives restarts, unlike the session-scoped history above.
 		const updated = recordProviderUsage(activeEndpoint().baseUrl, snapshot);
 		if (updated) setProviderUsage(updated);
+		if (currentGoal && goalAccountingTurnRef) {
+			const next: SessionGoal = {
+				...currentGoal,
+				tokensUsed: currentGoal.tokensUsed + (snapshot.total_tokens ?? 0),
+				updatedAt: Date.now(),
+			};
+			if (
+				next.status === 'active' &&
+				next.tokenBudget &&
+				next.tokensUsed >= next.tokenBudget
+			) {
+				next.status = 'budget-limited';
+			}
+			saveGoal(next);
+		}
 		// Prompt-cache alert: an unusually cache-miss-heavy turn is exactly
 		// what drives the cost up — surface it for ANY provider that reports
 		// cache fields, not just DeepSeek. Toast (transient) — never a chat
@@ -2761,13 +3800,26 @@ export function App() {
 	 * trim-from-the-start strategy codex uses on `ContextWindowExceeded`,
 	 * which preserves the cache head AND keeps the recent messages intact.
 	 */
-	const summarizeContext = async (ctx: ChatMessageLike[]): Promise<string> => {
+	const summarizeContext = async (
+		ctx: ChatMessageLike[],
+		preservedTurns: number,
+	): Promise<string> => {
 		let summary = '';
-		let attempt = ctx.filter(message => message.role !== 'system');
+		let attempt = microcompactToolResults(
+			prepareCompactionSummaryHistory(ctx),
+			activeEndpoint().model,
+		).messages;
+		const compactRequest: ChatMessageLike = {
+			role: 'user',
+			content: buildSummarizationPrompt(workspaceCwd(), preservedTurns),
+		};
 		for (;;) {
 			try {
+				// OpenClaude/Codex shape: normal conversation context followed by a
+				// final user compaction request. A synthetic system message here is
+				// ignored by Responses wire and weakens behavior across providers.
 				await streamChat(
-					[{role: 'system', content: SUMMARIZATION_PROMPT}, ...attempt],
+					[...attempt, compactRequest],
 					{
 						onText: delta => {
 							summary += delta;
@@ -2781,26 +3833,154 @@ export function App() {
 				);
 				break;
 			} catch (error) {
-				// Context-window overflow while summarizing: drop the OLDEST
-				// history item and retry (codex trims from the beginning to
-				// preserve the cache head). Anything else fails compaction.
 				const message = error instanceof Error ? error.message : String(error);
-				if (!isCompactOverflowError(error) || attempt.length <= 1) {
+				const trimmed = trimOldestCompactionTurn(attempt);
+				if (
+					!isCompactOverflowError(error) ||
+					trimmed.length >= attempt.length
+				) {
 					throw error;
 				}
-				attempt = attempt.slice(1);
+				attempt = trimmed;
 				summary = '';
 				if (process.env.NODE_ENV !== 'test') {
 					appendInfo(
-						`Compaction request overflowed the window, trimming oldest message: ${message}`,
+						`Compaction request overflowed the window, trimming oldest complete turn: ${message}`,
 					);
 				}
 			}
 		}
-		return summary.trim();
+		return normalizeCompactionSummary(summary);
 	};
 
+	const compactHistory = async (
+		ctx: ChatMessageLike[],
+	): Promise<ChatMessageLike[]> => {
+		setCompacting(true);
+		try {
+			const partition = partitionCompactionHistory(ctx);
+			const transcriptPath = saveCompactionTranscript(
+				sessionId(),
+				messages(),
+				ctx,
+			);
+			const rawSummary = await summarizeContext(
+				partition.summarize,
+				partition.preservedTurns,
+			);
+			if (!rawSummary) throw new Error('the model returned an empty summary');
+			const model = activeEndpoint().model;
+			const summary = truncateCompactionText(
+				rawSummary,
+				Math.max(
+					1_000,
+					Math.min(20_000, Math.floor(activeEndpoint().contextWindow * 0.2)),
+				),
+				model,
+			);
+			const state = buildCompactionStateSnapshot({
+				sessionId: sessionId(),
+				cwd: workspaceCwd(),
+				workspaceRoot,
+				transcriptPath,
+				tasks: tasks(),
+				...(currentGoal ? {goal: currentGoal} : {}),
+				loopJobs: loopJobsRef,
+				queuedPrompts: pendingQueue().map(item => ({
+					value: item.value,
+					...(item.source ? {source: item.source} : {}),
+				})),
+				agents: activeAgentRuns(),
+				messages: messages(),
+				context: ctx,
+				availableSkills: loadSkills().map(skill => ({
+					name: skill.name,
+					source: skill.source,
+					body: skill.body,
+				})),
+				model,
+				budgets: compactionSnapshotBudgets(activeEndpoint().contextWindow),
+			});
+			let compacted: ChatMessageLike[] = [
+				{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
+				{role: 'user', content: state},
+				...partition.preserve,
+			];
+			let installedPreservedTurns = partition.preservedTurns;
+			const postCompactLimit = autoCompactTokenLimit(
+				activeEndpoint().contextWindow,
+				autoCompactRef.threshold,
+				AUTO_COMPACT_SAFETY_BUFFER_TOKENS,
+			);
+			let postCompactTokens = estimateContextTokens(
+				compacted,
+				model,
+				`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
+			);
+			while (
+				postCompactTokens >= postCompactLimit &&
+				partition.preservedTurns > 0
+			) {
+				const trimmed = dropOldestPreservedTurn(compacted.slice(2));
+				if (trimmed.length >= compacted.length - 2) break;
+				compacted = [...compacted.slice(0, 2), ...trimmed];
+				installedPreservedTurns = Math.max(0, installedPreservedTurns - 1);
+				postCompactTokens = estimateContextTokens(
+					compacted,
+					model,
+					`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
+				);
+			}
+			const reduction = Math.round(
+				((ctx.length - compacted.length) / Math.max(1, ctx.length)) * 100,
+			);
+			compactionFailureRef = recordCompactionSuccess();
+			autoCompactReentryFloorRef = autoCompactReentryFloor(
+				postCompactTokens,
+				postCompactLimit,
+			);
+			setContext(compacted);
+			setMessages(
+				compactedDisplayMessages(messages(), installedPreservedTurns),
+			);
+			setRetrySnapshot(null);
+			resetFileUndoStack();
+			appendInfo(
+				`Context compacted via LLM summary (${reduction}% reduction, ` +
+					`${summary.split('\n').length} line summary, ${postCompactTokens} estimated tokens).`,
+			);
+			refreshContextPercent();
+			persist();
+			return compacted;
+		} catch (error) {
+			compactionFailureRef = recordCompactionFailure(compactionFailureRef);
+			if (
+				compactionFailureRef.consecutiveFailures >= COMPACTION_FAILURE_LIMIT &&
+				process.env.NODE_ENV !== 'test'
+			) {
+				appendWarning(
+					`Auto-compaction paused for ${Math.round(COMPACTION_FAILURE_COOLDOWN_MS / 1000)}s after ${compactionFailureRef.consecutiveFailures} consecutive failures.`,
+				);
+			}
+			throw error;
+		} finally {
+			setCompacting(false);
+		}
+	};
+	const tryAutoCompactHistory = async (
+		ctx: ChatMessageLike[],
+	): Promise<ChatMessageLike[]> => {
+		try {
+			return await compactHistory(ctx);
+		} catch (error) {
+			appendWarning(
+				`Auto-compaction failed; continuing current turn: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return ctx;
+		}
+	};
 	const compact = async () => {
+		void runHooks({event: 'SessionStart', sessionSource: 'compact'});
 		if (busy()) {
 			appendInfo('Cannot compact while a turn is running.');
 			return;
@@ -2810,59 +3990,13 @@ export function App() {
 			appendInfo('Context is already compact (fewer than 7 messages).');
 			return;
 		}
-		// TRANSIENT status: the "Compacting context (LLM summary)…" row is
-		// NOT a permanent chat-history info line — it renders as a centered,
-		// animated-dots row at the bottom of the transcript and disappears
-		// the moment the summarization settles (success, error or empty).
-		setCompacting(true);
-		let summary: string;
 		try {
-			summary = await summarizeContext(ctx);
+			await compactHistory(ctx);
 		} catch (error) {
 			appendError(
-				`Compaction failed: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
+				`Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
-			return;
-		} finally {
-			setCompacting(false);
 		}
-		if (!summary) {
-			appendError('Compaction failed: the model returned an empty summary.');
-			return;
-		}
-		// Keep the recent USER prompts under a token budget (newest first,
-		// oldest truncated to fit — codex `collect_user_messages` +
-		// `build_compacted_history_with_limit`), then place the summary LAST
-		// so it sits directly above the next user message (codex ordering).
-		// The client prepends the system prompt on EVERY request, so the
-		// compacted history must NOT carry a system message — a duplicate
-		// head would change the cache prefix and persist into saved sessions.
-		const userPrompts = collectCompactedUserMessages(ctx);
-		const compacted: ChatMessageLike[] = [
-			...userPrompts,
-			{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
-		];
-		const reduction = Math.round(
-			((ctx.length - compacted.length) / ctx.length) * 100,
-		);
-		setContext(compacted);
-		// DISPLAY PARITY: the transcript mirrors the compacted provider
-		// context — the old wall of messages is replaced by the kept recent
-		// user prompts + the summary notice. This is what gets PERSISTED, so
-		// a later `/resume` shows the compacted conversation instead of the
-		// pre-compaction history (the "resume still shows the very old
-		// conversation" bug). Pure helper, unit-tested.
-		setMessages(compactedDisplayMessages(messages(), userPrompts.length));
-		// The summary NOTICE lands on top of the compacted transcript (it
-		// also renders the summary text, so the gist stays visible).
-		appendInfo(
-			`Context compacted via LLM summary (${reduction}% reduction, ` +
-				`${summary.split('\n').length} line summary).`,
-		);
-		refreshContextPercent();
-		persist();
 	};
 
 	const retryLast = () => {
@@ -2899,7 +4033,7 @@ export function App() {
 		setMessages(keptMessages);
 		setContext(keptContext);
 		// openclaude-rewind parity: restore the files the undone exchange
-		// mutated (write/edit/delete/file_op snapshots taken before each
+		// mutated (write/edit/delete snapshots taken before each
 		// tool ran). The transcript and the files move back together.
 		const fileUndo = undoFileExchange();
 		// opencode parity: the undone prompt comes back into the input so it
@@ -2927,6 +4061,55 @@ export function App() {
 		}, 6000);
 	};
 
+	const fork = () => {
+		if (busy()) {
+			appendInfo('Cannot fork while a turn is running.');
+			return;
+		}
+		persist();
+		if (!currentSession || currentSession.messages.length === 0) {
+			appendInfo('Nothing to fork yet.');
+			return;
+		}
+		const forked = forkSession(currentSession);
+		currentSession = forked;
+		setSessionId(forked.id);
+		setSessionName(forked.name);
+		setCompletionTone('success');
+		setCompletionMessage(`Forked session ${forked.id}.`);
+		showToast(`Forked: ${forked.id}`);
+	};
+	const herdrFork = (split: string) => {
+		if (!herdrAvailable()) {
+			appendInfo('/herdr:fork is only available inside Herdr.');
+			return;
+		}
+		if (busy()) {
+			appendInfo('Cannot fork while a turn is running.');
+			return;
+		}
+		persist();
+		if (!currentSession || currentSession.messages.length === 0) {
+			appendInfo('Nothing to fork yet.');
+			return;
+		}
+		const normalizedSplit = split.trim().toLowerCase();
+		if (normalizedSplit !== 'vertical' && normalizedSplit !== 'horizontal') {
+			appendInfo('Usage: /herdr:fork [vertical|horizontal]');
+			return;
+		}
+		try {
+			const forked = forkSession(currentSession);
+			const pane = forkInHerdrPane(
+				forked.id,
+				normalizedSplit as HerdrSplit,
+				process.cwd(),
+			);
+			appendInfo(`Forked ${forked.id} into Herdr pane ${pane}.`);
+		} catch (error) {
+			appendError(error instanceof Error ? error.message : String(error));
+		}
+	};
 	const resumeSession = (ref?: string) => {
 		if (busy()) {
 			appendInfo('Cannot resume while a turn is running.');
@@ -3064,7 +4247,7 @@ export function App() {
 				? []
 				: current.map(task => ({
 						label: task.title,
-						value: task.done ? 'done' : task.running ? 'running' : 'pending',
+						value: task.status.replace('_', ' '),
 					})),
 		);
 	};
@@ -3167,13 +4350,28 @@ export function App() {
 								`prompt ${snapshot.prompt_tokens != null ? formatTokens(snapshot.prompt_tokens) : '?'} · completion ${snapshot.completion_tokens != null ? formatTokens(snapshot.completion_tokens) : '?'}`,
 						)
 						.join('\n');
-		const pages = [0, 3, 6, 9].map(start =>
-			formatUsageCalendar(activeEndpoint().baseUrl, Date.now(), 3, start),
+		// Ship all responsive layouts. DetailsModal chooses one reactively, so
+		// resizing an open modal expands/collapses calendar without reopening.
+		const usageVariant = (months: number) => {
+			const ranges: string[] = [];
+			for (let start = 0; start < 12; start += months) {
+				ranges.push(
+					formatUsageCalendar(
+						activeEndpoint().baseUrl,
+						Date.now(),
+						Math.min(months, 12 - start),
+						start,
+					),
+				);
+			}
+			return ranges.join('\n---USAGE_PAGE---\n');
+		};
+		// Include every range size. DetailsModal measures actual rendered graph
+		// width and picks largest fitting range live as terminal resizes.
+		const pages = Array.from({length: 12}, (_, index) => 12 - index).map(
+			months => `${usageVariant(months)}\n\n${details}`,
 		);
-		openInfoModal(
-			'Usage',
-			`${pages.join('\n---USAGE_PAGE---\n')}\n\n${details}`,
-		);
+		openInfoModal('Usage', pages.join('\n---USAGE_VARIANT---\n'));
 	};
 
 	// Guards async `/status` refresh appends (codex limits) against a newer
@@ -3307,6 +4505,7 @@ export function App() {
 			effort: (endpoint.modelEfforts ?? {})[name],
 		});
 		savePreferences({lastProvider: endpoint.id, lastModel: name});
+		persist();
 		loadProviderFeatures(endpoint);
 		showToast(`Model: ${name} · ${endpoint.id}`);
 	};
@@ -3342,16 +4541,15 @@ export function App() {
 	 */
 	const switchEffort = (args: string) => {
 		const level = args.trim().toLowerCase();
+		const endpoint = activeEndpoint();
 		if (!level) {
 			setEffortOpen(true);
 			return;
 		}
-		if (
-			level !== 'default' &&
-			!EFFORT_LEVELS.includes(level as (typeof EFFORT_LEVELS)[number])
-		) {
+		const allowed = effortLevelsForModel(endpoint.model);
+		if (level !== 'default' && !allowed.includes(level)) {
 			appendInfo(
-				`Invalid effort '${args}'. Use default, minimal, low, medium or high.`,
+				`Invalid effort '${args}'. Use default, ${allowed.join(', ')}.`,
 			);
 			return;
 		}
@@ -3473,10 +4671,10 @@ export function App() {
 			model,
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
-			contextWindow:
-				modelWindows()[providerId]?.[model] ??
-				provider.contextWindow ??
-				128_000,
+			contextWindow: effectiveContextWindow(
+				provider.contextWindow,
+				modelWindows()[providerId]?.[model],
+			),
 			sdkProvider: provider.sdkProvider,
 			codexAccount: provider.codexAccount,
 			providerOptions: provider.providerOptions,
@@ -3501,6 +4699,10 @@ export function App() {
 			modelEfforts: nextEfforts,
 		});
 		loadProviderFeatures(provider);
+		// Model belongs to conversation metadata, not only global preferences.
+		// Save immediately so a crash or resume before next turn cannot restore
+		// stale pre-switch model. persist() reads newly active endpoint.
+		persist();
 		showToast(
 			`Model: ${model}${effort ? ` [${effort}]` : ''} · ${provider.id}`,
 		);
@@ -3646,6 +4848,7 @@ export function App() {
 					(lineTickerVisible(thinkingMode(), busy(), thinkingActive())
 						? 1
 						: 0) -
+					bashModeIndicatorRows(input()) -
 					startupLoading().length -
 					completionMessageRows(completionMessage(), completionTone()) -
 					(exitConfirm() ? 1 : 0) -
@@ -3694,7 +4897,7 @@ export function App() {
 			<box flexGrow={1} />
 			{/* Status Line setting (on/off) toggles the footer. */}
 			<Show when={statusLineEnabled()}>
-				<Status />
+				<Status cwd={workspaceCwd()} />
 			</Show>
 			{/* Settings open as an modal-style MODAL: the chat stays visible
 			    behind a translucent backdrop and a card container on top. */}
@@ -3809,7 +5012,17 @@ export function App() {
 			</Show>
 			{/* Built-in agents (Settings → Capabilities → Agents). */}
 			<Show when={agentsOpen()}>
-				<AgentsModal onClose={() => setAgentsOpen(false)} />
+				<AgentsModal
+					providers={catalog()}
+					currentProvider={activeEndpoint().id}
+					currentModel={activeEndpoint().model}
+					onConnectProvider={() => {
+						setAgentsOpen(false);
+						setConnectOpen({});
+					}}
+					onChanged={showToast}
+					onClose={() => setAgentsOpen(false)}
+				/>
 			</Show>
 			{/* Compact-block details (clicking an expandable tool tally). */}
 			<Show when={detailsOpen()}>
@@ -3822,7 +5035,11 @@ export function App() {
 			{/* Background-jobs modal (`/ps` or the floating notification):
 			    live list of running bash tasks with tailed realtime output. */}
 			<Show when={psOpen()}>
-				<BackgroundJobsModal onClose={() => setPsOpen(false)} />
+				<BackgroundJobsModal
+					goal={visibleGoal()}
+					initialTab={psInitialTab()}
+					onClose={() => setPsOpen(false)}
+				/>
 			</Show>
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
 			{/* `/commands` / `/help`: grouped 2-column catalog modal. */}
@@ -3854,6 +5071,24 @@ export function App() {
 						resumeSession(id);
 					}}
 					onClose={() => setResumeOpen(false)}
+				/>
+			</Show>
+			<Show when={pendingQuestion()}>
+				<QuestionModal
+					header={pendingQuestion()!.header}
+					question={pendingQuestion()!.question}
+					options={pendingQuestion()!.options}
+					multiple={pendingQuestion()!.multiple}
+					onAnswer={answer => {
+						const pending = pendingQuestion();
+						setPendingQuestion(null);
+						pending?.resolve(answer);
+					}}
+					onCancel={() => {
+						const pending = pendingQuestion();
+						setPendingQuestion(null);
+						pending?.resolve('');
+					}}
 				/>
 			</Show>
 			{/* First-run TRUST dialog (codex-style modal): explicit Yes/No,
@@ -3936,37 +5171,33 @@ export function App() {
 					<text fg={colors().secondary}>{completionMessage()}</text>
 				</box>
 			</Show>
-			{/* FLOATING background-jobs notification (top-right, sticky):
-			    replaces the old `bg: n` status-line segment. Shows while
-			    any bash task is running (registered immediately, before the
-			    15s foreground budget); clicking it (or `/ps`) opens the
-			    live jobs modal. Hidden while any modal is up. */}
+			{/* FLOATING activity notification (top-right, sticky): background
+			    jobs, subagents, and active long-running goal. Click opens the
+			    monitor on the goal when present, otherwise the active process
+			    section. Hidden while any modal is up. */}
 			<Show
-				when={(activeBgCount() > 0 || activeAgents() > 0) && !anyModalOpen()}
+				when={
+					(activeBgCount() > 0 ||
+						activeAgents() > 0 ||
+						visibleGoal()?.status === 'active') &&
+					!anyModalOpen()
+				}
 			>
-				<box
-					position="absolute"
-					top={1}
-					right={2}
-					zIndex={2500}
-					border
-					borderStyle="rounded"
-					borderColor={colors().primary}
-					backgroundColor={colors().base}
-					paddingX={2}
-					paddingY={0}
-					{...({
-						onMouseUp: () => setPsOpen(true),
-					} as any)}
-				>
-					<text fg={colors().primary} attributes={bold()}>
-						bg: {activeBgCount()} · agents: {activeAgents()} · agents:{' '}
-						{activeAgents()}
-					</text>
-					<text fg={colors().secondary} attributes={dim()}>
-						/ps · click
-					</text>
-				</box>
+				<ActivityIndicator
+					backgroundCount={activeBgCount()}
+					agentCount={activeAgents()}
+					goalActive={visibleGoal()?.status === 'active'}
+					onOpen={() => {
+						setPsInitialTab(
+							visibleGoal()?.status === 'active'
+								? 'goal'
+								: activeBgCount() > 0
+									? 'jobs'
+									: 'agents',
+						);
+						setPsOpen(true);
+					}}
+				/>
 			</Show>
 			{/* Transient TOAST at the top of the screen (parity: the reference
 			    "copied to clipboard" toast), setting changes (model /
@@ -4195,6 +5426,95 @@ function capMessages(
  * fit (never dropped whole, so a giant single user message still leaves a
  * usable trace). The summary itself is appended after these by the caller.
  */
+/**
+ * Drop oldest complete user turn for context-overflow retry. Never leave a
+ * leading tool result detached from its assistant tool call.
+ */
+export function trimOldestCompactionTurn(
+	messages: ChatMessageLike[],
+): ChatMessageLike[] {
+	const userStarts = messages
+		.map((message, index) =>
+			message.role === 'user' && !isCompactionControlMessage(message.content)
+				? index
+				: -1,
+		)
+		.filter(index => index >= 0);
+	if (userStarts.length < 2) return messages;
+	const baseline = messages
+		.slice(0, userStarts[0])
+		.filter(message => isCompactionMergeBaseline(message.content));
+	return [...baseline, ...messages.slice(userStarts[1])];
+}
+
+/** Post-compaction guard may drop even the final preserved turn. */
+export function dropOldestPreservedTurn(
+	messages: ChatMessageLike[],
+): ChatMessageLike[] {
+	const userStarts = messages
+		.map((message, index) =>
+			message.role === 'user' && !isCompactionControlMessage(message.content)
+				? index
+				: -1,
+		)
+		.filter(index => index >= 0);
+	if (userStarts.length === 0) return [];
+	return userStarts.length === 1 ? [] : messages.slice(userStarts[1]);
+}
+
+export function partitionCompactionHistory(
+	ctx: ChatMessageLike[],
+	maxTokens = COMPACT_RECENT_TAIL_MAX_TOKENS,
+	model = activeEndpoint().model,
+): CompactionPartition {
+	if (ctx.length === 0 || maxTokens <= 0) {
+		return {summarize: ctx, preserve: [], preservedTurns: 0};
+	}
+	const starts = ctx
+		.map((message, index) =>
+			message.role === 'user' && !isCompactionControlMessage(message.content)
+				? index
+				: -1,
+		)
+		.filter(index => index >= 0);
+	let cut = ctx.length;
+	let preservedTurns = 0;
+	for (let i = starts.length - 1; i >= 0; i--) {
+		const candidate = starts[i]!;
+		// Compaction must remove something. Preserving from index 0 would make
+		// a costly summary request that installs the original history unchanged.
+		if (candidate === 0) break;
+		const tokens = ctx.slice(candidate).reduce((total, message) => {
+			const calls = (message.tool_calls ?? [])
+				.map(call => `${call.name}\n${call.arguments}`)
+				.join('\n');
+			return (
+				total + estimateTokens(`${message.content ?? ''}\n${calls}`, model)
+			);
+		}, 0);
+		if (tokens > maxTokens) break;
+		cut = candidate;
+		preservedTurns += 1;
+	}
+	return {
+		summarize: ctx.slice(0, cut),
+		preserve: ctx.slice(cut),
+		preservedTurns,
+	};
+}
+
+/** Remove drafting wrappers some models emit despite text-only instructions. */
+export function normalizeCompactionSummary(raw: string): string {
+	let summary = raw
+		.replace(/<analysis>[\s\S]*?<\/analysis>/gi, '')
+		.replace(/^```(?:markdown|md|text)?\s*/i, '')
+		.replace(/\s*```$/i, '')
+		.trim();
+	const wrapped = /<summary>([\s\S]*?)<\/summary>/i.exec(summary);
+	if (wrapped) summary = wrapped[1]!.trim();
+	return summary;
+}
+
 export function collectCompactedUserMessages(
 	ctx: ChatMessageLike[],
 	maxTokens = COMPACT_USER_MESSAGE_MAX_TOKENS,
@@ -4204,8 +5524,7 @@ export function collectCompactedUserMessages(
 	// old summary — only the real user prompts are candidates.
 	const users = ctx.filter(
 		message =>
-			message.role === 'user' &&
-			!message.content?.startsWith(`${SUMMARY_PREFIX}\n`),
+			message.role === 'user' && !isCompactionControlMessage(message.content),
 	);
 	if (users.length === 0 || maxTokens <= 0) return [];
 	const selected: ChatMessageLike[] = [];
@@ -4248,19 +5567,17 @@ export function compactedDisplayMessages(
 	userPromptCount: number,
 ): ChatMessage[] {
 	if (userPromptCount <= 0) return [];
-	// The newest kept user prompt is ALWAYS the last real user message in
-	// the transcript (compaction keeps newest-first), so the display cuts at
-	// that message: it + the last exchange (its replies/tools) stay visible;
-	// everything OLDER is covered by the summary and never resurfaces.
-	let cut = 0;
+	// Keep same number of complete recent turns as provider context. Cutting
+	// only at newest user message made transcript disagree with retained
+	// context and hid useful tool procedure immediately after compaction.
+	let seen = 0;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]!;
-		if (message.role === 'user' && message.kind !== 'info') {
-			cut = i;
-			break;
-		}
+		if (message.role !== 'user' || message.kind === 'info') continue;
+		seen += 1;
+		if (seen === userPromptCount) return messages.slice(i);
 	}
-	return messages.slice(cut);
+	return messages;
 }
 
 /**
@@ -4271,9 +5588,15 @@ export function compactedDisplayMessages(
  * large); anything else fails compaction immediately.
  */
 export function isCompactOverflowError(error: unknown): boolean {
-	return (
+	if (
 		error instanceof ProviderError &&
 		(error.status === 400 || error.status === 413)
+	) {
+		return true;
+	}
+	if (!(error instanceof Error)) return false;
+	return /(?:input exceeds|exceeds? (?:the )?context window|context (?:length|window).*(?:exceed|limit)|maximum context length|too many (?:input )?tokens)/i.test(
+		error.message,
 	);
 }
 

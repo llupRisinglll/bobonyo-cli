@@ -10,9 +10,10 @@
  */
 
 import {displayToolName, resolveToolName} from './tools';
-import {stripEchoedCommand} from './bash';
+import {stripEchoedCommand, stripTerminalControl} from './bash';
 import {lineDiff, type RowStatus} from './row-highlight';
 import {tasks} from './state';
+import type {ApplyPatchDisplayChange} from './apply-patch';
 
 export const PREVIEW_COLLAPSED_LINES = 3;
 export const PREVIEW_EXPANDED_LINES = 50;
@@ -52,6 +53,12 @@ export interface ToolDisplayData {
 	output: string;
 	/** Raw call arguments (file previews diff old/new from these). */
 	args?: Record<string, unknown>;
+	/** Pre-tool narration owns glyph; grouped file labels become branches. */
+	briefed?: boolean;
+	/** Task-only title derived from pre-tool narration. */
+	briefTitle?: string;
+	/** Task-only compact form for superseded checklist snapshots. */
+	compactTask?: boolean;
 }
 
 /** Wrap row content in a fence of the requested language + status. */
@@ -96,9 +103,15 @@ export function rowLanguage(name: string): string {
 	if (canonical === 'execute_bash' || canonical === 'execute_bash:user')
 		return 'bashrow';
 	if (name === 'write_file') return 'filerow';
-	if (name === 'string_replace' || name === 'diff_edit') return 'filediff';
+	if (
+		name === 'edit_file' ||
+		name === 'string_replace' ||
+		name === 'diff_edit' ||
+		name === 'apply_patch'
+	)
+		return 'filediff';
 	if (name === 'git_diff') return 'diffrow';
-	if (name === 'agent') return 'agentrow';
+	if (name === 'agent' || name === 'review_changes') return 'agentrow';
 	if (name === 'write_tasks') return 'taskrow';
 	return 'toolrow';
 }
@@ -123,8 +136,10 @@ function formatGenericEntry(
 ): string {
 	if (
 		tool.name === 'write_file' ||
+		tool.name === 'edit_file' ||
 		tool.name === 'string_replace' ||
-		tool.name === 'diff_edit'
+		tool.name === 'diff_edit' ||
+		tool.name === 'apply_patch'
 	) {
 		return formatFilePreview(tool, expanded, status, width);
 	}
@@ -137,6 +152,7 @@ function formatGenericEntry(
 	if (tool.name === 'write_tasks') {
 		return formatTaskList(tool, status);
 	}
+	if (tool.name === 'review_changes') return tool.output;
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
 		: `✦ ${displayToolName(tool.name)}`;
@@ -146,24 +162,67 @@ function formatGenericEntry(
 
 /**
  * Task list (parity: nanocoder's TaskListDisplay), `✦ Tasks (N done, M in
- * progress, K open)` header + `◐/✓/○` status icons per task, colored by
+ * progress, K open)` header + `›/◆/·` status icons per task, colored by
  * state. Reads the LIVE task signal so a running row shows progress.
  */
 function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
-	const list = tasks();
-	const done = list.filter(task => task.done).length;
-	const running = list.filter(task => task.running).length;
-	const open = list.length - done - running;
+	const saved = Array.isArray(tool.args?.tasks)
+		? tool.args.tasks.filter(
+				(task): task is ReturnType<typeof tasks>[number] =>
+					Boolean(task) &&
+					typeof task === 'object' &&
+					typeof (task as {title?: unknown}).title === 'string' &&
+					typeof (task as {status?: unknown}).status === 'string',
+			)
+		: [];
+	const list = saved.length > 0 ? saved : status === 'running' ? tasks() : [];
+	const done = list.filter(task => task.status === 'completed').length;
+	const running = list.filter(task => task.status === 'in_progress').length;
+	const cancelled = list.filter(task => task.status === 'cancelled').length;
+	const open = list.length - done - running - cancelled;
 	const suffix = ` (${done} done, ${running} in progress, ${open} open)`;
-	const lines = list.map(task => {
-		const icon = task.done ? '✓' : task.running ? '◐' : '○';
-		return `  ${icon} ${task.title}`;
+	const briefTitle = compactTaskTitle(tool.briefTitle ?? '');
+	const title = briefTitle || displayToolName(tool.name);
+	if (tool.compactTask) {
+		const content = briefTitle
+			? `✦ ${briefTitle}\n  └ ${displayToolName(tool.name)}${suffix}`
+			: `✦ ${displayToolName(tool.name)}${suffix}`;
+		return fence('taskrow', status, content);
+	}
+	const lines = list.map((task, index) => {
+		const icon =
+			task.status === 'completed'
+				? '◆'
+				: task.status === 'in_progress'
+					? '›'
+					: task.status === 'cancelled'
+						? '×'
+						: '·';
+		const label =
+			task.status === 'in_progress' && task.activeForm
+				? task.activeForm
+				: task.title;
+		return `${index === 0 ? '  └ ' : '    '}${icon} ${label}`;
 	});
 	return fence(
 		'taskrow',
 		status,
-		`✦ ${displayToolName(tool.name)}${suffix}\n${lines.join('\n')}`,
+		`✦ ${title}${suffix}${lines.length ? `\n${lines.join('\n')}` : ''}`,
 	);
+}
+
+/** One-line, few-word task title from model narration. */
+function compactTaskTitle(value: string): string {
+	const plain = value
+		.replace(/[`*_#]/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!plain) return '';
+	const words = plain.split(' ');
+	const limited = words.slice(0, 7).join(' ');
+	const clipped =
+		limited.length > 48 ? limited.slice(0, 45).trimEnd() : limited;
+	return words.length > 7 || limited.length > 48 ? `${clipped}...` : clipped;
 }
 
 /**
@@ -205,6 +264,20 @@ function textArg(
 	return typeof value === 'string' ? value : '';
 }
 
+function applyPatchDisplayArg(
+	args: Record<string, unknown> | undefined,
+): ApplyPatchDisplayChange[] {
+	const value = args?._applyPatchDisplay;
+	if (!Array.isArray(value)) return [];
+	return value.filter(
+		(change): change is ApplyPatchDisplayChange =>
+			Boolean(change) &&
+			typeof change === 'object' &&
+			typeof (change as ApplyPatchDisplayChange).path === 'string' &&
+			Array.isArray((change as ApplyPatchDisplayChange).rows),
+	);
+}
+
 /**
  * File-write/edit preview (parity: nanocoder's CompactFileResult).
  * `write_file` renders a numbered, syntax-highlighted preview of the new
@@ -219,6 +292,12 @@ function formatFilePreview(
 ): string {
 	const path = textArg(tool.args, 'path') || tool.detail;
 	const displayName = tool.name === 'write_file' ? 'Write' : 'Edit';
+	if (tool.name === 'diff_edit') {
+		return formatUnifiedPatchPreview(tool, expanded, status);
+	}
+	if (tool.name === 'apply_patch') {
+		return formatApplyPatchPreview(tool, expanded, status);
+	}
 	if (tool.name === 'write_file') {
 		// Only render the file preview when the tool actually EXECUTED
 		// (output starts with the success prefix). A declined/error result
@@ -342,6 +421,145 @@ function formatFilePreview(
 		'filediff',
 		status,
 		`${header}\n${summary}${diffBody ? `\n${diffBody}` : ''}${diffFooter}`,
+	);
+}
+
+/** Render apply_patch changes as one multi-file, numbered DiffView. */
+function formatApplyPatchPreview(
+	tool: ToolDisplayData,
+	expanded: boolean,
+	status: RowStatus,
+): string {
+	const patch = textArg(tool.args, 'patchText').replace(/\r/g, '');
+	if (!patch || !/^Applied patch successfully\./.test(tool.output)) {
+		const tail = formatOutputTail(tool.output, expanded, 84);
+		return tail ? `✦ Edit files (failed)\n${tail}` : '✦ Edit files (failed)';
+	}
+	const changes = applyPatchDisplayArg(tool.args);
+	if (changes.length === 0) {
+		const tail = formatOutputTail(tool.output, expanded, 84);
+		return tail ? `✦ Edit files (failed)\n${tail}` : '✦ Edit files (failed)';
+	}
+	const body = changes.flatMap((change, changeIndex) => {
+		const action =
+			change.type === 'add'
+				? 'Create'
+				: change.type === 'delete'
+					? 'Delete'
+					: change.type === 'move'
+						? 'Move'
+						: 'Edit';
+		const additions = change.rows.filter(row => row.kind === 'add').length;
+		const deletions = change.rows.filter(row => row.kind === 'remove').length;
+		const prefix = tool.briefed
+			? `${changeIndex === 0 ? '✦ ' : ''}  └ `
+			: changeIndex === 0
+				? '✦ '
+				: '└ ';
+		const label =
+			`${prefix}${action} ${change.path}` +
+			`${change.targetPath ? ` → ${change.targetPath}` : ''}` +
+			` (+${additions} -${deletions})`;
+		const lineWidth = Math.max(
+			1,
+			...change.rows.map(row => String(row.line).length),
+		);
+		return [
+			label,
+			...change.rows.map(row => {
+				const sigil =
+					change.type === 'add'
+						? ' '
+						: row.kind === 'add'
+							? '+'
+							: row.kind === 'remove'
+								? '-'
+								: ' ';
+				return `    ${String(row.line).padStart(lineWidth, ' ')} ${sigil} ${row.text}`;
+			}),
+		];
+	});
+	const visible = expanded ? body : body.slice(0, 50);
+	const hidden = body.length - visible.length;
+	const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
+	return fence('filediff', status, `${visible.join('\n')}${footer}`);
+}
+
+/** Render diff_edit's unified patch as the same numbered DiffView as Edit. */
+function formatUnifiedPatchPreview(
+	tool: ToolDisplayData,
+	expanded: boolean,
+	status: RowStatus,
+): string {
+	const patch = textArg(tool.args, 'diff').replace(/\r/g, '');
+	const fallbackPath = textArg(tool.args, 'path') || tool.detail || 'patch';
+	if (!patch || !/^EXIT_CODE:\s*0\b/.test(tool.output)) {
+		const tail = formatOutputTail(tool.output, expanded, 84);
+		const header = `✦ Edit ${fallbackPath}`;
+		return tail ? `${header}\n${tail}` : header;
+	}
+
+	const lines = patch.split('\n');
+	const body: string[] = [];
+	let path = fallbackPath;
+	let oldLine = 1;
+	let newLine = 1;
+	let added = 0;
+	let removed = 0;
+	let files = 0;
+	for (const line of lines) {
+		if (line.startsWith('+++ ')) {
+			const raw = line.slice(4).trim().split(/\s+/)[0] ?? '';
+			if (raw && raw !== '/dev/null') {
+				const clean = raw.replace(/^[ab]\//, '');
+				if (files === 0) path = clean;
+				files += 1;
+			}
+			continue;
+		}
+		if (
+			line.startsWith('--- ') ||
+			line.startsWith('diff --git ') ||
+			line.startsWith('index ')
+		) {
+			continue;
+		}
+		const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
+		if (hunk) {
+			oldLine = Number(hunk[1]);
+			newLine = Number(hunk[2]);
+			continue;
+		}
+		if (line.startsWith('\\ No newline at end of file')) continue;
+		if (line.startsWith('+')) {
+			body.push(`  ${String(newLine++).padStart(4, ' ')} + ${line.slice(1)}`);
+			added += 1;
+			continue;
+		}
+		if (line.startsWith('-')) {
+			body.push(`  ${String(oldLine++).padStart(4, ' ')} - ${line.slice(1)}`);
+			removed += 1;
+			continue;
+		}
+		if (line.startsWith(' ')) {
+			body.push(`  ${String(oldLine++).padStart(4, ' ')}   ${line.slice(1)}`);
+			newLine += 1;
+		}
+	}
+	if (body.length === 0) {
+		const tail = formatOutputTail(tool.output, expanded, 84);
+		return tail ? `✦ Edit ${path}\n${tail}` : `✦ Edit ${path}`;
+	}
+	const visible = expanded ? body : body.slice(0, 50);
+	const hidden = body.length - visible.length;
+	const summary =
+		` ⎿ ${removed} removed · ${added} added` +
+		(files > 1 ? ` · ${files} files` : '');
+	const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
+	return fence(
+		'filediff',
+		status,
+		`✦ Edit ${path}\n${summary}\n${visible.join('\n')}${footer}`,
 	);
 }
 
@@ -502,7 +720,7 @@ export function formatOutputTail(
 	prefix = '  └   ',
 ): string {
 	// C5: error results strip the `Error: ` prefix from the visible tail.
-	const source = output.replace(/^Error:\s*/, '');
+	const source = stripTerminalControl(output).replace(/^Error:\s*/, '');
 	const lines = source
 		.replace(/\r\n/g, '\n')
 		.replace(/\s+$/, '')
