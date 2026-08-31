@@ -1650,7 +1650,9 @@ export function App() {
 				cancelRunningBackgroundTasks('goal');
 			}
 			showToast(`Goal ${status}`);
-			if (status === 'active' && !busy()) queueGoalContinuation();
+			if (status === 'active') {
+				queueGoalContinuation({allowWhileTasksRun: true});
+			}
 			return;
 		}
 		const parsed = parseGoalSpec(input);
@@ -1677,7 +1679,10 @@ export function App() {
 		};
 		saveGoal(goal);
 		showToast('Goal active');
-		if (!busy()) queueGoalContinuation();
+		// Queue the first turn even while another turn or detached work is
+		// active. `processQueue` serializes execution; this prevents a goal
+		// becoming active and then doing nothing.
+		queueGoalContinuation({allowWhileTasksRun: true});
 	}
 
 	function loopCommand(args: string): void {
@@ -1794,7 +1799,9 @@ export function App() {
 		}
 	}
 
-	function queueGoalContinuation(): void {
+	function queueGoalContinuation(options?: {
+		allowWhileTasksRun?: boolean;
+	}): void {
 		if (
 			!currentGoal ||
 			currentGoal.status !== 'active' ||
@@ -1804,7 +1811,11 @@ export function App() {
 		if (pendingQueue().some(item => item.source === 'goal')) return;
 		// Task completions wake the model with exact output. Do not burn goal
 		// iterations polling work that is still running.
-		if (activeBgCount() > 0 || activeAgents() > 0) return;
+		if (
+			!options?.allowWhileTasksRun &&
+			(activeBgCount() > 0 || activeAgents() > 0)
+		)
+			return;
 		if (
 			currentGoal.tokenBudget &&
 			currentGoal.tokensUsed >= currentGoal.tokenBudget
