@@ -13,7 +13,7 @@ import {
 	type MockToolCall,
 	type ToolCatalogEntry,
 } from './client';
-import {normalizeBashCommand, runBash, waitForBackgroundTask} from './bash';
+import {normalizeBashCommand, runBash} from './bash';
 import {
 	commitMessagesFromCommand,
 	gitCommitMessagesViolation,
@@ -53,6 +53,7 @@ import {
 	readMCPResource,
 } from './mcp';
 import {projectRoot} from './project-paths';
+import {logSubagentEvent} from './subagent-logs';
 import {pathInsideWorkspace} from './bash-removal-guard';
 import {
 	enterWorktree,
@@ -1201,12 +1202,11 @@ registerTool('execute_bash', {
 				[...sessionExternalWriteGrants, grant],
 			);
 		}
-		// Suspend model loop until auto-backgrounded command exits. Model gets
-		// one final result, so polling commands waste neither tokens nor calls.
+		// Auto-backgrounded commands stay detached from the main turn. Waiting
+		// here kept `busy()` true until process exit, so every user message was
+		// queued even though the shell task was already running independently.
 		if (result.cwd) ctx.onCwdChange?.(result.cwd);
-		const content = result.task?.running
-			? await waitForBackgroundTask(result.task, ctx.signal)
-			: result.content;
+		const content = result.content;
 		await runBashPostHooks(command, content);
 		return content;
 	},
@@ -1912,6 +1912,13 @@ registerTool('review_changes', {
 		const results = await Promise.all(
 			reviewers.map(async name => {
 				const id = `review:${name}:${Date.now()}:${Math.random()}`;
+				logSubagentEvent({
+					event: 'started',
+					sessionId: ctx.sessionId,
+					agentId: id,
+					agentName: name,
+					detail: 'review current git diff',
+				});
 				const signal = agentSignal(id, ctx.signal);
 				setActiveAgents(prev => prev + 1);
 				live.set(name, '');
@@ -1954,6 +1961,13 @@ registerTool('review_changes', {
 						},
 						signal,
 					);
+					logSubagentEvent({
+						event: 'finished',
+						sessionId: ctx.sessionId,
+						agentId: id,
+						agentName: name,
+						status: 'completed',
+					});
 					live.set(name, `@@DONE@@\n${result}`);
 					ctx.onProgress?.(render());
 					appendMessage({
@@ -1968,6 +1982,13 @@ registerTool('review_changes', {
 					});
 					return `## ${name}\n${result}`;
 				} catch (error) {
+					logSubagentEvent({
+						event: 'error',
+						sessionId: ctx.sessionId,
+						agentId: id,
+						agentName: name,
+						detail: error instanceof Error ? error.message : String(error),
+					});
 					setActiveAgentRuns(prev =>
 						prev.map(row => (row.id === id ? {...row, status: 'error'} : row)),
 					);
@@ -1998,8 +2019,20 @@ async function executeAgentRun(
 	prompt: string,
 	ctx: ToolContext,
 	retrieved: boolean,
+	detached = false,
 ): Promise<string> {
-	const signal = agentSignal(id, ctx.signal);
+	logSubagentEvent({
+		event: history ? 'followup_started' : 'started',
+		sessionId: ctx.sessionId,
+		agentId: id,
+		agentName: subagentType,
+		detail: description,
+	});
+	// Background agents outlive the model turn that launched them. Inherit
+	// session metadata, not its AbortSignal; Esc on the main turn must not
+	// silently kill detached work.
+	const signal = agentSignal(id, detached ? undefined : ctx.signal);
+	let finalStatus: 'completed' | 'cancelled' | 'error' = 'completed';
 	setActiveAgents(prev => prev + 1);
 	if (history) {
 		setActiveAgentRuns(prev =>
@@ -2064,9 +2097,17 @@ async function executeAgentRun(
 			error instanceof Error && error.name === 'AbortError'
 				? 'cancelled'
 				: 'error';
+		finalStatus = status;
 		setActiveAgentRuns(prev =>
 			prev.map(row => (row.id === id ? {...row, status} : row)),
 		);
+		logSubagentEvent({
+			event: status,
+			sessionId: ctx.sessionId,
+			agentId: id,
+			agentName: subagentType,
+			detail: error instanceof Error ? error.message : String(error),
+		});
 		ctx.onStateChange?.();
 		notifyAgentStatus(id);
 		throw error;
@@ -2081,6 +2122,13 @@ async function executeAgentRun(
 						: row,
 				),
 		);
+		logSubagentEvent({
+			event: 'finished',
+			sessionId: ctx.sessionId,
+			agentId: id,
+			agentName: subagentType,
+			status: finalStatus,
+		});
 		setActiveAgents(prev => Math.max(0, prev - 1));
 		ctx.onStateChange?.();
 		notifyAgentStatus(id);
@@ -2118,6 +2166,7 @@ registerTool('agent', {
 			description,
 			ctx,
 			args.background !== true,
+			args.background === true,
 		);
 		if (args.background === true) {
 			void task.catch(() => {});
@@ -2157,6 +2206,7 @@ registerTool('agent_message', {
 			message,
 			ctx,
 			args.background !== true,
+			args.background === true,
 		);
 		if (args.background === true) {
 			void task.catch(() => {});
@@ -2664,9 +2714,27 @@ async function runSubagent(
 			streaming: streamingText.trim(),
 			history: structuredClone(history),
 		});
+		if (agentId && streamingText.trim()) {
+			logSubagentEvent({
+				event: 'stream',
+				sessionId: toolContext.sessionId,
+				agentId,
+				agentName: subagentType,
+				detail: streamingText,
+			});
+		}
 	};
 	publish();
 	for (let round = 0; round < 6; round++) {
+		if (agentId) {
+			logSubagentEvent({
+				event: 'round_started',
+				sessionId: toolContext.sessionId,
+				agentId,
+				agentName: subagentType,
+				data: {round: round + 1},
+			});
+		}
 		if (agentId) {
 			const queued = drainAgentMessages(agentId);
 			if (queued.length > 0) {
@@ -2735,6 +2803,15 @@ async function runSubagent(
 		history = [...history, assistantMessage];
 		publish();
 		for (const call of result.toolCalls) {
+			if (agentId) {
+				logSubagentEvent({
+					event: 'tool_started',
+					sessionId: toolContext.sessionId,
+					agentId,
+					agentName: subagentType,
+					detail: call.name,
+				});
+			}
 			const toolResult = await executeTool(call, {
 				...toolContext,
 				signal,
@@ -2748,6 +2825,16 @@ async function runSubagent(
 			if (toolSummary) transcript = [...transcript, toolSummary];
 			history = [...history, toolMessage];
 			publish();
+			if (agentId) {
+				logSubagentEvent({
+					event: 'tool_finished',
+					sessionId: toolContext.sessionId,
+					agentId,
+					agentName: subagentType,
+					detail: call.name,
+					data: {result: toolResult.content},
+				});
+			}
 		}
 	}
 	const exhausted = `Subagent ${subagentType} finished without a final response.`;
