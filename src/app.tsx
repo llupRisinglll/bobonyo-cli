@@ -3564,10 +3564,20 @@ export function App() {
 					}
 				}
 
+				// Detached work ends the current turn immediately. A model batch can
+				// contain more calls after that detached call, but those calls were
+				// never executed and therefore have no tool result. Persisting the
+				// original full declaration creates an invalid provider history:
+				// `tool_calls` contains orphaned calls, which breaks resume with
+				// "No tool output found". Keep only declarations with results.
+				const completedCallCount = toolMessages.filter(
+					message => message.role === 'tool',
+				).length;
+				const completedCalls = calls.slice(0, completedCallCount);
 				const assistantToolMsg: ChatMessageLike = {
 					role: 'assistant',
 					content: result.text,
-					tool_calls: calls.map((call: MockToolCall) => ({
+					tool_calls: completedCalls.map((call: MockToolCall) => ({
 						id: call.id,
 						name: call.name,
 						arguments: call.rawArguments,

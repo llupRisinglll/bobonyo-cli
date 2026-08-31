@@ -14,6 +14,7 @@ import {
 	displayToolName,
 	executeTool,
 	isReadOnlyTool,
+	isParallelSafeTool,
 	requiresApproval,
 	readonlyFailurePath,
 	registerTool,
@@ -700,6 +701,12 @@ describe('model-facing parity tools', () => {
 });
 
 describe('hardened core tool contracts', () => {
+	test('agent spawns remain eligible for parallel read-only batches', () => {
+		expect(isReadOnlyTool('agent')).toBe(true);
+		expect(isParallelSafeTool('agent')).toBe(true);
+		expect(isParallelSafeTool('agent_message')).toBe(false);
+	});
+
 	test('every shipped built-in tool has a description and JSON schema', () => {
 		const builtins = new Set([
 			'read_file',

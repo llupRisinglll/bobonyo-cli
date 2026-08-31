@@ -141,7 +141,6 @@ const sessionExternalWriteGrants = new Set<string>();
 const NON_PARALLEL_TOOLS = new Set([
 	'question',
 	'request_permissions',
-	'agent',
 	'agent_message',
 	'agent_cancel',
 ]);
