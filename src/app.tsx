@@ -2935,7 +2935,7 @@ export function App() {
 			...userMsg,
 			content: `${userMsg.content}${currentDateFragment()}`,
 		};
-		setInput('');
+		if (!taskTurn) setInput('');
 		setBusy(true);
 		setStreaming('');
 		setCompletionMessage('');

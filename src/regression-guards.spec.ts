@@ -1032,6 +1032,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/!waitingForBackgroundWork/);
 		expect(app).toMatch(/completionPopupController\.cancel\(\)/);
 	});
+	test('only explicit process_start creates background work', () => {
+		const bash = read('./bash.ts');
+		const app = read('./app.tsx');
+		expect(bash).not.toContain('AUTO_BACKGROUND_MS');
+		expect(bash).not.toMatch(
+			/setBgTasks\(prev => capBackgroundTasks\(\[\.\.\.prev, task\]\)\)/,
+		);
+		expect(app).toMatch(/if \(!taskTurn\) setInput\(''\)/);
+	});
 	test('task completions steer invisibly instead of impersonating users', () => {
 		const app = read('./app.tsx');
 		expect(app).toMatch(

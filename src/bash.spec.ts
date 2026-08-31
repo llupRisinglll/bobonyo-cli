@@ -4,6 +4,7 @@ import {
 	MAX_BASH_OUTPUT_LINES,
 	MAX_COMPLETED_BACKGROUND_TASKS,
 	avoidProcessMatcherSelfMatch,
+	bgTasks,
 	capBackgroundTasks,
 	capOutputTail,
 	cancelRunningBackgroundTasks,
@@ -274,6 +275,12 @@ describe('runBash abort signal', () => {
 });
 
 describe('background task ownership', () => {
+	test('foreground bash never registers a background task', async () => {
+		setBgTasks([]);
+		const result = await runBash('printf foreground');
+		expect(result.content).toContain('foreground');
+		expect(bgTasks()).toEqual([]);
+	});
 	test('keeps all running tasks and only newest completed summaries', () => {
 		const tasks = [
 			...Array.from(

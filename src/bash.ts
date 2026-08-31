@@ -1,15 +1,10 @@
 /**
- * Async bash execution with nanocoder's auto-background handover.
- *
- * A command that finishes within the foreground budget returns its full
- * output; one that outlives the budget is handed to a background task
- * registry (`bgTasks`), keeps streaming into its output buffer, and appends
- * a completion row to the transcript when it exits.
+ * Async foreground bash execution. Background work is intentional: callers
+ * use `process_start`; `execute_bash` always remains foreground.
  */
 
 import {createSignal} from 'solid-js';
 import {isAbsolute, relative, resolve, sep} from 'node:path';
-import {appendMessage} from './state';
 import {checkBashRemovalSafety} from './bash-removal-guard';
 import {loadSettings} from './settings';
 import {buildSandboxCommand} from './sandbox';
@@ -28,9 +23,6 @@ export interface BackgroundTask {
 	cancel?: () => void;
 	owner?: 'user' | 'goal' | 'loop';
 }
-
-/** nanocoder's foreground budget (source/utils/streaming-bash-tool.tsx). */
-export const AUTO_BACKGROUND_MS = 15_000;
 
 /**
  * Bash output capture caps (parity: opencode's `MAX_LINES` 2000 / `MAX_BYTES`
@@ -414,10 +406,6 @@ export async function runBash(
 		}
 	};
 
-	// Register immediately so the floating notification appears from the
-	// start (not just after the 15s budget expires). The `running: true`
-	// flag controls the count; finished() flips it to false.
-	setBgTasks(prev => capBackgroundTasks([...prev, task]));
 	const finished = (async () => {
 		await Promise.all([
 			proc.exited,
@@ -433,68 +421,11 @@ export async function runBash(
 				...task.output,
 			];
 		}
-		setBgTasks(prev => capBackgroundTasks([...prev]));
 		signal?.removeEventListener('abort', killProcessTree);
 	})();
-	// waitForBackgroundTask must await this exact process. Without this,
-	// auto-backgrounded monitor commands resolve immediately and leak forever.
 	task.completion = finished;
 
-	// nanocoder disables auto-background for a leading `sleep`.
-	const disallowAutoBackground = /^\s*sleep(?:\s|$)/.test(command);
-	const budget = disallowAutoBackground
-		? null
-		: new Promise<null>(resolve => {
-				const timeout = setTimeout(() => resolve(null), AUTO_BACKGROUND_MS);
-				timeout.unref();
-			});
-
-	const outcome = budget
-		? await Promise.race([
-				finished.then(() => 'done' as const),
-				budget.then(() => 'background' as const),
-				aborted,
-			])
-		: await Promise.race([finished.then(() => 'done' as const), aborted]);
-
-	if (outcome === 'background') {
-		void finished
-			.then(() => {
-				const nextCwd = sandboxedCwd(
-					finalCwd,
-					cwd,
-					sandbox.active,
-					workspaceRoot,
-				);
-				if (nextCwd) onCwdChange?.(nextCwd);
-				if (task.claimed) return;
-				const scriptLines = command
-					.split('\n')
-					.map(line => line.trimEnd())
-					.filter(line => line !== '');
-				appendMessage({
-					role: 'assistant',
-					// Tool-style completion row (parity: nanocoder's
-					// BackgroundTaskCompleted): `✦ Background task completed ·
-					// exit N` header, the script under a `  └   ` container with
-					// the SAME wrap/expand +N footer the tool rows use.
-					content:
-						`Background task completed · exit ${task.exitCode ?? '?'}\n` +
-						scriptLines.join('\n'),
-					kind: 'info',
-				});
-			})
-			.catch(() => {});
-		return {
-			content:
-				`Command exceeded the ${AUTO_BACKGROUND_MS / 1000}-second foreground budget ` +
-				`and is still running as background task ${task.id}. ` +
-				'A completion row appears in the chat when it exits (status line shows `bg: N` while running).',
-			task,
-		};
-	}
-
-	await finished;
+	await Promise.race([finished, aborted]);
 	if (stdoutRemainder) consumeStdout('\n');
 	const output = task.output.join('\n');
 	return {
@@ -504,7 +435,7 @@ export async function runBash(
 	};
 }
 
-/** Wait without model polling when a command auto-backgrounds. */
+/** Wait for an explicitly created background task. */
 export async function waitForBackgroundTask(
 	task: BackgroundTask,
 	signal?: AbortSignal,
