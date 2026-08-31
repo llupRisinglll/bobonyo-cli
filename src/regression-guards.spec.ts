@@ -996,6 +996,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/setBusy\(false\)/);
 		expect(app).toMatch(/break turnLoop/);
 	});
+	test('subagent background tools cannot terminate the parent turn', () => {
+		const tools = read('./tools.ts');
+		expect(tools).toMatch(
+			/const toolResult = await executeTool\(call, \{[\s\S]{0,250}onDetachedWork: undefined,/,
+		);
+	});
 	test('detached partial batches never persist orphan tool calls', () => {
 		const app = read('./app.tsx');
 		expect(app).toMatch(/const completedCallCount = toolMessages\.filter\(/);

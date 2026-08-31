@@ -2858,6 +2858,10 @@ async function runSubagent(
 			const toolResult = await executeTool(call, {
 				...toolContext,
 				signal,
+				// A subagent's detached shell belongs to the subagent, not the
+				// parent's foreground turn. Do not let its handoff callback break
+				// the parent loop after the first long-running child command.
+				onDetachedWork: undefined,
 			});
 			const toolMessage: ChatMessageLike = {
 				role: 'tool',
