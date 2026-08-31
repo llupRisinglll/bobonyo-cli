@@ -3,6 +3,7 @@ import {
 	formatGoal,
 	goalContinuationPrompt,
 	goalStatusFromResponse,
+	isGoalEnvironmentFailure,
 	loopIntervalMs,
 	newLoopJob,
 	parseDuration,
@@ -34,6 +35,19 @@ describe('goal helpers', () => {
 			'blocked',
 		);
 		expect(goalStatusFromResponse('progress report', 'active')).toBe('active');
+	});
+	test('bare terminal markers from compacted output still stop goals', () => {
+		expect(goalStatusFromResponse('GOAL_COMPLETE', 'active')).toBe('complete');
+		expect(goalStatusFromResponse('GOAL_BLOCKED', 'active')).toBe('blocked');
+	});
+	test('environment failures are recognized as goal blockers', () => {
+		expect(isGoalEnvironmentFailure('Error: process proc_123 not found.')).toBe(
+			true,
+		);
+		expect(
+			isGoalEnvironmentFailure('curl: (7) Failed to connect to localhost'),
+		).toBe(true);
+		expect(isGoalEnvironmentFailure('Tests passed: 12')).toBe(false);
 	});
 
 	test('parses Ralph-style limits and quoted completion promises', () => {

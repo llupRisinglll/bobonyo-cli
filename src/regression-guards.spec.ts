@@ -1010,6 +1010,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(app).toMatch(/tool_calls: completedCalls\.map/);
 	});
+	test('goal turns continue after detached process handoff', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/detachedWorkStarted && !autonomousTurn[\s\S]{0,500}break callLoop/,
+		);
+	});
+	test('goal continuation prompts never replace typed command history', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('/^\\/goal(?:\\s|$)/i.test(prompt)');
+		expect(app).toMatch(/if \(!autonomousTurn && !loopTurn\)/);
+	});
 
 	test('/usage remains width-safe after terminal resize', () => {
 		const app = read('./app.tsx');

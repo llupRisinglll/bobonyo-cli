@@ -220,6 +220,12 @@ export function goalStatusFromResponse(
 	return current;
 }
 
+export function isGoalEnvironmentFailure(text: string): boolean {
+	return /(?:process\s+\S+\s+not found|connection refused|econnrefused|failed to connect)/i.test(
+		text,
+	);
+}
+
 export function formatGoal(goal: SessionGoal): string {
 	const budget = goal.tokenBudget
 		? ` · ${goal.tokensUsed}/${goal.tokenBudget} tokens`

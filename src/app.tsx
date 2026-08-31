@@ -211,6 +211,7 @@ import {
 	formatLoopJob,
 	goalContinuationPrompt,
 	goalStatusFromResponse,
+	isGoalEnvironmentFailure,
 	loopIntervalMs,
 	newLoopJob,
 	parseGoalSpec,
@@ -2587,6 +2588,16 @@ export function App() {
 		// `/command` → slash-command pipeline (display-only output).
 		if (prompt.startsWith('/')) {
 			setInput('');
+			// `/goal` is a user command, not the generated continuation prompt.
+			// Keep the command in arrow history so ↑ recalls what the user typed.
+			if (/^\/goal(?:\s|$)/i.test(prompt)) {
+				setPromptHistory(prev =>
+					prev[prev.length - 1] === prompt
+						? prev
+						: [...prev.slice(-99), prompt],
+				);
+				setHistoryIndex(-1);
+			}
 			runCommand(prompt, {
 				exit,
 				clear,
@@ -2750,9 +2761,11 @@ export function App() {
 			context: [...context()],
 			prompt: value,
 		});
-		setPromptHistory(prev =>
-			prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
-		);
+		if (!autonomousTurn && !loopTurn) {
+			setPromptHistory(prev =>
+				prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
+			);
+		}
 		setHistoryIndex(-1);
 
 		// B22: the transcript shows the original; the provider sees scrubbed
@@ -3519,6 +3532,23 @@ export function App() {
 						});
 					}
 					toolResults.push(toolResult);
+					if (autonomousTurn && isGoalEnvironmentFailure(toolResult.content)) {
+						const blockedGoal = currentGoal
+							? {
+									...currentGoal,
+									status: 'blocked' as const,
+									updatedAt: Date.now(),
+								}
+							: undefined;
+						if (blockedGoal) saveGoal(blockedGoal);
+						setPendingQueue(previous =>
+							previous.filter(item => item.source !== 'goal'),
+						);
+						cancelRunningBackgroundTasks('goal');
+						appendWarning(
+							'Goal blocked automatically: environment failure detected; inspect and repair the environment before retrying.',
+						);
+					}
 					toolMessages.push({
 						role: 'tool',
 						content: toolResult.content,
@@ -3565,9 +3595,10 @@ export function App() {
 						delete next[call.id];
 						return next;
 					});
-					if (detachedWorkStarted) {
-						// Detached work owns its lifecycle. End current model turn;
-						// preserve this tool result, skip later calls in batch.
+					if (detachedWorkStarted && !autonomousTurn) {
+						// User turns release foreground ownership at handoff. Goal turns
+						// must keep reasoning with the process id/result; otherwise a
+						// successful ProcessStart ends the goal after one tool call.
 						break callLoop;
 					}
 				}
@@ -3593,7 +3624,7 @@ export function App() {
 				};
 				history = [...history, assistantToolMsg, ...toolMessages];
 				refreshContextPercent();
-				if (detachedWorkStarted) {
+				if (detachedWorkStarted && !autonomousTurn) {
 					// Finally clears busy while detached process keeps running.
 					break turnLoop;
 				}
