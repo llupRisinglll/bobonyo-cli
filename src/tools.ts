@@ -113,6 +113,8 @@ export interface ToolContext {
 	) => Promise<string>;
 	/** Persist asynchronous state changes such as background-agent progress. */
 	onStateChange?: () => void;
+	/** Tell the parent turn that detached work now owns execution. */
+	onDetachedWork?: (kind: 'bash' | 'agent', id: string) => void;
 }
 
 interface ToolDef {
@@ -1206,6 +1208,7 @@ registerTool('execute_bash', {
 		// here kept `busy()` true until process exit, so every user message was
 		// queued even though the shell task was already running independently.
 		if (result.cwd) ctx.onCwdChange?.(result.cwd);
+		if (result.task?.running) ctx.onDetachedWork?.('bash', result.task.id);
 		const content = result.content;
 		await runBashPostHooks(command, content);
 		return content;
@@ -1224,6 +1227,7 @@ registerTool('process_start', {
 			text(args, 'command'),
 			ctx.cwd || process.cwd(),
 		);
+		ctx.onDetachedWork?.('bash', row.id);
 		return `Started ${row.id} (pid ${row.proc.pid}).`;
 	},
 });
@@ -2169,6 +2173,7 @@ registerTool('agent', {
 			args.background === true,
 		);
 		if (args.background === true) {
+			ctx.onDetachedWork?.('agent', id);
 			void task.catch(() => {});
 			return `Started background agent ${id}\nUse agent_status or /ps to inspect it, agent_message to continue it, and agent_cancel to stop it.`;
 		}
@@ -2209,6 +2214,7 @@ registerTool('agent_message', {
 			args.background === true,
 		);
 		if (args.background === true) {
+			ctx.onDetachedWork?.('agent', id);
 			void task.catch(() => {});
 			return `Continued background agent ${id}`;
 		}

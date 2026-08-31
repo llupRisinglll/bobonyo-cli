@@ -987,6 +987,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const dedupes = history.match(/seenToolIds\.has\(message\.toolId\)/g) ?? [];
 		expect(dedupes.length).toBe(2);
 	});
+	test('detached background work releases foreground chat ownership', () => {
+		const app = read('./app.tsx');
+		const tools = read('./tools.ts');
+		expect(tools).toMatch(/onDetachedWork\?\.\('bash', result\.task\.id\)/);
+		expect(app).toMatch(/if \(busy\(\) && foregroundTurnOwner !== 0\)/);
+		expect(app).toMatch(/foregroundTurnOwner = 0/);
+		expect(app).toMatch(/setBusy\(false\)/);
+		expect(app).toMatch(/break turnLoop/);
+	});
 
 	test('/usage remains width-safe after terminal resize', () => {
 		const app = read('./app.tsx');

@@ -647,6 +647,8 @@ export function App() {
 	let goalAccountingTurnRef = false;
 	let goalContinuationPending = false;
 	let interruptedRef = false;
+	let foregroundTurnSeq = 0;
+	let foregroundTurnOwner = 0;
 	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
 	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
@@ -2681,7 +2683,7 @@ export function App() {
 			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
 			return;
 		}
-		if (busy()) {
+		if (busy() && foregroundTurnOwner !== 0) {
 			// Queue protection: terminal key repeats can deliver the same
 			// Enter twice before Solid paints the cleared input. Never enqueue
 			// an identical prompt/attachment set twice in one burst.
@@ -2719,6 +2721,8 @@ export function App() {
 			body: string;
 		},
 	) => {
+		const turnId = ++foregroundTurnSeq;
+		foregroundTurnOwner = turnId;
 		const autonomousTurn = autonomousTurnRef;
 		const loopTurn = loopTurnRef;
 		goalAccountingTurnRef = autonomousTurn;
@@ -2807,6 +2811,20 @@ export function App() {
 		const startedAt = Date.now();
 		let completionFailed = false;
 		let completionInterrupted = false;
+		let detachedWorkStarted = false;
+		const releaseForegroundForDetachedWork = (): void => {
+			if (detachedWorkStarted || foregroundTurnOwner !== turnId) return;
+			detachedWorkStarted = true;
+			foregroundTurnOwner = 0;
+			// Background work must not own the foreground prompt. Release these
+			// signals immediately at handoff, rather than waiting for the model
+			// loop's finally block after it notices the flag.
+			setBusy(false);
+			setRunning(false);
+			setStreaming('');
+			setReasoning('');
+			setThinkingActive(false);
+		};
 		let completionSummary = value.replace(/\s+/g, ' ').trim().slice(0, 180);
 		reportHerdrAgent('working', {
 			message: completionSummary || 'Working',
@@ -2913,7 +2931,7 @@ export function App() {
 			// a safety guard trips (empty turn / repeated tool signature /
 			// malformed retries), or an error is thrown. `round` still
 			// counts tool turns for the steering audit fact.
-			for (let round = 0; ; round++) {
+			turnLoop: for (let round = 0; ; round++) {
 				// Settled `⚙ Thought (Ns)` reports the THINKING phase length
 				// (since reasoning first streamed), not the whole turn.
 				const thoughtDuration = (): number =>
@@ -3299,11 +3317,12 @@ export function App() {
 									onCwdChange: updateWorkspaceCwd,
 									askUser,
 									onStateChange: persist,
+									onDetachedWork: releaseForegroundForDetachedWork,
 								}),
 							),
 						)
 					: null;
-				for (const [index, call] of calls.entries()) {
+				callLoop: for (const [index, call] of calls.entries()) {
 					// Render the row BEFORE execution so bash output streams live
 					// into the transcript tail (parity: streaming tool rows).
 					const detail = toolDisplayDetail(call);
@@ -3467,6 +3486,7 @@ export function App() {
 							workspaceRoot,
 							askUser,
 							onStateChange: persist,
+							onDetachedWork: releaseForegroundForDetachedWork,
 							backgroundOwner: autonomousTurn
 								? 'goal'
 								: loopTurn
@@ -3537,6 +3557,11 @@ export function App() {
 						delete next[call.id];
 						return next;
 					});
+					if (detachedWorkStarted) {
+						// Detached work owns its lifecycle. End current model turn;
+						// preserve this tool result, skip later calls in batch.
+						break callLoop;
+					}
 				}
 
 				const assistantToolMsg: ChatMessageLike = {
@@ -3550,6 +3575,10 @@ export function App() {
 				};
 				history = [...history, assistantToolMsg, ...toolMessages];
 				refreshContextPercent();
+				if (detachedWorkStarted) {
+					// Finally clears busy while detached process keeps running.
+					break turnLoop;
+				}
 				// Codex true mid-turn continuation: compact after tool output,
 				// replace local history, then sample again in this SAME loop.
 				if (shouldAutoCompactHistory(history)) {
@@ -3694,14 +3723,16 @@ export function App() {
 			// while running" the user saw). Done after the settle so the
 			// settled row's output is captured first.
 			setLiveOutputs({});
-			setCancelling(false);
-			setRunning(false);
-			setBusy(false);
-			setStreaming('');
-			setReasoning('');
-			setThinkingActive(false);
-			thinkingStartedAt = 0;
-			setThinkingElapsed(0);
+			if (foregroundTurnOwner === turnId) {
+				setCancelling(false);
+				setRunning(false);
+				setBusy(false);
+				setStreaming('');
+				setReasoning('');
+				setThinkingActive(false);
+				thinkingStartedAt = 0;
+				setThinkingElapsed(0);
+			}
 			void runHooks({event: 'Stop', data: {interrupted: interruptedRef}});
 			if (currentGoal && autonomousTurn) {
 				let nextGoal: SessionGoal = {
