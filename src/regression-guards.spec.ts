@@ -1025,6 +1025,23 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			(app.match(/queueMicrotask\(processQueue\)/g) ?? []).length,
 		).toBeGreaterThan(2);
 	});
+	test('running background work suppresses final completion surfaces', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('Waiting for ${kinds}');
+		expect(app).toContain('Chat remains available.');
+		expect(app).toMatch(/!waitingForBackgroundWork/);
+		expect(app).toMatch(/completionPopupController\.cancel\(\)/);
+	});
+	test('task completions steer invisibly instead of impersonating users', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/void runTurn\(next\.value, next\.value, next\.attachments, undefined, \{/,
+		);
+		expect(app).toMatch(/task: true/);
+		expect(app).not.toContain(
+			'appendInfo(`Background ${kind} ${id} ${status}.`);',
+		);
+	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');
 		expect(app).toContain('/^\\/goal(?:\\s|$)/i.test(prompt)');
@@ -1764,10 +1781,11 @@ describe('regression guards (COMPLETED attention popup)', () => {
 
 	test('every completion POPUP lifecycle site is wired (arm/cancel/activity)', () => {
 		const app = read('./app.tsx');
-		// New turn, /clear, /undo and /resume all cancel the popup (a stale
-		// attention modal must never survive a conversation swap).
+		// New turn, /clear, /undo, /resume, plus both background-wait paths
+		// cancel the popup. A stale completion modal must never survive either
+		// a conversation swap or still-running detached work.
 		const cancels = app.match(/completionPopupController\.cancel\(\)/g);
-		expect(cancels?.length).toBe(5);
+		expect(cancels?.length).toBe(7);
 		// ANY key is user activity (dismisses a visible popup / restarts the
 		// idle window) and the ROOT box tracks mouse move/down globally —
 		// "move the mouse to dismiss" works over the whole screen.

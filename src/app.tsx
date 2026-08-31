@@ -1569,6 +1569,15 @@ export function App() {
 				currentGoal?.status === 'active');
 		loopTurnRef = next.source === 'loop';
 		taskTurnRef = next.source === 'task';
+		if (next.source === 'task') {
+			// Completion events are agent steering, never synthetic user input.
+			// Bypass `submit` so they cannot enter transcript/history navigation.
+			void runTurn(next.value, next.value, next.attachments, undefined, {
+				autonomous: autonomousTurnRef,
+				task: true,
+			});
+			return;
+		}
 		void submit(next.value, next.attachments);
 	};
 	function queueDetachedCompletion(
@@ -1578,7 +1587,6 @@ export function App() {
 		output: string,
 		owner: DetachedCompletion['owner'],
 	): void {
-		appendInfo(`Background ${kind} ${id} ${status}.`);
 		if (owner === 'goal') {
 			refreshGoalProgress(
 				`${kind} ${id} ${status}: ${output.replace(/\s+/g, ' ').slice(-600)}`,
@@ -1896,6 +1904,29 @@ export function App() {
 				pendingTasks,
 			},
 		});
+	}
+	function pendingBackgroundWorkMessage(): string | undefined {
+		const runningJobs = bgTasks().filter(task => task.running);
+		const runningAgents = activeAgentRuns().filter(
+			agent => agent.status === 'running',
+		);
+		const count = runningJobs.length + runningAgents.length;
+		if (count === 0) return undefined;
+		const oldestStartedAt = Math.min(
+			...runningJobs.map(task => task.startedAt),
+			Date.now(),
+		);
+		const kinds = [
+			runningJobs.length > 0
+				? `${runningJobs.length} background job${runningJobs.length === 1 ? '' : 's'}`
+				: '',
+			runningAgents.length > 0
+				? `${runningAgents.length} agent${runningAgents.length === 1 ? '' : 's'}`
+				: '',
+		]
+			.filter(Boolean)
+			.join(' and ');
+		return `✦ Waiting for ${kinds} · running ${formatElapsedTime(oldestStartedAt)}. Chat remains available.`;
 	}
 
 	/** Model-facing question tool: input row resolves one explicit answer. */
@@ -2820,13 +2851,14 @@ export function App() {
 			original?: string;
 			body: string;
 		},
+		turnOverride?: {autonomous?: boolean; loop?: boolean; task?: boolean},
 	) => {
 		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
 		foregroundTurnOwner = turnId;
-		const autonomousTurn = autonomousTurnRef;
-		const loopTurn = loopTurnRef;
-		const taskTurn = taskTurnRef;
+		const autonomousTurn = turnOverride?.autonomous ?? autonomousTurnRef;
+		const loopTurn = turnOverride?.loop ?? loopTurnRef;
+		const taskTurn = turnOverride?.task ?? taskTurnRef;
 		const systemTurn = autonomousTurn || loopTurn || taskTurn;
 		goalAccountingTurnRef = autonomousTurn;
 		autonomousTurnRef = false;
@@ -3248,16 +3280,22 @@ export function App() {
 						// secondary), not a transcript row. Expires after a
 						// few seconds like the exit confirmation.
 						if (remainingUnfinishedTasks.length === 0) {
-							setCompletionMessage(
-								`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-									(completionUsage?.total_tokens
-										? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
-										: '') +
-									(cacheLabel ? ` · ${cacheLabel}` : ''),
-							);
-							// COMPLETED attention modal: a finished task arms the
-							// idle window (shows only after a full idle period).
-							completionPopupController.arm();
+							const waitingMessage = pendingBackgroundWorkMessage();
+							if (waitingMessage) {
+								setCompletionMessage(waitingMessage);
+								completionPopupController.cancel();
+							} else {
+								setCompletionMessage(
+									`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+										(completionUsage?.total_tokens
+											? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
+											: '') +
+										(cacheLabel ? ` · ${cacheLabel}` : ''),
+								);
+								// COMPLETED attention modal: a finished task arms the
+								// idle window (shows only after a full idle period).
+								completionPopupController.arm();
+							}
 						}
 						capturePRs(result.text);
 						// Keep the LOCAL history (what the provider saw) in
@@ -3776,13 +3814,19 @@ export function App() {
 			// end on tools with no final text round, the text branch above
 			// already set it; this covers the other path).
 			if (!completionMessage()) {
-				setCompletionMessage(
-					`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-						(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
-				);
-				// COMPLETED attention modal (tool-only turn path): arm the
-				// idle window exactly like the text-turn completion.
-				completionPopupController.arm();
+				const waitingMessage = pendingBackgroundWorkMessage();
+				if (waitingMessage) {
+					setCompletionMessage(waitingMessage);
+					completionPopupController.cancel();
+				} else {
+					setCompletionMessage(
+						`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+							(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
+					);
+					// COMPLETED attention modal (tool-only turn path): arm the
+					// idle window exactly like the text-turn completion.
+					completionPopupController.arm();
+				}
 			}
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -3920,9 +3964,12 @@ export function App() {
 					sessionId: sessionId(),
 				},
 			);
-			const shouldNotify = shouldNotifyTurnComplete({
-				interrupted: completionInterrupted || interruptedRef,
-			});
+			const waitingForBackgroundWork = Boolean(pendingBackgroundWorkMessage());
+			const shouldNotify =
+				!waitingForBackgroundWork &&
+				shouldNotifyTurnComplete({
+					interrupted: completionInterrupted || interruptedRef,
+				});
 			if (shouldNotify) {
 				notifyTaskComplete({
 					title: completionFailed
