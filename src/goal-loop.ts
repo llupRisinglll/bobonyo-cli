@@ -17,6 +17,16 @@ export interface SessionGoal {
 	timeUsedSeconds: number;
 	createdAt: number;
 	updatedAt: number;
+	/** Compact durable operational state, refreshed after autonomous turns. */
+	progress?: GoalProgress;
+}
+export interface GoalProgress {
+	updatedAt: number;
+	summary: string;
+	lastResult?: string;
+	activeWork: string[];
+	completedTasks: string[];
+	pendingTasks: string[];
 }
 
 export interface LoopJob {
@@ -197,12 +207,30 @@ export function goalContinuationPrompt(goal: SessionGoal): string {
 		: 'When fully complete and verified, end the response with [GOAL_COMPLETE]. Never emit this marker merely to stop the loop.';
 	return (
 		`Continue working autonomously toward this long-running goal:\n\n${goal.objective}\n\n` +
+		`${goal.progress ? formatGoalProgress(goal.progress) : ''}` +
 		iterationLine +
 		'Do concrete work with tools and use files, tests, and repository state as source of truth. ' +
 		'Do not stop merely to report progress, recap, or ask what to do next. ' +
 		`${completion} ` +
 		'When external intervention is required, end with [GOAL_BLOCKED].'
 	);
+}
+export function formatGoalProgress(progress: GoalProgress): string {
+	const lines = [
+		'Authoritative goal progress:',
+		`- Summary: ${progress.summary}`,
+		...(progress.lastResult ? [`- Latest result: ${progress.lastResult}`] : []),
+		...(progress.activeWork.length > 0
+			? [`- Active work: ${progress.activeWork.join(' | ')}`]
+			: []),
+		...(progress.completedTasks.length > 0
+			? [`- Completed: ${progress.completedTasks.join(' | ')}`]
+			: []),
+		...(progress.pendingTasks.length > 0
+			? [`- Pending: ${progress.pendingTasks.join(' | ')}`]
+			: []),
+	];
+	return `${lines.join('\n')}\n\n`;
 }
 
 export function goalStatusFromResponse(
@@ -235,5 +263,5 @@ export function formatGoal(goal: SessionGoal): string {
 	const promise = goal.completionPromise
 		? `\nCompletion promise: ${goal.completionPromise}`
 		: '';
-	return `Goal ${goal.status}${budget}${iterations}\nObjective: ${goal.objective}${promise}`;
+	return `Goal ${goal.status}${budget}${iterations}\nObjective: ${goal.objective}${promise}${goal.progress ? `\n\n${formatGoalProgress(goal.progress)}` : ''}`;
 }

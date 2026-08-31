@@ -1579,6 +1579,11 @@ export function App() {
 		owner: DetachedCompletion['owner'],
 	): void {
 		appendInfo(`Background ${kind} ${id} ${status}.`);
+		if (owner === 'goal') {
+			refreshGoalProgress(
+				`${kind} ${id} ${status}: ${output.replace(/\s+/g, ' ').slice(-600)}`,
+			);
+		}
 		setPendingQueue(previous =>
 			enqueueTaskNotification(previous, {kind, id, status, output, owner}),
 		);
@@ -1854,6 +1859,44 @@ export function App() {
 		goalContinuationPending = false;
 		queueMicrotask(processQueue);
 	}
+	function refreshGoalProgress(latestResult?: string): void {
+		if (!currentGoal) return;
+		const activeWork = [
+			...bgTasks()
+				.filter(task => task.running)
+				.map(task => `bash ${task.id}: ${task.command.slice(0, 180)}`),
+			...activeAgentRuns()
+				.filter(agent => agent.status === 'running')
+				.map(agent => `agent ${agent.id}: ${agent.description.slice(0, 180)}`),
+		].slice(-8);
+		const completedTasks = tasks()
+			.filter(task => task.status === 'completed')
+			.slice(-8)
+			.map(task => task.title);
+		const pendingTasks = tasks()
+			.filter(
+				task => task.status === 'pending' || task.status === 'in_progress',
+			)
+			.slice(0, 8)
+			.map(task => `${task.status}: ${task.title}`);
+		const summary =
+			pendingTasks[0] ??
+			activeWork[0] ??
+			completedTasks.at(-1) ??
+			'No checklist state recorded yet.';
+		saveGoal({
+			...currentGoal,
+			updatedAt: Date.now(),
+			progress: {
+				updatedAt: Date.now(),
+				summary,
+				...(latestResult ? {lastResult: latestResult.slice(0, 600)} : {}),
+				activeWork,
+				completedTasks,
+				pendingTasks,
+			},
+		});
+	}
 
 	/** Model-facing question tool: input row resolves one explicit answer. */
 	const askUser = async (
@@ -1921,11 +1964,7 @@ export function App() {
 
 	/** Codex-style threshold check against history about to be sampled. */
 	const shouldAutoCompactHistory = (history: ChatMessageLike[]): boolean => {
-		if (
-			!autoCompactRef.enabled ||
-			!canAttemptAutoCompaction(compactionFailureRef)
-		)
-			return false;
+		if (!canAttemptAutoCompaction(compactionFailureRef)) return false;
 		const model = activeEndpoint().model;
 		const projected = projectProviderMessages(history, model);
 		const tokens = estimateContextTokens(
@@ -1934,6 +1973,10 @@ export function App() {
 			`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
 		);
 		const window = activeEndpoint().contextWindow;
+		const emergencyGoalCompaction =
+			currentGoal?.status === 'active' && window > 0 && tokens >= window * 0.95;
+		if (emergencyGoalCompaction) return true;
+		if (!autoCompactRef.enabled) return false;
 		const messageTriggered = shouldAutoCompactContext({
 			estimatedTokens: 0,
 			contextWindow: window,
@@ -2838,10 +2881,17 @@ export function App() {
 			: [];
 		const sourceContext = imageSourceContext(value, attachments ?? {});
 		const mentionContext = buildMentionContext(value, workspaceCwd());
+		const goalLedger =
+			currentGoal && !systemTurn
+				? `\n\n<active_goal_state>\n${formatGoal(currentGoal)}\n</active_goal_state>`
+				: '';
 		const userMsg = {
 			role: 'user' as const,
 			content:
-				scrubberRef.scrub(providerValue) + sourceContext + mentionContext,
+				scrubberRef.scrub(providerValue) +
+				sourceContext +
+				mentionContext +
+				goalLedger,
 			...(nativeImagePaths.length > 0 ? {images: nativeImagePaths} : {}),
 		};
 		// CACHE HEAD PARITY (codex): the current DATE rides the request
@@ -3179,6 +3229,7 @@ export function App() {
 							}
 						}
 						const visibleReply = scrubberRef.rehydrate(result.text);
+						if (autonomousTurn) refreshGoalProgress(visibleReply);
 						if (
 							shouldPersistTaskCloseoutReply(
 								visibleReply,
@@ -3890,6 +3941,10 @@ export function App() {
 				if (!loopTurn) fireAfterTurnJobs();
 				if (currentGoal?.status === 'active') queueGoalContinuation();
 			}
+			// A detached task may complete while this turn still holds
+			// queryActiveRef. Its first queue attempt correctly waits; retry after
+			// cleanup releases the gate so the completion cannot strand the turn.
+			queueMicrotask(processQueue);
 		}
 	};
 

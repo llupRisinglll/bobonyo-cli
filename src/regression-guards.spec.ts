@@ -1021,6 +1021,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(processes).toMatch(/setBgTasks/);
 		expect(app).toMatch(/if \(queryActiveRef \|\| busy\(\)/);
 		expect(app).toMatch(/queryActiveRef = false/);
+		expect(
+			(app.match(/queueMicrotask\(processQueue\)/g) ?? []).length,
+		).toBeGreaterThan(2);
 	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');
@@ -1034,6 +1037,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(
 			/queueGoalContinuation\(\{allowWhileTasksRun: true\}\)/,
 		);
+	});
+	test('active goals carry a durable ledger and force emergency compaction', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('<active_goal_state>');
+		expect(app).toMatch(/const emergencyGoalCompaction/);
+		expect(app).toMatch(/tokens >= window \* 0\.95/);
 	});
 
 	test('/usage remains width-safe after terminal resize', () => {

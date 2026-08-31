@@ -3,6 +3,7 @@ import {
 	formatGoal,
 	goalContinuationPrompt,
 	goalStatusFromResponse,
+	formatGoalProgress,
 	loopIntervalMs,
 	newLoopJob,
 	parseDuration,
@@ -97,6 +98,28 @@ describe('goal helpers', () => {
 				updatedAt: 2,
 			}),
 		).toContain('1000/1000 tokens');
+	});
+	test('progress ledger is included in autonomous continuation prompts', () => {
+		const progress = {
+			updatedAt: 1,
+			summary: 'in_progress: rerun suite',
+			lastResult: '140/221 passed; 1 retry pending',
+			activeWork: ['bash proc_1: npm test'],
+			completedTasks: ['capture baseline'],
+			pendingTasks: ['in_progress: rerun suite'],
+		};
+		const prompt = goalContinuationPrompt({
+			objective: 'reach green',
+			status: 'active',
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: 1,
+			updatedAt: 1,
+			progress,
+		});
+		expect(formatGoalProgress(progress)).toContain('Latest result');
+		expect(prompt).toContain('Authoritative goal progress:');
+		expect(prompt).toContain('140/221 passed');
 	});
 });
 
