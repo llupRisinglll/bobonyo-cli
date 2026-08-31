@@ -79,3 +79,28 @@ test('structured question modal supports multi-select and option descriptions', 
 		setup.renderer.destroy();
 	}
 });
+test('long destructive permission details wrap instead of truncating targets', async () => {
+	const command =
+		'rm -- /mnt/data/KSProjects/Hilinga/.bobonyo/agents/general-purpose.md /mnt/data/KSProjects/Hilinga/.nanocoder/agents/general-purpose.md';
+	const setup = await testRender(
+		() => (
+			<QuestionModal
+				header="Question"
+				question={`Grant these tools for this session?\nexecute_bash: Delete duplicate agent files.\n  Command: ${command}\n  External paths: /mnt/data/KSProjects/Hilinga/.bobonyo/agents/general-purpose.md, /mnt/data/KSProjects/Hilinga/.nanocoder/agents/general-purpose.md`}
+				options={[{label: 'Grant'}, {label: 'Deny'}]}
+				onAnswer={() => {}}
+				onCancel={() => {}}
+			/>
+		),
+		{width: 90, height: 30},
+	);
+	try {
+		await setup.flush();
+		const text = frameText(setup.captureSpans());
+		expect(text).toContain('general-purpose.md');
+		expect(text).toContain('.nanocoder/agents');
+		expect(text).not.toContain('Hilinga/…');
+	} finally {
+		setup.renderer.destroy();
+	}
+});

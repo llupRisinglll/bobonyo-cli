@@ -5,6 +5,7 @@ import {createMemo, createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
+import {wrapText} from '../text-wrap';
 
 export interface QuestionOption {
 	label: string;
@@ -31,13 +32,19 @@ export function QuestionModal(props: {
 		props.options.filter(option => option.label.trim()),
 	);
 	const cardWidth = () => Math.min(82, Math.max(52, dims().width - 8));
+	const questionRows = createMemo(() =>
+		wrapText(props.question, Math.max(1, cardWidth() - 4)),
+	);
 	const optionRows = () =>
 		options().reduce(
 			(total, option) => total + (option.description ? 2 : 1),
 			0,
 		);
 	const cardHeight = () =>
-		Math.min(dims().height - 2, Math.max(10, optionRows() + 9));
+		Math.min(
+			dims().height - 2,
+			Math.max(10, optionRows() + questionRows().length + 8),
+		);
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const selectedAnswer = () => {
@@ -127,7 +134,9 @@ export function QuestionModal(props: {
 					{props.header || 'Question'}
 				</text>
 				<box height={1} />
-				<text fg={colors().text}>{props.question}</text>
+				<For each={questionRows()}>
+					{line => <text fg={colors().text}>{line}</text>}
+				</For>
 				<box height={1} />
 				<For each={options()}>
 					{(option, optionIndex) => {
