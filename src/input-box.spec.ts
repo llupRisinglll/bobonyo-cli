@@ -19,6 +19,8 @@ import {
 	workingLabel,
 	isBashMode,
 	typedInputChar,
+	slashToken,
+	insertSlashCommand,
 } from './components/input-box';
 import {wrapText, wrapTextDetailed} from './text-wrap';
 
@@ -179,6 +181,23 @@ describe('completionMessageRows (resume notice height)', () => {
 });
 
 describe('tokenizeInputLine', () => {
+	test('finds slash command token after existing message text', () => {
+		expect(slashToken('inspect this /sta')).toBe('sta');
+		expect(slashToken('inspect /status now')).toBe(null);
+		expect(slashToken('inspect/sta')).toBe(null);
+	});
+
+	test('inserts slash completion without destroying surrounding text', () => {
+		expect(insertSlashCommand('inspect /sta now', 'status', 12)).toEqual({
+			value: 'inspect /status  now',
+			cursor: 16,
+		});
+		expect(insertSlashCommand('inspect /sta', 'status')).toEqual({
+			value: 'inspect /status ',
+			cursor: 16,
+		});
+	});
+
 	test('empty input yields NO parts (no phantom caret cell)', () => {
 		// OpenTUI renders an empty <text> as one real cell, so an empty part
 		// paints a phantom space before the caret and shifts the block cursor

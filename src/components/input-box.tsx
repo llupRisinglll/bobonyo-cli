@@ -116,6 +116,37 @@ export function bashModeIndicatorRows(value: string): number {
 	return isBashMode(value) ? 1 : 0;
 }
 
+/** Active slash token after the cursor, anywhere in whitespace-delimited text. */
+export function slashToken(
+	inputText: string,
+	cursor = inputText.length,
+): string | null {
+	const slash = inputText.lastIndexOf('/', cursor - 1);
+	if (slash < 0) return null;
+	const before = inputText.slice(0, slash);
+	const after = inputText.slice(slash + 1, cursor);
+	if (before.length > 0 && !/\s/.test(before.at(-1)!)) return null;
+	if (/\s/.test(after)) return null;
+	return after;
+}
+
+/** Replace active slash token while preserving text before and after cursor. */
+export function insertSlashCommand(
+	inputText: string,
+	name: string,
+	cursor = inputText.length,
+): {value: string; cursor: number} {
+	const token = slashToken(inputText, cursor);
+	if (token === null) return {value: inputText, cursor};
+	const slash = inputText.lastIndexOf('/', cursor - 1);
+	const value =
+		inputText.slice(0, slash) + `/${name} ` + inputText.slice(cursor);
+	return {
+		value,
+		cursor: slash + name.length + 2,
+	};
+}
+
 /** Printable character from OpenTUI key event, including shifted punctuation. */
 export function typedInputChar(event: {name: string; shift?: boolean}): string {
 	const char = event.name;
@@ -417,8 +448,9 @@ export function InputBox(props: {
 	});
 	const completions = createMemo(() => {
 		const value = input();
-		if (!value.startsWith('/') || value.includes(' ')) return [];
-		const name = value.slice(1);
+		const token = slashToken(value, cursorPos());
+		if (token === null) return [];
+		const name = token;
 		const items: Array<{
 			name: string;
 			kind: 'command' | 'skill';
@@ -750,7 +782,10 @@ export function InputBox(props: {
 					// skill body); commands complete or run like before.
 					if (item.kind === 'skill') {
 						setSelectedCompletion(0);
-						submitExpanded(`/${item.name}`);
+						const standalone = input() === `/${item.name}`;
+						const next = insertSlashCommand(input(), item.name, cursorPos());
+						setInputAt(next.value, next.cursor);
+						if (standalone) submitExpanded(`/${item.name}`);
 						return;
 					}
 					// Typing a full `/command` + Enter RUNS it; Enter on a
@@ -760,7 +795,8 @@ export function InputBox(props: {
 						submitExpanded(input());
 						return;
 					}
-					setInputAt(`/${item.name} `);
+					const next = insertSlashCommand(input(), item.name, cursorPos());
+					setInputAt(next.value, next.cursor);
 				}
 				return;
 			}
@@ -926,7 +962,8 @@ export function InputBox(props: {
 				// wrong command.
 				const item =
 					matches[Math.min(selectedCompletion(), matches.length - 1)];
-				setInputAt(`/${item!.name} `);
+				const next = insertSlashCommand(input(), item!.name, cursorPos());
+				setInputAt(next.value, next.cursor);
 				return;
 			}
 			// A6: Tab in `!` mode completes file paths from cwd.
@@ -1223,11 +1260,23 @@ export function InputBox(props: {
 										onMouseUp: () => {
 											setSelectedCompletion(item.index);
 											if (item.kind === 'skill') {
-												submitExpanded(`/${item.name}`);
+												const standalone = input() === `/${item.name}`;
+												const next = insertSlashCommand(
+													input(),
+													item.name,
+													cursorPos(),
+												);
+												setInputAt(next.value, next.cursor);
+												if (standalone) submitExpanded(`/${item.name}`);
 											} else if (input() === `/${item.name}`) {
 												submitExpanded(input());
 											} else {
-												setInputAt(`/${item.name} `);
+												const next = insertSlashCommand(
+													input(),
+													item.name,
+													cursorPos(),
+												);
+												setInputAt(next.value, next.cursor);
 											}
 											setSelectedCompletion(0);
 										},
@@ -1463,8 +1512,8 @@ export function completionMessageRows(
  * ABOVE the input box, so the App subtracts it from the history height.
  */
 export function completionPopupHeight(inputText: string, _width = 100): number {
-	if (!inputText.startsWith('/') || inputText.includes(' ')) return 0;
-	const name = inputText.slice(1);
+	const name = slashToken(inputText);
+	if (name === null) return 0;
 	const all: string[] = [
 		...commandNames(),
 		...customCommandNames(),
