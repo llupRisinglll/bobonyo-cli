@@ -204,7 +204,7 @@ export interface ActiveAgentRun {
 	streaming: string;
 	/** Provider-format child history, persisted with parent session. */
 	history: ChatMessageLike[];
-	status: 'running' | 'completed' | 'error' | 'cancelled';
+	status: 'running' | 'completed' | 'incomplete' | 'error' | 'cancelled';
 	/** False until parent observes a background agent's settled result. */
 	retrieved?: boolean;
 }

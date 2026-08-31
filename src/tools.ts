@@ -148,6 +148,14 @@ const NON_PARALLEL_TOOLS = new Set([
 const activeAgentControllers = new Map<string, AbortController>();
 const activeAgentMessages = new Map<string, string[]>();
 const agentStatusWaiters = new Map<string, Set<() => void>>();
+export const MAX_SUBAGENT_TOOL_ROUNDS = 24;
+export const SUBAGENT_FINALIZATION_PROMPT =
+	'Provide your final response now. Do not call tools. Summarize verified findings, ' +
+	'completed work, blockers, and unresolved items using the evidence already in your history.';
+
+export function subagentResultIsIncomplete(result: string): boolean {
+	return result.startsWith('Subagent ') && result.includes('tool-round budget');
+}
 /** Cancel every delegated agent shown in `/ps` Agents tab. */
 export function cancelActiveAgents(): number {
 	const controllers = [...activeAgentControllers.values()];
@@ -1940,6 +1948,7 @@ registerTool('review_changes', {
 					},
 				]);
 				ctx.onProgress?.(render());
+				let incomplete = false;
 				try {
 					const result = await runSubagent(
 						name,
@@ -1965,13 +1974,21 @@ registerTool('review_changes', {
 						},
 						signal,
 					);
+					incomplete = subagentResultIsIncomplete(result);
 					logSubagentEvent({
 						event: 'finished',
 						sessionId: ctx.sessionId,
 						agentId: id,
 						agentName: name,
-						status: 'completed',
+						status: incomplete ? 'incomplete' : 'completed',
 					});
+					if (incomplete) {
+						setActiveAgentRuns(prev =>
+							prev.map(row =>
+								row.id === id ? {...row, status: 'incomplete'} : row,
+							),
+						);
+					}
 					live.set(name, `@@DONE@@\n${result}`);
 					ctx.onProgress?.(render());
 					appendMessage({
@@ -2004,7 +2021,7 @@ registerTool('review_changes', {
 							.slice(-20)
 							.map(row =>
 								row.id === id && row.status === 'running'
-									? {...row, status: 'completed'}
+									? {...row, status: incomplete ? 'incomplete' : 'completed'}
 									: row,
 							),
 					);
@@ -2036,7 +2053,8 @@ async function executeAgentRun(
 	// session metadata, not its AbortSignal; Esc on the main turn must not
 	// silently kill detached work.
 	const signal = agentSignal(id, detached ? undefined : ctx.signal);
-	let finalStatus: 'completed' | 'cancelled' | 'error' = 'completed';
+	let finalStatus: 'completed' | 'incomplete' | 'cancelled' | 'error' =
+		'completed';
 	setActiveAgents(prev => prev + 1);
 	if (history) {
 		setActiveAgentRuns(prev =>
@@ -2071,7 +2089,7 @@ async function executeAgentRun(
 	ctx.onStateChange?.();
 	notifyAgentStatus(id);
 	try {
-		return await runSubagent(
+		const result = await runSubagent(
 			subagentType,
 			description,
 			update => {
@@ -2096,6 +2114,8 @@ async function executeAgentRun(
 			ctx,
 			id,
 		);
+		if (subagentResultIsIncomplete(result)) finalStatus = 'incomplete';
+		return result;
 	} catch (error) {
 		const status =
 			error instanceof Error && error.name === 'AbortError'
@@ -2122,7 +2142,7 @@ async function executeAgentRun(
 				.slice(-20)
 				.map(row =>
 					row.id === id && row.status === 'running'
-						? {...row, status: 'completed', streaming: ''}
+						? {...row, status: finalStatus, streaming: ''}
 						: row,
 				),
 		);
@@ -2731,7 +2751,7 @@ async function runSubagent(
 		}
 	};
 	publish();
-	for (let round = 0; round < 6; round++) {
+	for (let round = 0; round < MAX_SUBAGENT_TOOL_ROUNDS; round++) {
 		if (agentId) {
 			logSubagentEvent({
 				event: 'round_started',
@@ -2772,6 +2792,15 @@ async function runSubagent(
 		);
 		if (result.toolCalls.length === 0) {
 			const finalText = result.text.trim() || 'Subagent produced no output.';
+			if (agentId) {
+				logSubagentEvent({
+					event: 'round_finished',
+					sessionId: toolContext.sessionId,
+					agentId,
+					agentName: subagentType,
+					data: {round: round + 1, toolCalls: 0, final: true},
+				});
+			}
 			transcript = [...transcript, shortText(finalText)];
 			history = [...history, {role: 'assistant', content: finalText}];
 			publish();
@@ -2793,6 +2822,15 @@ async function runSubagent(
 				agentName: subagentType,
 				data: {description, result: finalText},
 			});
+			if (agentId) {
+				logSubagentEvent({
+					event: 'final_response',
+					sessionId: toolContext.sessionId,
+					agentId,
+					agentName: subagentType,
+					detail: finalText,
+				});
+			}
 			return finalText;
 		}
 		const assistantMessage: ChatMessageLike = {
@@ -2842,10 +2880,75 @@ async function runSubagent(
 				});
 			}
 		}
+		if (agentId) {
+			logSubagentEvent({
+				event: 'round_finished',
+				sessionId: toolContext.sessionId,
+				agentId,
+				agentName: subagentType,
+				data: {round: round + 1, toolCalls: result.toolCalls.length},
+			});
+		}
 	}
-	const exhausted = `Subagent ${subagentType} finished without a final response.`;
-	transcript = [...transcript, exhausted];
-	history = [...history, {role: 'assistant', content: exhausted}];
+	// Tool-heavy reviewers often spend more than one round on bookkeeping and
+	// inspection. Do not manufacture a fake final response when the tool-round
+	// budget is reached. Force one last tool-free report instead.
+	if (agentId) {
+		logSubagentEvent({
+			event: 'finalization_started',
+			sessionId: toolContext.sessionId,
+			agentId,
+			agentName: subagentType,
+			data: {maxToolRounds: MAX_SUBAGENT_TOOL_ROUNDS},
+		});
+	}
+	history = [...history, {role: 'user', content: SUBAGENT_FINALIZATION_PROMPT}];
+	let finalization = '';
+	try {
+		const result = await streamChat(
+			history,
+			{
+				onText: text => {
+					finalization += text;
+					publish(finalization);
+				},
+				onReasoning: () => {},
+			},
+			signal,
+			[],
+			undefined,
+			undefined,
+			undefined,
+			endpoint,
+		);
+		finalization = result.text.trim() || finalization.trim();
+	} catch (error) {
+		if (agentId) {
+			logSubagentEvent({
+				event: 'finalization_error',
+				sessionId: toolContext.sessionId,
+				agentId,
+				agentName: subagentType,
+				detail: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	const finalText =
+		finalization ||
+		`Subagent ${subagentType} reached its tool-round budget without a final report. ` +
+			'Review the latest tool output and continue with agent_message.';
+	transcript = [...transcript, shortText(finalText)];
+	history = [...history, {role: 'assistant', content: finalText}];
 	publish();
-	return exhausted;
+	if (agentId) {
+		logSubagentEvent({
+			event: 'finalization_finished',
+			sessionId: toolContext.sessionId,
+			agentId,
+			agentName: subagentType,
+			status: finalization ? 'completed' : 'incomplete',
+			detail: finalText,
+		});
+	}
+	return finalText;
 }

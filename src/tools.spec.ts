@@ -24,6 +24,8 @@ import {
 	resetDeferredToolActivation,
 	resetSessionPermissionGrants,
 	searchDeferredTools,
+	MAX_SUBAGENT_TOOL_ROUNDS,
+	SUBAGENT_FINALIZATION_PROMPT,
 } from './tools';
 import {loadPersistentMemory} from './memory';
 import {
@@ -826,6 +828,12 @@ test('agent_wait returns settled state without polling and live messages queue',
 	} finally {
 		setActiveAgentRuns([]);
 	}
+});
+
+test('subagent exhaustion has a bounded recovery finalization contract', () => {
+	expect(MAX_SUBAGENT_TOOL_ROUNDS).toBeGreaterThan(6);
+	expect(SUBAGENT_FINALIZATION_PROMPT).toContain('Do not call tools');
+	expect(SUBAGENT_FINALIZATION_PROMPT).toContain('verified findings');
 });
 
 test('read and search tools reject symlink escapes outside workspace', async () => {
