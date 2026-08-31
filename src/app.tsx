@@ -1615,7 +1615,12 @@ export function App() {
 				updatedAt: Date.now(),
 			} as SessionGoal;
 			saveGoal(next);
-			if (status !== 'active') cancelRunningBackgroundTasks('goal');
+			if (status !== 'active') {
+				setPendingQueue(previous =>
+					previous.filter(item => item.source !== 'goal'),
+				);
+				cancelRunningBackgroundTasks('goal');
+			}
 			showToast(`Goal ${status}`);
 			if (status === 'active' && !busy()) queueGoalContinuation();
 			return;
@@ -3104,6 +3109,9 @@ export function App() {
 							if (status !== currentGoal.status) {
 								saveGoal({...currentGoal, status, updatedAt: Date.now()});
 								if (status === 'complete' || status === 'blocked') {
+									setPendingQueue(previous =>
+										previous.filter(item => item.source !== 'goal'),
+									);
 									cancelRunningBackgroundTasks('goal');
 								}
 							}

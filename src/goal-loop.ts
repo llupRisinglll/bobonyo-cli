@@ -213,10 +213,10 @@ export function goalStatusFromResponse(
 	if (
 		completionPromise
 			? text.trim() === `<promise>${completionPromise}</promise>`
-			: /\[GOAL_COMPLETE\]/i.test(text)
+			: /\[?GOAL_COMPLETE\]?/i.test(text)
 	)
 		return 'complete';
-	if (/\[GOAL_BLOCKED\]/i.test(text)) return 'blocked';
+	if (/\[?GOAL_BLOCKED\]?/i.test(text)) return 'blocked';
 	return current;
 }
 
