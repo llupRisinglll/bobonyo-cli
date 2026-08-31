@@ -279,7 +279,11 @@ export async function runBash(
 	command = avoidProcessMatcherSelfMatch(command);
 	// Non-negotiable containment gate. Approval mode never overrides this:
 	// shell deletion may touch literal targets strictly below workspace only.
-	const removalSafety = checkBashRemovalSafety(command, cwd);
+	const removalSafety = checkBashRemovalSafety(
+		command,
+		cwd,
+		extraWritablePaths,
+	);
 	if (!removalSafety.allowed) {
 		return {
 			content: `REFUSED dangerous deletion: ${removalSafety.reason}. Use delete_file for an explicit in-workspace file.`,

@@ -17,14 +17,17 @@ const SHELL_WRAPPERS = new Set([
 	'timeout',
 ]);
 
-function insideWorkspace(path: string, cwd: string): boolean {
-	const rel = relative(resolve(cwd), resolve(path));
+function insideRoot(path: string, root: string): boolean {
+	const rel = relative(resolve(root), resolve(path));
 	return (
 		rel !== '' &&
 		rel !== '..' &&
 		!rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
 		!isAbsolute(rel)
 	);
+}
+function insideWorkspace(path: string, cwd: string): boolean {
+	return insideRoot(path, cwd);
 }
 
 function shellWords(command: string): string[] {
@@ -137,6 +140,7 @@ function existingAncestor(path: string): string | undefined {
 export function checkBashRemovalSafety(
 	command: string,
 	cwd: string,
+	allowedExternalRoots: string[] = [],
 ): RemovalGuardResult {
 	const words = shellWords(command);
 	const hasRemovalWord = words.some(word =>
@@ -213,7 +217,10 @@ export function checkBashRemovalSafety(
 				};
 			}
 			const absolute = resolve(cwd, target);
-			if (!insideWorkspace(absolute, cwd)) {
+			const allowedRoot = [cwd, ...allowedExternalRoots].find(root =>
+				insideRoot(absolute, root),
+			);
+			if (!allowedRoot) {
 				return {
 					allowed: false,
 					reason: `target '${absolute}' is outside current workspace or is workspace root`,
@@ -222,8 +229,8 @@ export function checkBashRemovalSafety(
 			const ancestor = existingAncestor(absolute);
 			if (
 				ancestor &&
-				resolve(ancestor) !== resolve(cwd) &&
-				!insideWorkspace(ancestor, cwd)
+				resolve(ancestor) !== resolve(allowedRoot) &&
+				!insideRoot(ancestor, allowedRoot)
 			) {
 				return {
 					allowed: false,
@@ -239,7 +246,7 @@ export function checkBashRemovalSafety(
 					};
 				}
 				const real = realpathSync(absolute);
-				if (!insideWorkspace(real, cwd)) {
+				if (!insideRoot(real, allowedRoot)) {
 					return {
 						allowed: false,
 						reason: `resolved target '${real}' escapes current workspace`,

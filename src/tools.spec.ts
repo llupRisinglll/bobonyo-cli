@@ -426,34 +426,66 @@ describe('deferred tool discovery', () => {
 });
 
 describe('scoped permission requests', () => {
-	test('grant is session-scoped and does not bypass workspace guards', async () => {
+	test('grant is session-scoped and external access is path-scoped', async () => {
 		resetSessionPermissionGrants();
 		expect(requiresApproval('execute_bash', 'normal')).toBe(true);
+		const external = mkdtempSync(join(tmpdir(), 'bobonyo-external-grant-'));
+		const workspace = mkdtempSync(join(tmpdir(), 'bobonyo-workspace-'));
+		const allowed = join(external, 'general-purpose.md');
+		const denied = join(tmpdir(), 'bobonyo-external-denied.md');
+		writeFileSync(allowed, 'agent');
+		writeFileSync(denied, 'keep');
+		let prompt = '';
 		const granted = await executeTool(
 			{
 				id: 'permission-1',
 				name: 'request_permissions',
 				arguments: {
 					permissions: [
-						{tool: 'execute_bash', reason: 'run project verification'},
+						{
+							tool: 'delete_file',
+							reason: 'remove duplicate agent definition',
+							operation: `delete_file ${allowed}`,
+							paths: [allowed],
+						},
 					],
 				},
 				rawArguments: '',
 			},
-			{askUser: async () => 'Grant'},
+			{
+				askUser: async question => {
+					prompt = question;
+					return 'Grant';
+				},
+			},
 		);
 		expect(granted.content).toContain('Granted for this session');
-		expect(requiresApproval('execute_bash', 'normal')).toBe(false);
-		const escaped = await executeTool(
+		expect(prompt).toContain(`Command: delete_file ${allowed}`);
+		expect(prompt).toContain(`External paths: ${allowed}`);
+		const deleted = await executeTool(
 			{
 				id: 'permission-escape',
 				name: 'delete_file',
-				arguments: {path: '/etc/passwd'},
+				arguments: {path: allowed},
 				rawArguments: '',
 			},
-			{cwd: '/tmp'},
+			{cwd: workspace, askUser: async () => 'Deny'},
 		);
-		expect(escaped.content).toContain('REFUSED deletion outside');
+		expect(deleted.content).toBe(`Deleted ${allowed}`);
+		const escaped = await executeTool(
+			{
+				id: 'permission-outside-scope',
+				name: 'delete_file',
+				arguments: {path: denied},
+				rawArguments: '',
+			},
+			{cwd: workspace, askUser: async () => 'Deny'},
+		);
+		expect(escaped.content).toContain('external folder remains read-only');
+		expect(existsSync(denied)).toBe(true);
+		rmSync(external, {recursive: true, force: true});
+		rmSync(workspace, {recursive: true, force: true});
+		rmSync(denied, {force: true});
 		resetSessionPermissionGrants();
 	});
 

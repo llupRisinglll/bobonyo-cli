@@ -146,6 +146,7 @@ const toolRegistry = new Map<string, ToolDef>();
 const activatedDeferredTools = new Set<string>();
 const sessionPermissionGrants = new Set<string>();
 const sessionExternalWriteGrants = new Set<string>();
+const sessionExternalDeleteGrants = new Set<string>();
 const NON_PARALLEL_TOOLS = new Set([
 	'question',
 	'request_permissions',
@@ -267,6 +268,7 @@ export function resetDeferredToolActivation(): void {
 export function resetSessionPermissionGrants(): void {
 	sessionPermissionGrants.clear();
 	sessionExternalWriteGrants.clear();
+	sessionExternalDeleteGrants.clear();
 }
 /** OpenCode-style model capability gate for patch-oriented GPT models. */
 export function modelUsesApplyPatch(model: string): boolean {
@@ -482,6 +484,7 @@ function externalGrantRoot(path: string): string {
 async function requestExternalWriteAccess(
 	path: string,
 	ctx: ToolContext,
+	operation: string,
 ): Promise<string | null> {
 	const target = resolve(path);
 	const workspaceRoot = resolve(ctx.workspaceRoot || ctx.cwd || process.cwd());
@@ -492,7 +495,7 @@ async function requestExternalWriteAccess(
 	if (!ctx.askUser || process.env.NANOCODER_NONINTERACTIVE) return null;
 	const folder = externalGrantRoot(target);
 	const answer = await ctx.askUser(
-		`Allow edits in external folder?\n${folder}`,
+		`Allow external workspace access?\nTool: ${operation}\nTarget: ${target}\nFolder: ${folder}`,
 		[
 			{label: 'Allow once', description: 'Allow this operation only.'},
 			{
@@ -1080,7 +1083,7 @@ registerTool('question', {
 
 registerTool('request_permissions', {
 	description:
-		'Request session-scoped approval for specific tool names. State why each capability is needed. Grants reduce repeated prompts but never bypass workspace confinement, deletion guards, sandboxing, or other hard safety checks.',
+		'Request session-scoped approval for specific tool names. Include exact command and external paths when needed. Granted external access is limited to listed paths; dynamic, recursive, and unlisted deletion remain blocked.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -1091,6 +1094,8 @@ registerTool('request_permissions', {
 					properties: {
 						tool: {type: 'string'},
 						reason: {type: 'string'},
+						operation: {type: 'string'},
+						paths: {type: 'array', items: {type: 'string'}},
 					},
 					required: ['tool', 'reason'],
 				},
@@ -1107,7 +1112,15 @@ registerTool('request_permissions', {
 					const row = value as Record<string, unknown>;
 					const tool = String(row.tool ?? '').trim();
 					const reason = String(row.reason ?? '').trim();
-					return tool && reason ? [{tool: resolveToolName(tool), reason}] : [];
+					const operation = String(row.operation ?? '').trim();
+					const paths = Array.isArray(row.paths)
+						? row.paths
+								.filter((path): path is string => typeof path === 'string')
+								.map(path => resolve(path))
+						: [];
+					return tool && reason
+						? [{tool: resolveToolName(tool), reason, operation, paths}]
+						: [];
 				})
 			: [];
 		if (requested.length === 0) return 'Error: no valid permissions requested.';
@@ -1115,13 +1128,29 @@ registerTool('request_permissions', {
 		if (unknown.length)
 			return `Error: unknown tools: ${unknown.map(row => row.tool).join(', ')}`;
 		const answer = await ctx.askUser(
-			`Grant these tools for this session?\n${requested.map(row => `${row.tool}: ${row.reason}`).join('\n')}`,
+			`Grant these tools for this session?\n${requested
+				.map(row => {
+					const operation = row.operation
+						? `\n  Command: ${row.operation}`
+						: '';
+					const paths = row.paths.length
+						? `\n  External paths: ${row.paths.join(', ')}`
+						: '';
+					return `${row.tool}: ${row.reason}${operation}${paths}`;
+				})
+				.join('\n')}`,
 			[{label: 'Grant'}, {label: 'Deny'}],
 			false,
 		);
 		if (answer !== 'Grant') return 'Permission denied.';
-		for (const row of requested) sessionPermissionGrants.add(row.tool);
-		return `Granted for this session: ${requested.map(row => row.tool).join(', ')}. Hard safety boundaries remain enforced.`;
+		for (const row of requested) {
+			sessionPermissionGrants.add(row.tool);
+			for (const path of row.paths) {
+				if (row.tool === 'delete_file') sessionExternalDeleteGrants.add(path);
+				else sessionExternalWriteGrants.add(externalGrantRoot(path));
+			}
+		}
+		return `Granted for this session: ${requested.map(row => row.tool).join(', ')}. External access is limited to listed paths; recursive or dynamic deletion remains blocked.`;
 	},
 });
 
@@ -1204,7 +1233,7 @@ registerTool('execute_bash', {
 		const blockedPath = readonlyFailurePath(result.content);
 		if (blockedPath) {
 			const absolute = resolve(cwd, blockedPath);
-			const grant = await requestExternalWriteAccess(absolute, ctx);
+			const grant = await requestExternalWriteAccess(absolute, ctx, command);
 			if (!grant) {
 				return `Permission denied: external folder remains read-only: ${externalGrantRoot(absolute)}`;
 			}
@@ -1430,7 +1459,9 @@ registerTool('write_file', {
 		const requested = text(args, 'path') || 'scratch/mock-write.txt';
 		const cwd = ctx.cwd || process.cwd();
 		const path = resolve(cwd, requested);
-		if (!(await requestExternalWriteAccess(path, ctx))) {
+		if (
+			!(await requestExternalWriteAccess(path, ctx, `write_file ${requested}`))
+		) {
 			return `Permission denied: external folder remains read-only: ${externalGrantRoot(path)}`;
 		}
 		const body = text(args, 'content') ?? '';
@@ -1506,7 +1537,11 @@ registerTool('edit_file', {
 		const path = resolve(cwd, requested);
 		if (
 			!pathWithinWorkspace(path, workspaceRoot) &&
-			!(await requestExternalWriteAccess(path, ctx))
+			!(await requestExternalWriteAccess(
+				path,
+				ctx,
+				`string_replace ${requested}`,
+			))
 		) {
 			return `Permission denied: external folder remains read-only: ${externalGrantRoot(path)}`;
 		}
@@ -1579,7 +1614,16 @@ registerTool('delete_file', {
 		const workspaceRoot = ctx.workspaceRoot || cwd;
 		const absolute = resolve(cwd, path);
 		if (!pathInsideWorkspace(absolute, workspaceRoot)) {
-			return `REFUSED deletion outside current workspace or of workspace root: ${path}`;
+			if (!sessionExternalDeleteGrants.has(absolute)) {
+				const grant = await requestExternalWriteAccess(
+					absolute,
+					ctx,
+					`delete_file ${path}`,
+				);
+				if (!grant) {
+					return `Permission denied: external folder remains read-only: ${externalGrantRoot(absolute)}`;
+				}
+			}
 		}
 		try {
 			const stat = statSync(absolute);

@@ -19,6 +19,20 @@ describe('Bash removal safety', () => {
 			expect(checkBashRemovalSafety(command, cwd).allowed).toBe(false);
 		}
 	});
+	test('allows literal deletion only below an explicit external root', () => {
+		const external = '/tmp/bobonyo-external-grant';
+		mkdirSync(external, {recursive: true});
+		expect(
+			checkBashRemovalSafety(`${'rm'} ${external}/general-purpose.md`, cwd, [
+				external,
+			]),
+		).toMatchObject({allowed: true});
+		expect(
+			checkBashRemovalSafety(`${'rm'} ${external}/../outside.md`, cwd, [
+				external,
+			]).allowed,
+		).toBe(false);
+	});
 
 	test('refuses workspace root and recursive rm', () => {
 		for (const command of ['rm .', 'rm -rf .', 'rm -r safe-dir']) {
