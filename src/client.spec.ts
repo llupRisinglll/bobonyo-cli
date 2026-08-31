@@ -130,6 +130,28 @@ describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () =>
 			]),
 		).toEqual([{role: 'assistant', content: 'ok'}]);
 	});
+	test('a tool declaration without persisted output is dropped', () => {
+		expect(
+			sanitizeToolCallIds([
+				{
+					role: 'assistant',
+					content: 'starting',
+					tool_calls: [
+						{id: 'call_done', name: 'execute_bash', arguments: '{}'},
+						{id: 'call_missing', name: 'process_start', arguments: '{}'},
+					],
+				},
+				{role: 'tool', content: 'done', tool_call_id: 'call_done'},
+			]),
+		).toEqual([
+			{
+				role: 'assistant',
+				content: 'starting',
+				tool_calls: [{id: 'call_done', name: 'execute_bash', arguments: '{}'}],
+			},
+			{role: 'tool', content: 'done', tool_call_id: 'call_done'},
+		]);
+	});
 });
 
 describe('parseXmlToolCalls', () => {

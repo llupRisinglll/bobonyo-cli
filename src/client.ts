@@ -408,15 +408,27 @@ export function sanitizeToolCallIds(
 	let pending: string[] = [];
 	let callSeq = 0;
 	let skipResults = false;
+	const resultIds = new Set(
+		messages
+			.filter(message => message.role === 'tool' && message.tool_call_id)
+			.map(message => message.tool_call_id),
+	);
+	let blankResultSlots = messages.filter(
+		message => message.role === 'tool' && !message.tool_call_id,
+	).length;
 	for (const message of messages) {
 		if (message.role === 'assistant' && message.tool_calls?.length) {
 			const calls = message.tool_calls
-				.map(call => ({
-					id: call.id || `call-${callSeq++}`,
-					name: call.name,
-					arguments: call.arguments,
-				}))
-				.filter(call => Boolean(call.name.trim()));
+				.map(call => {
+					const id = call.id || `call-${callSeq++}`;
+					const hasResult = resultIds.has(call.id) || blankResultSlots > 0;
+					if (!hasResult) return null;
+					if (!call.id) blankResultSlots -= 1;
+					return {id, name: call.name, arguments: call.arguments};
+				})
+				.filter((call): call is {id: string; name: string; arguments: string} =>
+					Boolean(call && call.name.trim()),
+				);
 			if (calls.length === 0) {
 				// Degenerate block (e.g. legacy conversion lost the call
 				// metadata): its results below are orphans — drop them all.
