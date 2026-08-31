@@ -29,6 +29,22 @@ test('pre-tool text preserves prose after brief sentence', () => {
 	});
 });
 
+test('pre-tool text preserves Markdown entries instead of hiding them in brief chrome', () => {
+	const markdown =
+		'## Findings\n\nThe launcher inherits the parent process.\n\n- Keep cwd stable.';
+	expect(splitPreToolText(markdown)).toEqual({brief: '', remainder: markdown});
+});
+
+test('plain declarative assistant sentence remains a normal transcript entry', () => {
+	const prose = 'The launcher inherits the parent process.';
+	expect(splitPreToolText(prose)).toEqual({brief: '', remainder: prose});
+});
+
+test('multi-line plain prose remains a normal Markdown entry', () => {
+	const prose = 'I found the issue.\n\nThe next tool call checks the fix.';
+	expect(splitPreToolText(prose)).toEqual({brief: '', remainder: prose});
+});
+
 test('later tool rounds inherit the brief batch indentation marker', () => {
 	expect(toolCallBrief('Inspect files.', 0, false)).toBe('Inspect files.');
 	expect(toolCallBrief('Inspect files.', 1, false)).toBe(' ');
