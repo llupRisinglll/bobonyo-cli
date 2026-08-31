@@ -991,7 +991,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const app = read('./app.tsx');
 		const tools = read('./tools.ts');
 		expect(tools).toMatch(/onDetachedWork\?\.\('bash', result\.task\.id\)/);
-		expect(app).toMatch(/if \(busy\(\) && foregroundTurnOwner !== 0\)/);
+		expect(app).toMatch(
+			/if \(queryActiveRef \|\| \(busy\(\) && foregroundTurnOwner !== 0\)\)/,
+		);
 		expect(app).toMatch(/foregroundTurnOwner = 0/);
 		expect(app).toMatch(/setBusy\(false\)/);
 		expect(app).toMatch(/break turnLoop/);
@@ -1010,16 +1012,24 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(app).toMatch(/tool_calls: completedCalls\.map/);
 	});
-	test('goal turns continue after detached process handoff', () => {
+	test('detached completions wake model through task notifications', () => {
 		const app = read('./app.tsx');
+		const processes = read('./persistent-process.ts');
+		expect(app).toMatch(/onDetachedComplete: queueDetachedCompletion/);
+		expect(app).toMatch(/enqueueTaskNotification/);
 		expect(app).toMatch(
-			/detachedWorkStarted && !autonomousTurn[\s\S]{0,500}break callLoop/,
+			/if \(activeBgCount\(\) > 0 \|\| activeAgents\(\) > 0\) return/,
 		);
+		expect(processes).toMatch(/setBgTasks/);
+		expect(app).toMatch(/if \(queryActiveRef \|\| busy\(\)/);
+		expect(app).toMatch(/queryActiveRef = false/);
 	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');
 		expect(app).toContain('/^\\/goal(?:\\s|$)/i.test(prompt)');
-		expect(app).toMatch(/if \(!autonomousTurn && !loopTurn\)/);
+		expect(app).toMatch(
+			/const systemTurn = autonomousTurn \|\| loopTurn \|\| taskTurn/,
+		);
 	});
 
 	test('/usage remains width-safe after terminal resize', () => {

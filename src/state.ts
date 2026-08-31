@@ -1,6 +1,7 @@
 import {runHooks} from './hooks';
 import {createMemo, createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
+import type {PendingWorkItem} from './background-notification';
 import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 
 export interface ChatMessage {
@@ -113,13 +114,9 @@ export const [historyIndex, setHistoryIndex] = createSignal(-1);
  * Each entry keeps its ATTACHMENTS so `[Image #N]` vision analysis still
  * works for queued prompts (the image paths would otherwise be lost).
  */
-export const [pendingQueue, setPendingQueue] = createSignal<
-	Array<{
-		value: string;
-		attachments?: Record<string, string>;
-		source?: 'goal' | 'loop';
-	}>
->([]);
+export const [pendingQueue, setPendingQueue] = createSignal<PendingWorkItem[]>(
+	[],
+);
 /** Per-turn usage snapshots for `/usage`. */
 export const [usageHistory, setUsageHistory] = createSignal<
 	Array<{

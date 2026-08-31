@@ -367,6 +367,11 @@ export function InputBox(props: {
 		return true;
 	};
 	const [selectedQueued, setSelectedQueued] = createSignal(-1);
+	const visiblePendingQueue = createMemo(() =>
+		pendingQueue()
+			.map((item, queueIndex) => ({item, queueIndex}))
+			.filter(({item}) => !item.source),
+	);
 	const [selectedCompletion, setSelectedCompletion] = createSignal(0);
 	const [mentionSelected, setMentionSelected] = createSignal(0);
 	const [pasteAttachments, setPasteAttachments] = createSignal<
@@ -825,7 +830,7 @@ export function InputBox(props: {
 		if (
 			busy() &&
 			input().length === 0 &&
-			pendingQueue().length > 0 &&
+			visiblePendingQueue().length > 0 &&
 			(event.name === 'up' || event.name === 'down')
 		) {
 			event.preventDefault();
@@ -838,7 +843,7 @@ export function InputBox(props: {
 					return;
 				}
 			} else {
-				if (index >= pendingQueue().length - 1) {
+				if (index >= visiblePendingQueue().length - 1) {
 					return;
 				}
 				setSelectedQueued(index + 1);
@@ -986,11 +991,12 @@ export function InputBox(props: {
 			// Enter on a selected queued item loads it back into the input
 			// for editing (and removes it from the queue).
 			const queuedIndex = selectedQueued();
-			if (queuedIndex >= 0 && queuedIndex < pendingQueue().length) {
-				const value = pendingQueue()[queuedIndex]?.value ?? '';
+			if (queuedIndex >= 0 && queuedIndex < visiblePendingQueue().length) {
+				const selected = visiblePendingQueue()[queuedIndex];
+				const value = selected?.item.value ?? '';
 				setInputAt(value);
 				setPendingQueue(prev =>
-					prev.filter((_, index) => index !== queuedIndex),
+					prev.filter((_, index) => index !== selected?.queueIndex),
 				);
 				setSelectedQueued(-1);
 				return;
@@ -1006,14 +1012,17 @@ export function InputBox(props: {
 			const queuedIndex = selectedQueued();
 			if (
 				queuedIndex >= 0 &&
-				queuedIndex < pendingQueue().length &&
+				queuedIndex < visiblePendingQueue().length &&
 				input().length === 0
 			) {
+				const selected = visiblePendingQueue()[queuedIndex];
 				setPendingQueue(prev =>
-					prev.filter((_, index) => index !== queuedIndex),
+					prev.filter((_, index) => index !== selected?.queueIndex),
 				);
 				setSelectedQueued(prev =>
-					prev >= pendingQueue().length - 1 ? pendingQueue().length - 2 : prev,
+					prev >= visiblePendingQueue().length - 1
+						? visiblePendingQueue().length - 2
+						: prev,
 				);
 				return;
 			}
@@ -1140,15 +1149,15 @@ export function InputBox(props: {
 			    `(queued)` tag; ONLY the selected row gets the active-row
 			    highlight (info bg + bold), so the block never floods the
 			    screen with primary. */}
-			<Show when={pendingQueue().length > 0}>
-				<box flexDirection="column" height={pendingQueue().length + 1}>
+			<Show when={visiblePendingQueue().length > 0}>
+				<box flexDirection="column" height={visiblePendingQueue().length + 1}>
 					<box height={1} flexDirection="row">
 						<text fg={colors().secondary} attributes={dim()}>
 							Queued messages (↑/↓ select, Enter edit, Del remove):
 						</text>
 					</box>
-					<For each={pendingQueue()}>
-						{(message, index) => {
+					<For each={visiblePendingQueue()}>
+						{(entry, index) => {
 							const active = selectedQueued() === index();
 							return (
 								<box
@@ -1178,7 +1187,7 @@ export function InputBox(props: {
 									    the cell (completion-row pattern), the next
 									    node starts after it. */}
 									<text fg={active ? activeRow().fg : colors().text}>
-										{message.value}
+										{entry.item.value}
 									</text>
 								</box>
 							);

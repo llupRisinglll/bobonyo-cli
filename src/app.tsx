@@ -90,6 +90,12 @@ import {
 	normalizeBashCommand,
 	runBash,
 } from './bash';
+import {
+	dequeuePendingWork,
+	enqueueTaskNotification,
+	enqueueUserWork,
+	type DetachedCompletion,
+} from './background-notification';
 import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
 import {
 	loadSettings,
@@ -211,7 +217,6 @@ import {
 	formatLoopJob,
 	goalContinuationPrompt,
 	goalStatusFromResponse,
-	isGoalEnvironmentFailure,
 	loopIntervalMs,
 	newLoopJob,
 	parseGoalSpec,
@@ -645,11 +650,13 @@ export function App() {
 	const loopTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	let autonomousTurnRef = false;
 	let loopTurnRef = false;
+	let taskTurnRef = false;
 	let goalAccountingTurnRef = false;
 	let goalContinuationPending = false;
 	let interruptedRef = false;
 	let foregroundTurnSeq = 0;
 	let foregroundTurnOwner = 0;
+	let queryActiveRef = false;
 	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
 	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
@@ -1551,13 +1558,33 @@ export function App() {
 	});
 
 	const processQueue = () => {
-		if (busy() || pendingQueue().length === 0) return;
-		const next = pendingQueue()[0]!;
-		setPendingQueue(prev => prev.slice(1));
-		autonomousTurnRef = next.source === 'goal';
+		if (queryActiveRef || busy() || pendingQueue().length === 0) return;
+		const {item: next, remaining} = dequeuePendingWork(pendingQueue());
+		if (!next) return;
+		setPendingQueue(remaining);
+		autonomousTurnRef =
+			next.source === 'goal' ||
+			(next.source === 'task' &&
+				next.owner === 'goal' &&
+				currentGoal?.status === 'active');
 		loopTurnRef = next.source === 'loop';
+		taskTurnRef = next.source === 'task';
 		void submit(next.value, next.attachments);
 	};
+	function queueDetachedCompletion(
+		kind: DetachedCompletion['kind'],
+		id: string,
+		status: DetachedCompletion['status'],
+		output: string,
+		owner: DetachedCompletion['owner'],
+	): void {
+		appendInfo(`Background ${kind} ${id} ${status}.`);
+		setPendingQueue(previous =>
+			enqueueTaskNotification(previous, {kind, id, status, output, owner}),
+		);
+		persist();
+		queueMicrotask(processQueue);
+	}
 
 	function saveGoal(next: SessionGoal | undefined): void {
 		setCurrentGoal(next);
@@ -1775,6 +1802,9 @@ export function App() {
 		)
 			return;
 		if (pendingQueue().some(item => item.source === 'goal')) return;
+		// Task completions wake the model with exact output. Do not burn goal
+		// iterations polling work that is still running.
+		if (activeBgCount() > 0 || activeAgents() > 0) return;
 		if (
 			currentGoal.tokenBudget &&
 			currentGoal.tokensUsed >= currentGoal.tokenBudget
@@ -2699,7 +2729,7 @@ export function App() {
 			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
 			return;
 		}
-		if (busy() && foregroundTurnOwner !== 0) {
+		if (queryActiveRef || (busy() && foregroundTurnOwner !== 0)) {
 			// Queue protection: terminal key repeats can deliver the same
 			// Enter twice before Solid paints the cleared input. Never enqueue
 			// an identical prompt/attachment set twice in one burst.
@@ -2709,7 +2739,7 @@ export function App() {
 					JSON.stringify(previous?.attachments ?? {}) ===
 					JSON.stringify(attachments ?? {});
 				if (previous?.value === value && sameAttachments) return prev;
-				return [...prev, {value, attachments}];
+				return enqueueUserWork(prev, {value, attachments});
 			});
 			// The queued message renders as a persistent block above the
 			// input (parity: nanocoder's queuedBlock), NOT a transcript row
@@ -2737,31 +2767,37 @@ export function App() {
 			body: string;
 		},
 	) => {
+		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
 		foregroundTurnOwner = turnId;
 		const autonomousTurn = autonomousTurnRef;
 		const loopTurn = loopTurnRef;
+		const taskTurn = taskTurnRef;
+		const systemTurn = autonomousTurn || loopTurn || taskTurn;
 		goalAccountingTurnRef = autonomousTurn;
 		autonomousTurnRef = false;
 		loopTurnRef = false;
+		taskTurnRef = false;
 		// /undo file parity (openclaude rewind): every REAL LLM turn starts a
 		// file-undo exchange — the file tools snapshot their targets during
 		// the turn, and /undo restores them with the transcript. Slash
 		// commands and `!bash` never reach here, so they can't push dummy
 		// exchanges that would swallow the previous exchange's file undo.
-		beginFileUndoExchange(value);
+		if (!systemTurn) beginFileUndoExchange(value);
 		// Codex pre-sampling behavior: compact prior history, then continue
 		// this same submitted prompt automatically against the summary.
 		if (shouldAutoCompactHistory(context())) {
 			await tryAutoCompactHistory(context());
 		}
 		// Snapshot for `/retry` BEFORE the user message lands.
-		setRetrySnapshot({
-			messages: [...messages()],
-			context: [...context()],
-			prompt: value,
-		});
-		if (!autonomousTurn && !loopTurn) {
+		if (!systemTurn) {
+			setRetrySnapshot({
+				messages: [...messages()],
+				context: [...context()],
+				prompt: value,
+			});
+		}
+		if (!systemTurn) {
 			setPromptHistory(prev =>
 				prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
 			);
@@ -2770,14 +2806,16 @@ export function App() {
 
 		// B22: the transcript shows the original; the provider sees scrubbed
 		// text (placeholders are rehydrated in replies).
-		appendMessage({
-			role: 'user',
-			content: value,
-			...(attachments && Object.keys(attachments).length > 0
-				? {attachments}
-				: {}),
-			...(command ? {command} : {}),
-		});
+		if (!systemTurn) {
+			appendMessage({
+				role: 'user',
+				content: value,
+				...(attachments && Object.keys(attachments).length > 0
+					? {attachments}
+					: {}),
+				...(command ? {command} : {}),
+			});
+		}
 		// Persist user message BEFORE provider/tool work. A long or interrupted
 		// turn must still appear in `/resume`; waiting for finally means a
 		// process exit or crash loses the latest prompt for several minutes.
@@ -3339,6 +3377,12 @@ export function App() {
 									askUser,
 									onStateChange: persist,
 									onDetachedWork: releaseForegroundForDetachedWork,
+									onDetachedComplete: queueDetachedCompletion,
+									backgroundOwner: autonomousTurn
+										? 'goal'
+										: loopTurn
+											? 'loop'
+											: 'user',
 								}),
 							),
 						)
@@ -3508,6 +3552,7 @@ export function App() {
 							askUser,
 							onStateChange: persist,
 							onDetachedWork: releaseForegroundForDetachedWork,
+							onDetachedComplete: queueDetachedCompletion,
 							backgroundOwner: autonomousTurn
 								? 'goal'
 								: loopTurn
@@ -3532,23 +3577,6 @@ export function App() {
 						});
 					}
 					toolResults.push(toolResult);
-					if (autonomousTurn && isGoalEnvironmentFailure(toolResult.content)) {
-						const blockedGoal = currentGoal
-							? {
-									...currentGoal,
-									status: 'blocked' as const,
-									updatedAt: Date.now(),
-								}
-							: undefined;
-						if (blockedGoal) saveGoal(blockedGoal);
-						setPendingQueue(previous =>
-							previous.filter(item => item.source !== 'goal'),
-						);
-						cancelRunningBackgroundTasks('goal');
-						appendWarning(
-							'Goal blocked automatically: environment failure detected; inspect and repair the environment before retrying.',
-						);
-					}
 					toolMessages.push({
 						role: 'tool',
 						content: toolResult.content,
@@ -3595,10 +3623,9 @@ export function App() {
 						delete next[call.id];
 						return next;
 					});
-					if (detachedWorkStarted && !autonomousTurn) {
-						// User turns release foreground ownership at handoff. Goal turns
-						// must keep reasoning with the process id/result; otherwise a
-						// successful ProcessStart ends the goal after one tool call.
+					if (detachedWorkStarted) {
+						// Completion notification resumes work with exact output. End this
+						// turn now instead of polling or holding foreground ownership.
 						break callLoop;
 					}
 				}
@@ -3624,7 +3651,7 @@ export function App() {
 				};
 				history = [...history, assistantToolMsg, ...toolMessages];
 				refreshContextPercent();
-				if (detachedWorkStarted && !autonomousTurn) {
+				if (detachedWorkStarted) {
 					// Finally clears busy while detached process keeps running.
 					break turnLoop;
 				}
@@ -3750,6 +3777,7 @@ export function App() {
 					.slice(0, 180) || 'Task failed';
 			appendError(error instanceof Error ? error.message : String(error));
 		} finally {
+			queryActiveRef = false;
 			clearInterval(turnTimer);
 			if (watchdogTimer) clearTimeout(watchdogTimer);
 			// SETTLE ANY STILL-RUNNING TOOL ROWS. A turn can end with a tool
@@ -5060,6 +5088,9 @@ export function App() {
 			cancelling(),
 		),
 	);
+	const visiblePendingQueueCount = createMemo(
+		() => pendingQueue().filter(item => !item.source).length,
+	);
 	// Reactive: the App body runs once, so a plain const would freeze the
 	// height at mount and a growing history/panel would push the input box
 	// and status line off the visible pane. The memo re-derives on every
@@ -5087,7 +5118,9 @@ export function App() {
 					startupLoading().length -
 					completionMessageRows(completionMessage(), completionTone()) -
 					(exitConfirm() ? 1 : 0) -
-					(pendingQueue().length > 0 ? pendingQueue().length + 1 : 0) -
+					(visiblePendingQueueCount() > 0
+						? visiblePendingQueueCount() + 1
+						: 0) -
 					completionPopupHeight(input(), terminalDimensions().width) -
 					mentionPopupHeight(input()),
 			),

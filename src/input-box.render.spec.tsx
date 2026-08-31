@@ -568,6 +568,32 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			setup.renderer.destroy();
 		}
 	});
+	test('task notifications stay hidden from editable queued messages', async () => {
+		setInput('');
+		setPendingQueue([
+			{
+				value: '<task_notification>{"taskId":"proc_1"}</task_notification>',
+				source: 'task',
+				owner: 'goal',
+			},
+		]);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 100,
+			height: 12,
+		});
+		try {
+			await setup.flush();
+			const text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(text).not.toContain('Queued messages');
+			expect(text).not.toContain('task_notification');
+		} finally {
+			setPendingQueue([]);
+			setup.renderer.destroy();
+		}
+	});
 });
 
 test('model-facing question options support arrows, Enter, and custom text', async () => {

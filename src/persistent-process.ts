@@ -1,6 +1,11 @@
 import {buildSandboxCommand} from './sandbox';
 import {loadSettings} from './settings';
-import {capOutputTail, stripTerminalControl} from './bash';
+import {
+	capBackgroundTasks,
+	capOutputTail,
+	setBgTasks,
+	stripTerminalControl,
+} from './bash';
 
 export interface PersistentProcess {
 	id: string;
@@ -10,6 +15,8 @@ export interface PersistentProcess {
 	exitCode: number | null;
 	proc: ReturnType<typeof Bun.spawn>;
 	stdin: Bun.FileSink;
+	owner?: 'user' | 'goal' | 'loop';
+	onComplete?: (process: PersistentProcess) => void;
 }
 
 const processes = new Map<string, PersistentProcess>();
@@ -22,6 +29,8 @@ export function listPersistentProcesses(): PersistentProcess[] {
 export function startPersistentProcess(
 	command: string,
 	cwd: string,
+	owner: PersistentProcess['owner'] = 'user',
+	onComplete?: (process: PersistentProcess) => void,
 ): PersistentProcess {
 	const sandbox = buildSandboxCommand(
 		command,
@@ -45,8 +54,27 @@ export function startPersistentProcess(
 		exitCode: null,
 		proc,
 		stdin: proc.stdin as Bun.FileSink,
+		owner,
+		onComplete,
 	};
 	processes.set(row.id, row);
+	setBgTasks(prev =>
+		capBackgroundTasks([
+			...prev,
+			{
+				id: row.id,
+				command,
+				output: row.output,
+				running: true,
+				exitCode: null,
+				startedAt: Date.now(),
+				owner,
+				cancel: () => {
+					void stopPersistentProcess(row.id);
+				},
+			},
+		]),
+	);
 	const pump = async (stream: ReadableStream<Uint8Array>) => {
 		const reader = stream.getReader();
 		for (;;) {
@@ -55,6 +83,13 @@ export function startPersistentProcess(
 			const text = stripTerminalControl(new TextDecoder().decode(chunk));
 			row.output.push(...text.split('\n').filter(Boolean));
 			row.output = capOutputTail(row.output).lines;
+			setBgTasks(prev =>
+				capBackgroundTasks(
+					prev.map(task =>
+						task.id === row.id ? {...task, output: [...row.output]} : task,
+					),
+				),
+			);
 		}
 	};
 	void Promise.all([
@@ -64,6 +99,22 @@ export function startPersistentProcess(
 	]).then(() => {
 		row.running = false;
 		row.exitCode = proc.exitCode ?? 0;
+		setBgTasks(prev =>
+			capBackgroundTasks(
+				prev.map(task =>
+					task.id === row.id
+						? {
+								...task,
+								output: [...row.output],
+								running: false,
+								exitCode: row.exitCode,
+								completedAt: Date.now(),
+							}
+						: task,
+				),
+			),
+		);
+		row.onComplete?.(row);
 	});
 	return row;
 }

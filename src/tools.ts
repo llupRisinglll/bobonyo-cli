@@ -115,6 +115,14 @@ export interface ToolContext {
 	onStateChange?: () => void;
 	/** Tell the parent turn that detached work now owns execution. */
 	onDetachedWork?: (kind: 'bash' | 'agent', id: string) => void;
+	/** Notify caller when detached work reaches a terminal state. */
+	onDetachedComplete?: (
+		kind: 'bash' | 'agent',
+		id: string,
+		status: 'completed' | 'failed' | 'cancelled' | 'incomplete',
+		output: string,
+		owner: 'user' | 'goal' | 'loop',
+	) => void;
 }
 
 interface ToolDef {
@@ -1215,7 +1223,21 @@ registerTool('execute_bash', {
 		// here kept `busy()` true until process exit, so every user message was
 		// queued even though the shell task was already running independently.
 		if (result.cwd) ctx.onCwdChange?.(result.cwd);
-		if (result.task?.running) ctx.onDetachedWork?.('bash', result.task.id);
+		if (result.task?.running) {
+			// Tool lifecycle owns completion delivery. Suppress runBash's legacy
+			// display-only completion row so one task produces one notification.
+			result.task.claimed = true;
+			ctx.onDetachedWork?.('bash', result.task.id);
+			void result.task.completion?.then(() =>
+				ctx.onDetachedComplete?.(
+					'bash',
+					result.task!.id,
+					result.task!.exitCode === 0 ? 'completed' : 'failed',
+					result.task!.output.join('\n'),
+					result.task!.owner ?? ctx.backgroundOwner ?? 'user',
+				),
+			);
+		}
 		const content = result.content;
 		await runBashPostHooks(command, content);
 		return content;
@@ -1233,6 +1255,15 @@ registerTool('process_start', {
 		const row = startPersistentProcess(
 			text(args, 'command'),
 			ctx.cwd || process.cwd(),
+			ctx.backgroundOwner ?? 'user',
+			completed =>
+				ctx.onDetachedComplete?.(
+					'bash',
+					completed.id,
+					completed.exitCode === 0 ? 'completed' : 'failed',
+					completed.output.join('\n'),
+					completed.owner ?? 'user',
+				),
 		);
 		ctx.onDetachedWork?.('bash', row.id);
 		return `Started ${row.id} (pid ${row.proc.pid}).`;
@@ -2054,6 +2085,7 @@ async function executeAgentRun(
 	const signal = agentSignal(id, detached ? undefined : ctx.signal);
 	let finalStatus: 'completed' | 'incomplete' | 'cancelled' | 'error' =
 		'completed';
+	let finalOutput = '';
 	setActiveAgents(prev => prev + 1);
 	if (history) {
 		setActiveAgentRuns(prev =>
@@ -2114,6 +2146,7 @@ async function executeAgentRun(
 			id,
 		);
 		if (subagentResultIsIncomplete(result)) finalStatus = 'incomplete';
+		finalOutput = result;
 		return result;
 	} catch (error) {
 		const status =
@@ -2121,6 +2154,7 @@ async function executeAgentRun(
 				? 'cancelled'
 				: 'error';
 		finalStatus = status;
+		finalOutput = error instanceof Error ? error.message : String(error);
 		setActiveAgentRuns(prev =>
 			prev.map(row => (row.id === id ? {...row, status} : row)),
 		);
@@ -2155,6 +2189,15 @@ async function executeAgentRun(
 		setActiveAgents(prev => Math.max(0, prev - 1));
 		ctx.onStateChange?.();
 		notifyAgentStatus(id);
+		if (detached) {
+			ctx.onDetachedComplete?.(
+				'agent',
+				id,
+				finalStatus === 'error' ? 'failed' : finalStatus,
+				finalOutput,
+				ctx.backgroundOwner ?? 'user',
+			);
+		}
 	}
 }
 registerTool('agent', {

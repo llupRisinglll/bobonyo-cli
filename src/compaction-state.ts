@@ -62,7 +62,11 @@ export interface CompactionStateSnapshotData {
 	tasks: SessionTask[];
 	goal?: SessionGoal;
 	loopJobs: LoopJob[];
-	queuedPrompts: Array<{value: string; source?: 'goal' | 'loop'}>;
+	queuedPrompts: Array<{
+		value: string;
+		source?: 'goal' | 'loop' | 'task';
+		owner?: 'user' | 'goal' | 'loop';
+	}>;
 	agents: CompactionAgentSnapshot[];
 	invokedSkills: CompactionInvokedSkill[];
 	recentFiles: CompactionRecentFile[];
@@ -85,7 +89,11 @@ export interface BuildCompactionStateInput {
 	tasks: SessionTask[];
 	goal?: SessionGoal;
 	loopJobs: LoopJob[];
-	queuedPrompts?: Array<{value: string; source?: 'goal' | 'loop'}>;
+	queuedPrompts?: Array<{
+		value: string;
+		source?: 'goal' | 'loop' | 'task';
+		owner?: 'user' | 'goal' | 'loop';
+	}>;
 	agents: ActiveAgentRun[];
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
