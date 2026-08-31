@@ -1294,7 +1294,6 @@ registerTool('process_start', {
 					completed.owner ?? 'user',
 				),
 		);
-		ctx.onDetachedWork?.('bash', row.id);
 		return `Started ${row.id} (pid ${row.proc.pid}).`;
 	},
 });

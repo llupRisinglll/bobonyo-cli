@@ -1041,6 +1041,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(app).toMatch(/if \(!taskTurn\) setInput\(''\)/);
 	});
+	test('process_start keeps its parent model turn alive', () => {
+		const tools = read('./tools.ts');
+		const processStart = tools.slice(
+			tools.indexOf("registerTool('process_start'"),
+			tools.indexOf("registerTool('process_input'"),
+		);
+		expect(processStart).not.toContain('onDetachedWork');
+		expect(processStart).toContain('onDetachedComplete');
+	});
 	test('task completions steer invisibly instead of impersonating users', () => {
 		const app = read('./app.tsx');
 		expect(app).toMatch(
