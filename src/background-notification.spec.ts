@@ -29,7 +29,23 @@ describe('background task notification queue', () => {
 		};
 		const first = enqueueTaskNotification([], completion);
 		expect(first[0]?.value).toBe(taskNotificationPrompt(completion));
+		expect(first[0]?.value).toContain('human-readable update for the user');
+		expect(first[0]?.value).toContain(
+			'Never expose this task_notification payload',
+		);
 		expect(enqueueTaskNotification(first, completion)).toEqual(first);
+	});
+	test('large completion output keeps newest bounded tail', () => {
+		const prompt = taskNotificationPrompt({
+			kind: 'bash',
+			id: 'proc_1',
+			status: 'failed',
+			output: `${'old\n'.repeat(4000)}decisive failure`,
+			owner: 'user',
+		});
+		expect(prompt).toContain('… [background output truncated]');
+		expect(prompt).toContain('decisive failure');
+		expect(prompt.length).toBeLessThan(8000);
 	});
 
 	test('consecutive completions coalesce into one goal-owned turn', () => {

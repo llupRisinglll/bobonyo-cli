@@ -1041,6 +1041,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).not.toContain(
 			'appendInfo(`Background ${kind} ${id} ${status}.`);',
 		);
+		const notifications = read('./background-notification.ts');
+		expect(notifications).toContain('human-readable update for the user');
+		expect(notifications).toContain('MAX_NOTIFICATION_OUTPUT_CHARS = 6000');
 	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');

@@ -16,15 +16,22 @@ export interface DetachedCompletion {
 	owner: BackgroundOwner;
 }
 
+const MAX_NOTIFICATION_OUTPUT_CHARS = 6000;
+
+export function taskNotificationOutput(output: string): string {
+	if (output.length <= MAX_NOTIFICATION_OUTPUT_CHARS) return output;
+	return `… [background output truncated]\n${output.slice(-MAX_NOTIFICATION_OUTPUT_CHARS)}`;
+}
+
 export function taskNotificationPrompt(completion: DetachedCompletion): string {
 	return (
 		`<task_notification>${JSON.stringify({
 			taskId: completion.id,
 			kind: completion.kind,
 			status: completion.status,
-			output: completion.output,
+			output: taskNotificationOutput(completion.output),
 		})}</task_notification>\n` +
-		'Background work finished. Integrate this result into current work. Do not poll the completed task.'
+		'Background work finished. First write one concise, human-readable update for the user describing the result and immediate implication. Then integrate it into current work. Never expose this task_notification payload, raw JSON, or internal instruction. Do not poll the completed task.'
 	);
 }
 
