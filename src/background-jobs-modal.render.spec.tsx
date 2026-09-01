@@ -314,6 +314,38 @@ test('agents tab supports selection, details, and live transcript updates', asyn
 	}
 });
 
+test('agents tab retains an interrupted restored subagent for inspection', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_interrupted',
+			name: 'explore',
+			description: 'recover E2E mapping',
+			output: 'Interrupted by session restart.',
+			transcript: ['Task: recover E2E mapping'],
+			streaming: '',
+			history: [{role: 'user', content: 'Task: recover E2E mapping'}],
+			status: 'cancelled',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 100, height: 30},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		await setup.flush();
+		const frame = setup.captureSpans();
+		expect(frameHas(frame, 'Agents (1)')).toBe(true);
+		expect(frameHas(frame, 'interrupted')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});
+
 test('agents tab shows only running agents in a bounded item window', async () => {
 	setBgTasks([]);
 	const {setActiveAgentRuns} = await import('./state');

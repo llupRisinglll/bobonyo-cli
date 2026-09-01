@@ -189,6 +189,16 @@ function formatGenericEntry(
 	}
 	if (isTaskProgressTool(tool.name)) return formatTaskStatusText(tool, status);
 	if (tool.name === 'review_changes') return tool.output;
+	if (tool.name === 'agent') {
+		const detail = tool.detail || 'agent';
+		const state =
+			status === 'running'
+				? 'running'
+				: tool.output.includes('Started background agent')
+					? 'started'
+					: 'completed';
+		return `✦ Ran ${detail} ${state}`;
+	}
 	const header = tool.detail
 		? `✦ ${displayToolName(tool.name)}(${tool.detail})`
 		: `✦ ${displayToolName(tool.name)}`;

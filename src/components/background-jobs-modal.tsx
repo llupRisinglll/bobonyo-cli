@@ -91,7 +91,9 @@ export function BackgroundJobsModal(props: {
 			.map(task => ({...task, output: [...task.output]})),
 	);
 	const agents = createMemo(() =>
-		activeAgentRuns().filter(run => run.status === 'running'),
+		activeAgentRuns().filter(
+			run => run.status === 'running' || run.status === 'cancelled',
+		),
 	);
 	const detailTask = createMemo(
 		() => jobs().find(task => task.id === detailId()) ?? null,
@@ -517,7 +519,9 @@ export function BackgroundJobsModal(props: {
 									Math.max(20, cardWidth() - 14),
 								);
 								const seg = liveRowSegments(
-									`✦ agent:${run.name}(${run.description}) is running\n${tail}`,
+									`✦ Ran agent:${run.name}(${run.description}) ${
+										run.status === 'running' ? 'running' : 'interrupted'
+									}\n${tail}`,
 									'agentrow',
 									'running',
 									colors(),
