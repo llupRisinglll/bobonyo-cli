@@ -1,6 +1,7 @@
 import '@opentui/solid/preload';
 import {describe, expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
+import {RGBA} from '@opentui/core';
 import {SettledToolRow} from './components/settled-tool-row';
 import {LiveToolRows} from './components/live-tool-rows';
 import {liveRowSegments} from './live-tool-row';
@@ -39,6 +40,59 @@ function painted(frame: {
 }
 
 describe('pre-tool brief alignment (generic tool rows)', () => {
+	test('agent history row renders compact header and indented tail', async () => {
+		const secondary = RGBA.fromHex(colors().secondary);
+		const primary = RGBA.fromHex(colors().primary);
+		const setup = await testRender(
+			() => (
+				<SettledToolRow
+					segments={{
+						header: [
+							{__isChunk: true, text: 'Ran ', fg: secondary},
+							{
+								__isChunk: true,
+								text: 'agent:explore',
+								fg: primary,
+							},
+							{
+								__isChunk: true,
+								text: '(Inspect E2E coverage.) completed',
+								fg: secondary,
+							},
+						],
+						body: [
+							[
+								{
+									__isChunk: true,
+									text: '  └  Started background agent',
+									fg: secondary,
+								},
+							],
+						],
+					}}
+					status="done"
+					glyph="✦"
+					glyphTone="status"
+					hovered={false}
+					width={80}
+					md={testMd}
+				/>
+			),
+			{width: 80, height: 12},
+		);
+		try {
+			await setup.flush();
+			const rows = setup
+				.captureSpans()
+				.lines.map(line => line.spans.map(span => span.text).join(''));
+			expect(rows.some(row => row.includes('Ran agent:explore'))).toBe(true);
+			expect(
+				rows.some(row => row.includes('└  Started background agent')),
+			).toBe(true);
+		} finally {
+			setup.renderer.destroy();
+		}
+	});
 	test('standalone agent rows keep glyph with batch marker', async () => {
 		const segments = liveRowSegments(
 			'Ran agent:explore(task) completed\n  └  result',
