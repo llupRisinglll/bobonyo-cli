@@ -168,26 +168,13 @@ export function slashArgumentHint(inputText: string): string {
 	if (!match) return '';
 	const [, name, args = ''] = match;
 	if (!name) return '';
+	if (inputText.length > name.length + 1) return '';
 	const builtin = COMMAND_ARGUMENT_HINTS[name];
-	if (builtin) return args.trim() ? '' : builtin;
+	if (builtin) return builtin;
 	const command = loadCustomCommands().find(item => item.name === name);
 	if (command) return progressiveArgumentHint(command.arguments, args);
 	const skill = loadSkills().find(item => item.name === name);
 	return skill ? progressiveArgumentHint(skill.arguments, args) : '';
-}
-
-/**
- * Keep a shadow hint anchored while user has only typed argument separators.
- * The input caret already owns one end-of-line space, so rendering buffered
- * separators too would walk the hint right on every Space press.
- */
-export function shadowHintInputPrefix(
-	prefix: string,
-	inputText: string,
-): string {
-	if (!slashArgumentHint(inputText)) return prefix;
-	const match = prefix.match(/^(\/\S+)\s+$/);
-	return match?.[1] ?? prefix;
 }
 
 /** Printable character from OpenTUI key event, including shifted punctuation. */
@@ -1460,13 +1447,7 @@ export function InputBox(props: {
 									>
 										<For
 											each={tokenizeInputLine(
-												shadowHintInputPrefix(
-													line.slice(
-														0,
-														caretIndexFor(line, cursorInfo().column),
-													),
-													input(),
-												),
+												line.slice(0, caretIndexFor(line, cursorInfo().column)),
 												knownCommands(),
 											)}
 										>
@@ -1526,7 +1507,7 @@ export function InputBox(props: {
 											slashArgumentHint(input())
 										}
 									>
-										<text fg={CHALK_GREY}>{slashArgumentHint(input())}</text>
+										<text fg={CHALK_GREY}> {slashArgumentHint(input())}</text>
 									</Show>
 								</box>
 							)}

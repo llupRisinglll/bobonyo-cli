@@ -125,22 +125,19 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 		}
 	});
 
-	test('typed argument separator does not add another shadow-text gap', async () => {
+	test('typed argument separator clears shadow text and preserves input cursor', async () => {
 		const setup = await mountInput();
 		try {
-			setInput('/compact ');
+			await setup.mockInput.typeText('/compact');
 			await setup.flush();
-			const inputLine = setup
+			await setup.mockInput.typeText(' ');
+			await setup.flush();
+			expect(input()).toBe('/compact ');
+			const text = setup
 				.captureSpans()
-				.lines.find(line =>
-					line.spans.some(span =>
-						span.text.includes('[instructions to preserve]'),
-					),
-				);
-			expect(inputLine).toBeDefined();
-			const text = inputLine!.spans.map(span => span.text).join('');
-			expect(text).toContain('/compact [instructions to preserve]');
-			expect(text).not.toContain('/compact  [instructions to preserve]');
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(text).not.toContain('[instructions to preserve]');
 		} finally {
 			setup.renderer.destroy();
 			setInput('');

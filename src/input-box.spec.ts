@@ -22,7 +22,6 @@ import {
 	slashToken,
 	insertSlashCommand,
 	slashArgumentHint,
-	shadowHintInputPrefix,
 } from './components/input-box';
 import {wrapText, wrapTextDetailed} from './text-wrap';
 
@@ -83,11 +82,8 @@ describe('slash argument hints', () => {
 		expect(slashArgumentHint('/herdr:fork')).toBe('<vertical|horizontal>');
 		expect(slashArgumentHint('/compact keep migrations')).toBe('');
 		expect(slashArgumentHint('/caveman')).toBe('<mode>');
-		expect(slashArgumentHint('/compact ')).toContain('preserve');
-		expect(shadowHintInputPrefix('/compact ', '/compact ')).toBe('/compact');
-		expect(shadowHintInputPrefix('/compact foo', '/compact foo')).toBe(
-			'/compact foo',
-		);
+		expect(slashArgumentHint('/compact ')).toBe('');
+		expect(slashArgumentHint('/compact keep')).toBe('');
 	});
 });
 
