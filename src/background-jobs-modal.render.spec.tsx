@@ -404,3 +404,46 @@ test('agents tab advertises per-agent and cancel-all controls', async () => {
 		setup.renderer.destroy();
 	}
 });
+
+test('subagent details wrap long transcript rows inside a viewport-width card', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_long_detail',
+			name: 'explore',
+			description: 'long detail',
+			output: '',
+			transcript: [],
+			streaming: '',
+			history: [
+				{
+					role: 'user',
+					content: `Task: ${'very-long-token '.repeat(24)}`,
+				},
+			],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 40, height: 24},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		await setup.flush();
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		const frame = setup.captureSpans();
+		expect(frameHas(frame, 'Subagent')).toBe(true);
+		expect(
+			frame.lines.every(
+				line => line.spans.map(span => span.text).join('').length <= 40,
+			),
+		).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});

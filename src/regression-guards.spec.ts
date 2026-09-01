@@ -800,9 +800,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// Settled rows thread the real width through the tool formatter.
 		expect(history).toMatch(/renderToolRun\(\s*run,\s*fillWidth,/);
 		expect(history).toMatch(/singleToolRow\(\s*message,\s*key,\s*width,/);
-		// The LIVE path passes the same render width.
+		// Embedded detail transcripts use their modal width; normal history
+		// retains the terminal-width fallback.
+		expect(history).toMatch(/const renderWidth = \(\) =>/);
 		expect(history).toMatch(
-			/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\),/,
+			/historyFillWidth\(terminalDimensions\(\)\.width \?\? 80\)/,
 		);
 	});
 

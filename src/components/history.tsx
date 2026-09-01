@@ -276,6 +276,10 @@ export function History(props: HistoryProps) {
 		} as unknown as TreeSitterClient;
 	}
 	const terminalDimensions = useTerminalDimensions();
+	const renderWidth = () =>
+		typeof props.width === 'number'
+			? props.width
+			: historyFillWidth(terminalDimensions().width ?? 80);
 	// The container (tool/thought block) under the cursor, its rows get a
 	// persistent background highlight and it toggles on click.
 	const [hoveredBlock, setHoveredBlock] = createSignal<string | null>(null);
@@ -355,7 +359,7 @@ export function History(props: HistoryProps) {
 						rowPath(token.text ?? ''),
 						status,
 						colors(),
-						historyFillWidth(terminalDimensions().width ?? 80),
+						renderWidth(),
 					),
 			}),
 		filediff: (token, status) =>
@@ -369,7 +373,7 @@ export function History(props: HistoryProps) {
 						rowPath(token.text ?? ''),
 						status,
 						colors(),
-						historyFillWidth(terminalDimensions().width ?? 80),
+						renderWidth(),
 					),
 			}),
 		diffrow: (token, status) =>
@@ -409,7 +413,7 @@ export function History(props: HistoryProps) {
 					tokenizeUserMessage(
 						token.text ?? '',
 						colors(),
-						historyFillWidth(terminalDimensions().width ?? 80),
+						renderWidth(),
 						// Find attachment metadata explicitly. Resize metadata may
 						// precede it (`w120:a13`), so positional parsing is wrong.
 						attachmentMarkerFromLanguage(String(token.lang ?? '')),
@@ -569,7 +573,7 @@ export function History(props: HistoryProps) {
 		// Reading the width here (a signal) makes the memo re-run on terminal
 		// resize; the marker below then CHANGES the doc so OpenTUI re-creates
 		// the full-row-bg code blocks instead of keeping the old-width chunks.
-		const fillWidth = historyFillWidth(terminalDimensions().width ?? 80);
+		const fillWidth = renderWidth();
 		const parts: Array<{
 			text: string;
 			key?: string;
@@ -953,7 +957,7 @@ export function History(props: HistoryProps) {
 	});
 	const liveThoughtTail = createMemo(() => {
 		if (!running() || !throttledReasoning()) return '';
-		const width = historyFillWidth(terminalDimensions().width ?? 80);
+		const width = renderWidth();
 		const tail = throttledReasoning()
 			.replace(/\n+$/, '')
 			.split('\n')
@@ -1000,7 +1004,7 @@ export function History(props: HistoryProps) {
 			}
 		> = [];
 		for (const run of runningAgents) {
-			const width = historyFillWidth(terminalDimensions().width ?? 80);
+			const width = renderWidth();
 			const tail = formatSubagentCompactTail(
 				run.output,
 				4,
@@ -1030,7 +1034,7 @@ export function History(props: HistoryProps) {
 						'inforow',
 						'running',
 						colors(),
-						historyFillWidth(terminalDimensions().width ?? 80),
+						renderWidth(),
 					),
 				});
 				continue;
@@ -1064,7 +1068,7 @@ export function History(props: HistoryProps) {
 					'running',
 					true,
 					true,
-					historyFillWidth(terminalDimensions().width ?? 80),
+					renderWidth(),
 				);
 				rows.push({
 					toolId: message.toolId,
@@ -1354,7 +1358,7 @@ export function History(props: HistoryProps) {
 							return (
 								<box
 									ref={setRef}
-									width={historyFillWidth(terminalDimensions().width ?? 80)}
+									width={renderWidth()}
 									backgroundColor={
 										block.part.key === hoveredBlock()
 											? hoverBackground
@@ -1369,7 +1373,7 @@ export function History(props: HistoryProps) {
 										hovered={false}
 										brief={block.brief}
 										batchBriefed={block.batchBriefed}
-										width={historyFillWidth(terminalDimensions().width ?? 80)}
+										width={renderWidth()}
 										md={briefMarkdown}
 									/>
 								</box>
@@ -1382,7 +1386,7 @@ export function History(props: HistoryProps) {
 							return (
 								<box
 									ref={setRef}
-									width={historyFillWidth(terminalDimensions().width ?? 80)}
+									width={renderWidth()}
 									backgroundColor={
 										block.part.key === hoveredBlock()
 											? hoverBackground
@@ -1405,7 +1409,7 @@ export function History(props: HistoryProps) {
 						return (
 							<box
 								ref={setRef}
-								width={historyFillWidth(terminalDimensions().width ?? 80)}
+								width={renderWidth()}
 								backgroundColor={
 									block.part.key === hoveredBlock()
 										? hoverBackground
@@ -1425,7 +1429,7 @@ export function History(props: HistoryProps) {
 										chunk.text.includes('agent:'),
 									)}
 									md={briefMarkdown}
-									width={historyFillWidth(terminalDimensions().width ?? 80)}
+									width={renderWidth()}
 								/>
 							</box>
 						);
@@ -1436,7 +1440,7 @@ export function History(props: HistoryProps) {
 						return (
 							<box
 								ref={setRef}
-								width={historyFillWidth(terminalDimensions().width ?? 80)}
+								width={renderWidth()}
 								backgroundColor={
 									block.parts[0]?.key === hoveredBlock()
 										? hoverBackground
@@ -1454,7 +1458,7 @@ export function History(props: HistoryProps) {
 					return (
 						<box
 							ref={setRef}
-							width={historyFillWidth(terminalDimensions().width ?? 80)}
+							width={renderWidth()}
 							flexDirection="column"
 							backgroundColor={
 								block.parts[0]?.key === hoveredBlock()
@@ -1512,7 +1516,7 @@ export function History(props: HistoryProps) {
 				<LiveToolRows
 					rows={liveToolRows()}
 					md={briefMarkdown}
-					width={historyFillWidth(terminalDimensions().width ?? 80)}
+					width={renderWidth()}
 				/>
 			</Show>
 			{/* LIVE REPLY: rendered in the SAME glyph-row container as a

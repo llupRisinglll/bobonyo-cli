@@ -57,8 +57,17 @@ export function BackgroundJobsModal(props: {
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	const active = () => activeRowPalette(colors());
-	const cardWidth = () => Math.min(110, Math.max(70, dims().width - 4));
-	const cardHeight = () => Math.max(12, Math.min(dims().height - 2, 34));
+	const availableWidth = () => Math.max(1, dims().width - 2);
+	const listCardWidth = () => Math.min(110, availableWidth());
+	const detailContentLines = () =>
+		detailAgent()
+			? Math.max(6, agentMessages().length * 4)
+			: Math.max(1, (detailTask()?.output.length ?? 0) + 2);
+	const cardWidth = () => (detailId() ? availableWidth() : listCardWidth());
+	const cardHeight = () =>
+		detailId()
+			? Math.min(dims().height - 2, Math.max(7, detailContentLines() + 5))
+			: Math.max(12, Math.min(dims().height - 2, 34));
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -117,6 +126,7 @@ export function BackgroundJobsModal(props: {
 		const agent = detailAgent();
 		return agent ? subagentDisplayMessages(agent) : [];
 	});
+	const detailHistoryWidth = () => Math.max(1, cardWidth() - 8);
 
 	createEffect(() => {
 		const count =
@@ -260,6 +270,7 @@ export function BackgroundJobsModal(props: {
 				width={cardWidth()}
 				height={cardHeight()}
 				backgroundColor={colors().base}
+				overflow="hidden"
 				paddingX={2}
 				paddingY={1}
 				flexDirection="column"
@@ -331,6 +342,7 @@ export function BackgroundJobsModal(props: {
 								flexDirection="column"
 								flexGrow={1}
 								minHeight={0}
+								overflow="hidden"
 								border
 								borderStyle="rounded"
 								borderColor={colors().secondary}
@@ -381,6 +393,7 @@ export function BackgroundJobsModal(props: {
 								flexDirection="column"
 								flexGrow={1}
 								minHeight={0}
+								overflow="hidden"
 								border
 								borderStyle="rounded"
 								borderColor={colors().secondary}
@@ -391,6 +404,7 @@ export function BackgroundJobsModal(props: {
 								</text>
 								<History
 									embedded
+									width={detailHistoryWidth()}
 									height={Math.max(4, cardHeight() - 7)}
 									messages={agentMessages}
 									running={() => detailAgent()?.status === 'running'}
