@@ -22,6 +22,14 @@ function redact(value: unknown): unknown {
 	return value;
 }
 
+function isHerdrForkNotice(message: ChatMessage): boolean {
+	return (
+		message.kind === 'info' &&
+		(/\/herdr:fork\b/i.test(message.content) ||
+			/^Forked\s+\S+\s+into Herdr pane\s+\S+\.$/i.test(message.content))
+	);
+}
+
 /** Interview-submittable, human-readable transcript with tool events. */
 export function agentTrajectoryDocument(input: {
 	sessionId: string;
@@ -32,25 +40,27 @@ export function agentTrajectoryDocument(input: {
 		format: 'bobonyo-agent-trajectory/v1',
 		sessionId: input.sessionId,
 		workingDirectory: input.cwd,
-		events: input.messages.map((message, index) => ({
-			sequence: index + 1,
-			role: message.role,
-			...(message.content ? {content: redact(message.content)} : {}),
-			...(message.reasoning ? {reasoning: redact(message.reasoning)} : {}),
-			...(message.durationSec ? {durationSeconds: message.durationSec} : {}),
-			...(message.error ? {error: redact(message.error)} : {}),
-			...(message.brief ? {preToolBrief: redact(message.brief)} : {}),
-			...(message.tool
-				? {
-						tool: redact({
-							name: message.tool.name,
-							detail: message.tool.detail,
-							arguments: message.tool.args ?? {},
-							result: message.tool.output,
-						}),
-					}
-				: {}),
-		})),
+		events: input.messages
+			.filter(message => !isHerdrForkNotice(message))
+			.map((message, index) => ({
+				sequence: index + 1,
+				role: message.role,
+				...(message.content ? {content: redact(message.content)} : {}),
+				...(message.reasoning ? {reasoning: redact(message.reasoning)} : {}),
+				...(message.durationSec ? {durationSeconds: message.durationSec} : {}),
+				...(message.error ? {error: redact(message.error)} : {}),
+				...(message.brief ? {preToolBrief: redact(message.brief)} : {}),
+				...(message.tool
+					? {
+							tool: redact({
+								name: message.tool.name,
+								detail: message.tool.detail,
+								arguments: message.tool.args ?? {},
+								result: message.tool.output,
+							}),
+						}
+					: {}),
+			})),
 	};
 }
 

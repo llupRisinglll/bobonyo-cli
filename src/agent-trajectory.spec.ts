@@ -44,3 +44,27 @@ test('writes deterministic committed-file name in current repository', () => {
 		rmSync(dir, {recursive: true, force: true});
 	}
 });
+
+test('excludes Herdr fork control-plane notices', () => {
+	const document = agentTrajectoryDocument({
+		sessionId: 'sess_fork',
+		cwd: '/repo',
+		messages: [
+			{role: 'user', content: 'Implement trajectory export.'},
+			{
+				role: 'assistant',
+				kind: 'info',
+				content: 'Forked sess_new into Herdr pane w4:p2.',
+			},
+			{
+				role: 'assistant',
+				kind: 'info',
+				content: '/herdr:fork is only available inside Herdr.',
+			},
+		],
+	});
+	const text = JSON.stringify(document);
+	expect(text).toContain('Implement trajectory export.');
+	expect(text).not.toContain('Herdr');
+	expect(text).not.toContain('sess_new');
+});
