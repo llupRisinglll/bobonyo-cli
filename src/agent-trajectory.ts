@@ -37,7 +37,6 @@ export function agentTrajectoryDocument(input: {
 	messages: ChatMessage[];
 }): Record<string, unknown> {
 	return {
-		format: 'bobonyo-agent-trajectory/v1',
 		sessionId: input.sessionId,
 		workingDirectory: input.cwd,
 		events: input.messages

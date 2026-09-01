@@ -39,7 +39,9 @@ test('writes deterministic committed-file name in current repository', () => {
 			{role: 'assistant', content: 'Done.'},
 		]);
 		expect(file).toBe(join(dir, 'agent-trajectory.json'));
-		expect(readFileSync(file, 'utf8')).toContain('bobonyo-agent-trajectory/v1');
+		const contents = readFileSync(file, 'utf8');
+		expect(contents).toContain('"sessionId": "sess_1"');
+		expect(contents).not.toContain('"format"');
 	} finally {
 		rmSync(dir, {recursive: true, force: true});
 	}
