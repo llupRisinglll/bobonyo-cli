@@ -1,11 +1,13 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	changedReviewFiles,
+	findReviewRoutingConfig,
 	loadReviewRoutingConfig,
 	planReviewers,
+	scopeReviewPaths,
 } from './review-routing';
 
 const reviewers = [
@@ -91,8 +93,34 @@ test('routing config loads only valid project JSON', () => {
 		JSON.stringify(config),
 	);
 	expect(loadReviewRoutingConfig(root)).toEqual(config);
+	mkdirSync(join(root, 'nested', 'repo'), {recursive: true});
+	expect(loadReviewRoutingConfig(join(root, 'nested', 'repo'))).toEqual(config);
+	expect(findReviewRoutingConfig(join(root, 'nested', 'repo'))?.configDir).toBe(
+		join(root, '.bobonyo'),
+	);
+	expect(
+		scopeReviewPaths(
+			['src/Counter.ts'],
+			join(root, 'kplugin_counter'),
+			join(root, '.bobonyo'),
+		),
+	).toEqual(['kplugin_counter/src/Counter.ts']);
+	mkdirSync(join(root, 'nested', 'repo', '.bobonyo'));
+	writeFileSync(
+		join(root, 'nested', 'repo', '.bobonyo', 'review-routing.json'),
+		'{bad json',
+	);
+	expect(loadReviewRoutingConfig(join(root, 'nested', 'repo'))).toEqual(config);
 	writeFileSync(join(root, '.bobonyo', 'review-routing.json'), '{bad json');
 	expect(loadReviewRoutingConfig(root)).toBeUndefined();
+});
+
+test('routing lookup never migrates legacy project config', () => {
+	const root = mkdtempSync(join(tmpdir(), 'bobonyo-review-readonly-'));
+	mkdirSync(join(root, '.nanocoder', 'agents'), {recursive: true});
+	writeFileSync(join(root, '.nanocoder', 'agents', 'review.md'), 'legacy');
+	expect(loadReviewRoutingConfig(root)).toBeUndefined();
+	expect(existsSync(join(root, '.bobonyo'))).toBe(false);
 });
 
 test('changed review files include branch and dirty paths', () => {

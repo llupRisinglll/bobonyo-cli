@@ -55,8 +55,9 @@ import {
 import {projectRoot} from './project-paths';
 import {
 	changedReviewFiles,
-	loadReviewRoutingConfig,
+	findReviewRoutingConfig,
 	planReviewers,
+	scopeReviewPaths,
 	type ReviewRoutingPlan,
 } from './review-routing';
 import {logSubagentEvent} from './subagent-logs';
@@ -119,6 +120,8 @@ export interface ToolContext {
 	) => Promise<string>;
 	/** Persist asynchronous state changes such as background-agent progress. */
 	onStateChange?: () => void;
+	/** PreToolUse-rewritten args already checked by caller. */
+	preprocessedArgs?: Record<string, unknown>;
 	/** Tell the parent turn that detached work now owns execution. */
 	onDetachedWork?: (kind: 'bash' | 'agent', id: string) => void;
 	/** Notify caller when detached work reaches a terminal state. */
@@ -317,8 +320,10 @@ export function requiresApproval(
 	name: string,
 	mode: Mode,
 	alwaysAllow: string[] = [],
+	externalPathGranted = false,
 ): boolean {
 	if (mode === 'yolo' || mode === 'auto-accept') return false;
+	if (externalPathGranted) return false;
 	if (
 		alwaysAllow.includes(name) ||
 		alwaysAllow.includes(resolveToolName(name)) ||
@@ -486,6 +491,66 @@ function externalGrantRoot(path: string): string {
 	const gitRoot = projectRoot(parent);
 	return pathWithinWorkspace(target, gitRoot) ? gitRoot : dirname(target);
 }
+/** Folder grants bypass normal-mode approval only for direct file paths. */
+export function hasSessionExternalWriteGrant(path: string): boolean {
+	const target = resolve(path);
+	return [...sessionExternalWriteGrants].some(granted =>
+		pathWithinWorkspace(target, granted),
+	);
+}
+/**
+ * Only handlers which recheck effective (post-hook) paths may skip generic
+ * approval. Shell and patch payloads remain separately approved.
+ */
+export function callUsesGrantedExternalWritePath(
+	call: MockToolCall,
+	cwd: string,
+	workspaceRoot: string,
+): boolean {
+	const name = resolveToolName(call.name);
+	if (!['write_file', 'edit_file'].includes(name)) return false;
+	const path = call.arguments.path;
+	if (typeof path !== 'string' || !path.trim()) return false;
+	const target = resolve(cwd, path);
+	return (
+		!pathWithinWorkspace(target, workspaceRoot) &&
+		hasSessionExternalWriteGrant(target)
+	);
+}
+/** Approval policy with path context. Do not apply folder grants tool-wide. */
+export function requiresCallApproval(
+	call: MockToolCall,
+	mode: Mode,
+	alwaysAllow: string[],
+	cwd: string,
+	workspaceRoot: string,
+): boolean {
+	return requiresApproval(
+		call.name,
+		mode,
+		alwaysAllow,
+		callUsesGrantedExternalWritePath(call, cwd, workspaceRoot),
+	);
+}
+
+/**
+ * Resolve PreToolUse rewrites before path-scoped approval. Callers pass the
+ * result back to executeTool so a hook cannot redirect a folder grant after
+ * approval. Undefined means execution must run the hook normally.
+ */
+export async function preprocessToolInput(
+	call: MockToolCall,
+): Promise<Record<string, unknown> | undefined> {
+	const name = resolveToolName(call.name);
+	if (name === 'execute_bash') return undefined;
+	const pre = await runHooks({
+		event: 'PreToolUse',
+		toolName: name,
+		toolInput: call.arguments,
+	});
+	if (pre.denied) return undefined;
+	return pre.updatedInput ?? call.arguments;
+}
 
 async function requestExternalWriteAccess(
 	path: string,
@@ -505,14 +570,15 @@ async function requestExternalWriteAccess(
 		[
 			{label: 'Allow once', description: 'Allow this operation only.'},
 			{
-				label: 'Allow for session',
+				label: 'Allow folder for session',
 				description: 'Allow later edits under this folder until session ends.',
 			},
 			{label: 'Deny', description: 'Keep folder read-only.'},
 		],
 	);
-	if (answer === 'Allow for session') sessionExternalWriteGrants.add(folder);
-	return answer === 'Allow once' || answer === 'Allow for session'
+	if (answer === 'Allow folder for session')
+		sessionExternalWriteGrants.add(folder);
+	return answer === 'Allow once' || answer === 'Allow folder for session'
 		? folder
 		: null;
 }
@@ -703,8 +769,8 @@ export async function executeTool(
 		};
 	}
 	try {
-		let effectiveArgs = canonicalCall.arguments;
-		if (canonicalName !== 'execute_bash') {
+		let effectiveArgs = ctx.preprocessedArgs ?? canonicalCall.arguments;
+		if (!ctx.preprocessedArgs && canonicalName !== 'execute_bash') {
 			const pre = await runHooks({
 				event: 'PreToolUse',
 				toolName: canonicalName,
@@ -1989,8 +2055,10 @@ registerTool('review_changes', {
 		const requested = Array.isArray(args.reviewers)
 			? args.reviewers.map(String).filter(Boolean)
 			: undefined;
-		const root = projectRoot(ctx.cwd);
+		const cwd = ctx.cwd ?? process.cwd();
+		const root = projectRoot(cwd);
 		const changedFiles = requested ? [] : changedReviewFiles(root, base);
+		const routing = requested ? undefined : findReviewRoutingConfig(cwd);
 		const plan: Pick<ReviewRoutingPlan, 'reviewers' | 'mode'> = requested
 			? {
 					reviewers: [...new Set(requested)].filter(name =>
@@ -2001,8 +2069,10 @@ registerTool('review_changes', {
 			: changedFiles
 				? planReviewers(
 						configured,
-						changedFiles,
-						loadReviewRoutingConfig(root),
+						routing
+							? scopeReviewPaths(changedFiles, root, routing.configDir)
+							: changedFiles,
+						routing?.config,
 						args.all === true,
 					)
 				: {reviewers: configured, mode: 'all'};

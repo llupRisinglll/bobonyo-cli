@@ -1,5 +1,5 @@
 import {existsSync, readFileSync} from 'node:fs';
-import {join} from 'node:path';
+import {dirname, join, relative, resolve} from 'node:path';
 
 export interface ReviewRoutingConfig {
 	always?: string[];
@@ -11,6 +11,11 @@ export interface ReviewRoutingPlan {
 	reviewers: string[];
 	changedFiles: string[];
 	mode: 'all' | 'routed' | 'fallback';
+}
+
+export interface ReviewRoutingSource {
+	config: ReviewRoutingConfig;
+	configDir: string;
 }
 
 function names(value: unknown): string[] {
@@ -44,16 +49,42 @@ function parseConfig(value: unknown): ReviewRoutingConfig | undefined {
 }
 
 /** Project-level routing is opt-in. Invalid config deliberately disables it. */
-export function loadReviewRoutingConfig(
-	root: string,
-): ReviewRoutingConfig | undefined {
-	const path = join(root, '.bobonyo', 'review-routing.json');
-	if (!existsSync(path)) return undefined;
-	try {
-		return parseConfig(JSON.parse(readFileSync(path, 'utf8')));
-	} catch {
-		return undefined;
+export function findReviewRoutingConfig(
+	startDir: string,
+): ReviewRoutingSource | undefined {
+	let dir = resolve(startDir);
+	for (;;) {
+		const configDir = join(dir, '.bobonyo');
+		const path = join(configDir, 'review-routing.json');
+		if (existsSync(path)) {
+			try {
+				const config = parseConfig(JSON.parse(readFileSync(path, 'utf8')));
+				if (config) return {config, configDir};
+			} catch {
+				// Invalid nearest config must not prevent a valid parent policy.
+			}
+		}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
 	}
+	return undefined;
+}
+
+export function loadReviewRoutingConfig(
+	startDir: string,
+): ReviewRoutingConfig | undefined {
+	return findReviewRoutingConfig(startDir)?.config;
+}
+
+/** Convert nested Git-root paths to the project config's path namespace. */
+export function scopeReviewPaths(
+	changedFiles: string[],
+	repositoryRoot: string,
+	configDir: string,
+): string[] {
+	const prefix = relative(dirname(configDir), repositoryRoot);
+	return changedFiles.map(file => (prefix ? join(prefix, file) : file));
 }
 
 function globPattern(pattern: string): RegExp {
