@@ -875,7 +875,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/evaluateRepeatedToolCalls/);
 		const repeatedGuard = read('./repeated-tool-guard.ts');
 		expect(repeatedGuard).toMatch(/MAX_REPEATED_TOOL_CALLS/);
-		expect(repeatedGuard).toMatch(/BOOKKEEPING_TOOLS/);
+		expect(repeatedGuard).toMatch(/UNGUARDED_TOOLS/);
+		expect(repeatedGuard).toMatch(/process_status/);
 	});
 
 	test('task closeout never deletes the streamed Markdown reply', () => {

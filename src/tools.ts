@@ -80,6 +80,7 @@ import {globWorkspace, grepWorkspace} from './search-tools';
 import {inspectWorkspaceImage} from './vision';
 import {
 	persistentProcessStatus,
+	reserveProcessStatusPoll,
 	startPersistentProcess,
 	stopPersistentProcess,
 	writePersistentProcess,
@@ -1388,8 +1389,11 @@ registerTool('process_status', {
 		'Inspect one persistent process or list all persistent processes with recent output.',
 	parameters: {type: 'object', properties: {process_id: {type: 'string'}}},
 	readOnly: true,
-	execute(args) {
-		return persistentProcessStatus(text(args, 'process_id') || undefined);
+	async execute(args) {
+		const id = text(args, 'process_id') || undefined;
+		const delay = reserveProcessStatusPoll(id);
+		if (delay > 0) await Bun.sleep(delay);
+		return persistentProcessStatus(id);
 	},
 });
 registerTool('process_stop', {

@@ -21,6 +21,26 @@ export interface PersistentProcess {
 
 const processes = new Map<string, PersistentProcess>();
 let sequence = 0;
+export const PROCESS_STATUS_MIN_INTERVAL_MS = 1_000;
+const lastStatusPollAt = new Map<string, number>();
+
+/** Reserve a per-process status poll slot and return required wait time. */
+export function reserveProcessStatusPoll(
+	id?: string,
+	now = Date.now(),
+	minimumInterval = PROCESS_STATUS_MIN_INTERVAL_MS,
+): number {
+	const key = id || '__all__';
+	const last = lastStatusPollAt.get(key);
+	const delay =
+		last === undefined ? 0 : Math.max(0, minimumInterval - (now - last));
+	lastStatusPollAt.set(key, now + delay);
+	return delay;
+}
+
+export function resetProcessStatusPolls(): void {
+	lastStatusPollAt.clear();
+}
 
 export function listPersistentProcesses(): PersistentProcess[] {
 	return [...processes.values()];

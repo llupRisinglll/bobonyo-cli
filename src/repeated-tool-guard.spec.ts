@@ -29,6 +29,18 @@ describe('repeated tool guard', () => {
 		}
 		expect(state).toEqual(initialState());
 	});
+	test('does not stop repeated process status monitoring calls', () => {
+		let state = initialState();
+		for (let index = 0; index < 6; index++) {
+			const result = evaluateRepeatedToolCalls(
+				[{name: 'process_status', arguments: {process_id: 'proc_server'}}],
+				state,
+			);
+			expect(result.stop).toBe(false);
+			state = result.state;
+		}
+		expect(state).toEqual(initialState());
+	});
 
 	test('still stops a real identical tool loop on third call', () => {
 		let state = initialState();

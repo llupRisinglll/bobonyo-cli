@@ -1,6 +1,9 @@
 import {expect, test} from 'bun:test';
 import {
+	PROCESS_STATUS_MIN_INTERVAL_MS,
 	persistentProcessStatus,
+	resetProcessStatusPolls,
+	reserveProcessStatusPoll,
 	startPersistentProcess,
 	stopPersistentProcess,
 	writePersistentProcess,
@@ -11,6 +14,17 @@ import {
 	bgTasks,
 	setBgTasks,
 } from './bash';
+
+test('status polling is paced separately for each process', () => {
+	resetProcessStatusPolls();
+	expect(reserveProcessStatusPoll('proc_server', 1_000)).toBe(0);
+	expect(reserveProcessStatusPoll('proc_server', 1_100)).toBe(
+		PROCESS_STATUS_MIN_INTERVAL_MS - 100,
+	);
+	expect(reserveProcessStatusPoll('proc_other', 1_100)).toBe(0);
+	expect(reserveProcessStatusPoll(undefined, 1_100)).toBe(0);
+	resetProcessStatusPolls();
+});
 
 test('persistent process accepts input, reports output, and stops', async () => {
 	setBgTasks([]);

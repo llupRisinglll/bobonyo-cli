@@ -1,6 +1,9 @@
 export const MAX_REPEATED_TOOL_CALLS = 3;
 
-const BOOKKEEPING_TOOLS = new Set(['write_tasks']);
+// Status inspection is intentionally repeatable. Its own per-process poll
+// throttle prevents request spam without mistaking normal monitoring for a
+// stuck effectful tool loop.
+const UNGUARDED_TOOLS = new Set(['write_tasks', 'process_status']);
 
 export interface ToolCallSignatureInput {
 	name: string;
@@ -25,7 +28,7 @@ export const INITIAL_REPEATED_TOOL_STATE: RepeatedToolState = {
 export function toolCallSignature(
 	calls: ToolCallSignatureInput[],
 ): string | null {
-	const guardedCalls = calls.filter(call => !BOOKKEEPING_TOOLS.has(call.name));
+	const guardedCalls = calls.filter(call => !UNGUARDED_TOOLS.has(call.name));
 	if (guardedCalls.length === 0) return null;
 	return guardedCalls
 		.map(call => `${call.name}:${JSON.stringify(call.arguments)}`)
