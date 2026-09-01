@@ -75,7 +75,8 @@ import {
 	listTools,
 	normalizeTaskList,
 	registerTool,
-	requiresApproval,
+	preprocessToolInput,
+	requiresCallApproval,
 	resolveToolName,
 	toolCatalogForModel,
 	toolDisplayDetail,
@@ -3599,11 +3600,19 @@ export function App() {
 						continue;
 					}
 					// B16: approval gating.
+					const preprocessedArgs = !isReadOnlyTool(call.name)
+						? await preprocessToolInput(call)
+						: undefined;
+					const approvalCall = preprocessedArgs
+						? {...call, arguments: preprocessedArgs}
+						: call;
 					if (
-						requiresApproval(
-							call.name,
+						requiresCallApproval(
+							approvalCall,
 							mode(),
 							activeEndpoint().alwaysAllow ?? [],
+							workspaceCwd(),
+							workspaceRoot,
 						)
 					) {
 						const approved = await approvalGate(
@@ -3658,6 +3667,7 @@ export function App() {
 								: loopTurn
 									? 'loop'
 									: 'user',
+							...(preprocessedArgs ? {preprocessedArgs} : {}),
 							onCwdChange: next => {
 								updateWorkspaceCwd(next);
 								persist();

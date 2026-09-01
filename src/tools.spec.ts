@@ -12,10 +12,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	displayToolName,
+	callUsesGrantedExternalWritePath,
 	executeTool,
 	isReadOnlyTool,
 	isParallelSafeTool,
 	requiresApproval,
+	requiresCallApproval,
 	readonlyFailurePath,
 	registerTool,
 	toolCatalog,
@@ -167,7 +169,7 @@ describe('external folder write approvals', () => {
 		let prompts = 0;
 		const askUser = async () => {
 			prompts += 1;
-			return 'Allow for session';
+			return 'Allow folder for session';
 		};
 		try {
 			for (const name of ['one.txt', 'two.txt']) {
@@ -183,6 +185,102 @@ describe('external folder write approvals', () => {
 				expect(result.content).toContain('Wrote');
 			}
 			expect(prompts).toBe(1);
+		} finally {
+			resetSessionPermissionGrants();
+			rmSync(root, {recursive: true, force: true});
+		}
+	});
+	test('folder grant bypasses normal approval only for files below that folder', async () => {
+		resetSessionPermissionGrants();
+		const root = mkdtempSync(join(tmpdir(), 'bobonyo-grant-scope-'));
+		const workspace = join(root, 'workspace');
+		const external = join(root, 'external');
+		mkdirSync(workspace, {recursive: true});
+		mkdirSync(external, {recursive: true});
+		try {
+			await executeTool(
+				{
+					id: 'grant-folder',
+					name: 'write_file',
+					arguments: {path: join(external, 'one.txt'), content: 'one'},
+					rawArguments: '',
+				},
+				{
+					cwd: workspace,
+					workspaceRoot: workspace,
+					askUser: async () => 'Allow folder for session',
+				},
+			);
+			const allowed = {
+				id: 'allowed',
+				name: 'write_file',
+				arguments: {path: join(external, 'two.txt'), content: 'two'},
+				rawArguments: '',
+			};
+			expect(
+				callUsesGrantedExternalWritePath(allowed, workspace, workspace),
+			).toBe(true);
+			expect(
+				requiresCallApproval(allowed, 'normal', [], workspace, workspace),
+			).toBe(false);
+			expect(
+				callUsesGrantedExternalWritePath(
+					{
+						...allowed,
+						arguments: {path: join(root, 'other.txt'), content: 'x'},
+					},
+					workspace,
+					workspace,
+				),
+			).toBe(false);
+			expect(
+				requiresCallApproval(
+					{
+						...allowed,
+						arguments: {path: join(root, 'other.txt'), content: 'x'},
+					},
+					'normal',
+					[],
+					workspace,
+					workspace,
+				),
+			).toBe(true);
+			expect(
+				callUsesGrantedExternalWritePath(
+					{
+						...allowed,
+						name: 'Write',
+					},
+					workspace,
+					workspace,
+				),
+			).toBe(true);
+			expect(
+				callUsesGrantedExternalWritePath(
+					{
+						...allowed,
+						name: 'string_replace',
+						arguments: {
+							path: join(external, 'two.txt'),
+							old_string: 'two',
+							new_string: 'three',
+						},
+					},
+					workspace,
+					workspace,
+				),
+			).toBe(false);
+			expect(
+				callUsesGrantedExternalWritePath(
+					{
+						...allowed,
+						name: 'execute_bash',
+						arguments: {command: 'touch file'},
+					},
+					workspace,
+					workspace,
+				),
+			).toBe(false);
 		} finally {
 			resetSessionPermissionGrants();
 			rmSync(root, {recursive: true, force: true});
