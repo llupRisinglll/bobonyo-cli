@@ -53,6 +53,12 @@ import {
 	readMCPResource,
 } from './mcp';
 import {projectRoot} from './project-paths';
+import {
+	changedReviewFiles,
+	loadReviewRoutingConfig,
+	planReviewers,
+	type ReviewRoutingPlan,
+} from './review-routing';
 import {logSubagentEvent} from './subagent-logs';
 import {pathInsideWorkspace} from './bash-removal-guard';
 import {
@@ -1958,31 +1964,57 @@ registerTool('check_skill', {
 registerTool('review_changes', {
 	description:
 		'Run parallel read-only review subagents before creating or releasing a PR. ' +
-		'Use one reviewer per configured review-* agent and return every finding.',
+		'Use diff-aware project routing when configured; `all` runs every review-* agent.',
 	parameters: {
 		type: 'object',
 		properties: {
 			reviewers: {
 				type: 'array',
 				items: {type: 'string'},
-				description: 'Reviewer agent names; defaults to all review-* agents.',
+				description:
+					'Reviewer agent names; overrides project diff-aware routing when set.',
 			},
 			base: {type: 'string', description: 'Base ref, for example origin/main.'},
+			all: {
+				type: 'boolean',
+				description:
+					'Run every configured reviewer, bypassing project routing.',
+			},
 		},
 	},
 	readOnly: true,
 	async execute(args, ctx) {
 		const configured = loadSubagentNames();
+		const base = text(args, 'base') || 'origin/main';
 		const requested = Array.isArray(args.reviewers)
 			? args.reviewers.map(String).filter(Boolean)
-			: configured;
-		const reviewers = [...new Set(requested)].filter(name =>
-			configured.includes(name),
-		);
+			: undefined;
+		const root = projectRoot(ctx.cwd);
+		const changedFiles = requested ? [] : changedReviewFiles(root, base);
+		const plan: Pick<ReviewRoutingPlan, 'reviewers' | 'mode'> = requested
+			? {
+					reviewers: [...new Set(requested)].filter(name =>
+						configured.includes(name),
+					),
+					mode: 'all',
+				}
+			: changedFiles
+				? planReviewers(
+						configured,
+						changedFiles,
+						loadReviewRoutingConfig(root),
+						args.all === true,
+					)
+				: {reviewers: configured, mode: 'all'};
+		const reviewers = plan.reviewers;
 		if (reviewers.length === 0) {
 			return 'REVIEW_UNAVAILABLE: no review-* agents configured.';
 		}
-		const base = text(args, 'base') || 'origin/main';
+		const planText = requested
+			? `REVIEW_PLAN: explicit reviewers: ${reviewers.join(', ')}`
+			: changedFiles
+				? `REVIEW_PLAN: ${plan.mode} reviewers: ${reviewers.join(', ')}\nChanged files: ${changedFiles.join(', ') || '(none)'}`
+				: `REVIEW_PLAN: all reviewers (could not resolve diff against ${base})`;
 		const live = new Map<string, string>();
 		const render = () =>
 			[...live.entries()]
@@ -2102,7 +2134,7 @@ registerTool('review_changes', {
 				}
 			}),
 		);
-		return results.join('\n\n');
+		return `${planText}\n\n${results.join('\n\n')}`;
 	},
 });
 async function executeAgentRun(
