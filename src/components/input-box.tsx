@@ -166,15 +166,23 @@ function progressiveArgumentHint(spec: ArgumentSpec[], args: string): string {
 export function slashArgumentHint(inputText: string): string {
 	const match = inputText.match(/^\/([^\s]+)(?:\s(.*))?$/s);
 	if (!match) return '';
-	const [, name, args = ''] = match;
+	const [, name] = match;
 	if (!name) return '';
-	if (inputText.length > name.length + 1) return '';
+	const argumentEntry = inputText.slice(name.length + 1);
+	// First typed separator leaves room for a real caret before the ghost text.
+	// More whitespace or any argument starts actual entry and clears the hint.
+	if (argumentEntry !== '' && argumentEntry !== ' ') return '';
 	const builtin = COMMAND_ARGUMENT_HINTS[name];
 	if (builtin) return builtin;
 	const command = loadCustomCommands().find(item => item.name === name);
-	if (command) return progressiveArgumentHint(command.arguments, args);
+	if (command) return progressiveArgumentHint(command.arguments, '');
 	const skill = loadSkills().find(item => item.name === name);
-	return skill ? progressiveArgumentHint(skill.arguments, args) : '';
+	return skill ? progressiveArgumentHint(skill.arguments, '') : '';
+}
+
+/** A typed first separator replaces the hint's decorative separator. */
+export function slashArgumentHintPrefix(inputText: string): string {
+	return inputText.endsWith(' ') ? '' : ' ';
 }
 
 /** Printable character from OpenTUI key event, including shifted punctuation. */
@@ -1507,7 +1515,10 @@ export function InputBox(props: {
 											slashArgumentHint(input())
 										}
 									>
-										<text fg={CHALK_GREY}> {slashArgumentHint(input())}</text>
+										<text fg={CHALK_GREY}>
+											{slashArgumentHintPrefix(input())}
+											{slashArgumentHint(input())}
+										</text>
 									</Show>
 								</box>
 							)}
