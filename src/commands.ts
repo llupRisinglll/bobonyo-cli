@@ -60,6 +60,7 @@ export const BASE_COMMAND_NAMES = [
 	'undo',
 	'rewind',
 	'export',
+	'debug:agent-trajectory',
 	'context-max',
 	'setup-config',
 	'setup-mcp',
@@ -173,6 +174,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	schedule: 'Scheduled tasks',
 	update: 'Update info',
 	export: 'Export the session',
+	'debug:agent-trajectory': 'Write interview-ready agent trajectory JSON',
 	'context-max': 'Context cap',
 	'setup-config': 'Config dir',
 	'setup-mcp': 'MCP wizard',
@@ -314,6 +316,7 @@ export interface CommandContext {
 	scheduleInfo: () => void;
 	updateInfo: () => void;
 	exportSession: () => void;
+	exportAgentTrajectory: () => void;
 	contextMax: () => void;
 	setupConfigInfo: () => void;
 	setupMcpInfo: () => void;
@@ -548,6 +551,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'export':
 			ctx.exportSession();
+			return true;
+		case 'debug:agent-trajectory':
+			ctx.exportAgentTrajectory();
 			return true;
 		case 'context-max':
 			ctx.contextMax();

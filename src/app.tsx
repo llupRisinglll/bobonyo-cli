@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {existsSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {writeAgentTrajectory} from './agent-trajectory';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
 import {createMemo, createSignal, Show} from 'solid-js';
@@ -2787,6 +2788,7 @@ export function App() {
 				scheduleInfo,
 				updateInfo,
 				exportSession,
+				exportAgentTrajectory,
 				contextMax,
 				setupConfigInfo,
 				setupMcpInfo,
@@ -4660,6 +4662,12 @@ export function App() {
 			`${JSON.stringify({id: sessionId(), messages: messages()}, null, 2)}\n`,
 		);
 		appendInfo(`Session exported to ${file}`);
+	};
+	const exportAgentTrajectory = () => {
+		const file = writeAgentTrajectory(process.cwd(), sessionId(), messages());
+		appendInfo(
+			`Agent trajectory written to ${file}. Review it, then commit agent-trajectory.json for submission.`,
+		);
 	};
 	const contextMax = () =>
 		openInfoModal(

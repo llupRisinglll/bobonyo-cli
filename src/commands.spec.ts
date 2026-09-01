@@ -78,6 +78,17 @@ describe('runCommand routing', () => {
 		expect(COMMAND_ARGUMENT_HINTS.compact).toContain('preserve');
 		expect(COMMAND_ARGUMENT_HINTS['herdr:fork']).toContain('vertical');
 	});
+	test('/debug:agent-trajectory writes interview export', () => {
+		const calls: Array<[string, unknown[]]> = [];
+		const ctx = new Proxy({} as CommandContext, {
+			get:
+				(_target, prop: string) =>
+				(...args: unknown[]) =>
+					calls.push([prop, args]),
+		});
+		expect(runCommand('/debug:agent-trajectory', ctx)).toBe(true);
+		expect(calls).toEqual([['exportAgentTrajectory', []]]);
+	});
 
 	test('/goal and /loop route inline specs', () => {
 		const calls: Array<[string, unknown[]]> = [];
