@@ -13,10 +13,13 @@ import {
 	setInput,
 	setModelOpen,
 	setPendingQueue,
+	setPromptHistory,
 	setReasoning,
 	setSpinnerFrame,
 	setThinkingActive,
 	setThinkingMode,
+	historyIndex,
+	setHistoryIndex,
 } from './state';
 import {colors} from './theme';
 import {activeRowPalette} from './row-highlight';
@@ -106,6 +109,25 @@ async function mountInput(): Promise<TestRendererSetup> {
 }
 
 describe('InputBox caret rendering (Shift+Enter regression, render-level)', () => {
+	test('Up navigates past a recalled multiline prompt', async () => {
+		setInput('');
+		setPromptHistory(['older prompt', 'newest line one\nnewest line two']);
+		setHistoryIndex(-1);
+		const setup = await mountInput();
+		try {
+			setup.mockInput.pressArrow('up');
+			expect(input()).toBe('newest line one\nnewest line two');
+			expect(historyIndex()).toBe(1);
+			setup.mockInput.pressArrow('up');
+			expect(input()).toBe('older prompt');
+			expect(historyIndex()).toBe(0);
+		} finally {
+			setup.renderer.destroy();
+			setPromptHistory([]);
+			setHistoryIndex(-1);
+		}
+	});
+
 	test('typing ! immediately enters bash mode with ! prompt and primary border', async () => {
 		let submitted = '';
 		setInput('');

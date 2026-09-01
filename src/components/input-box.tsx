@@ -852,6 +852,22 @@ export function InputBox(props: {
 		}
 		if (event.name === 'up') {
 			event.preventDefault();
+			const history = promptHistory();
+			const index = historyIndex();
+			// Recalled prompts own history navigation, even when multiline.
+			// Otherwise ↑ on line two merely moves its cursor and strands the
+			// user on that entry instead of reaching the prior prompt.
+			if (index !== -1 && history.length > 0) {
+				if (index > 0) {
+					const next = index - 1;
+					setHistoryIndex(next);
+					setInputAt(history[next] ?? '');
+				} else {
+					setHistoryIndex(-1);
+					setInputAt(draft());
+				}
+				return;
+			}
 			// Multiline input: ↑ moves the caret up a VISUAL line; only on
 			// the FIRST line does it fall through to history (parity: the
 			// original's multiline PR + ink-text-input onEdgeArrow).
@@ -863,9 +879,7 @@ export function InputBox(props: {
 				setCursorPos(bashMode() ? 1 : 0);
 				return;
 			}
-			const history = promptHistory();
 			if (history.length === 0) return;
-			const index = historyIndex();
 			if (index === -1) {
 				setDraft(input());
 				// Recall the NEWEST entry first, then walk back (parity: the
@@ -885,6 +899,19 @@ export function InputBox(props: {
 		}
 		if (event.name === 'down') {
 			event.preventDefault();
+			const history = promptHistory();
+			const index = historyIndex();
+			if (index !== -1 && history.length > 0) {
+				if (index >= history.length - 1) {
+					setHistoryIndex(-1);
+					setInputAt(draft());
+				} else {
+					const next = index + 1;
+					setHistoryIndex(next);
+					setInputAt(history[next] ?? '');
+				}
+				return;
+			}
 			// Multiline input: ↓ moves the caret down a VISUAL line; only on
 			// the LAST line does it fall through to history.
 			if (moveCursorVertical('down')) return;
@@ -894,9 +921,7 @@ export function InputBox(props: {
 				setCursorPos(input().length);
 				return;
 			}
-			const history = promptHistory();
 			if (history.length === 0) return;
-			const index = historyIndex();
 			if (index === -1) return;
 			if (index >= history.length - 1) {
 				// At the newest entry: restore the saved draft.
