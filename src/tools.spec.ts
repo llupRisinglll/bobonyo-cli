@@ -12,6 +12,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	displayToolName,
+	toolDisplayDetail,
 	callUsesGrantedExternalWritePath,
 	executeTool,
 	isReadOnlyTool,
@@ -64,6 +65,25 @@ test('remember tool persists explicit session guidance', async () => {
 		else process.env.BOBONYO_DATA_DIR = originalData;
 		rmSync(root, {recursive: true, force: true});
 	}
+});
+
+test('agent defaults to General and advertises Explore as read-only research', () => {
+	const tool = toolCatalog().find(item => item.name === 'agent');
+	expect(tool?.description).toContain('delegated subagent');
+	const schema = tool?.parameters as {
+		properties?: Record<string, {description?: string}>;
+	};
+	expect(schema.properties?.subagent_type?.description).toContain(
+		'Defaults to general',
+	);
+	expect(
+		toolDisplayDetail({
+			id: 'agent-default',
+			name: 'agent',
+			arguments: {description: 'implement a regression test'},
+			rawArguments: '',
+		}),
+	).toContain('agent:general');
 });
 
 /**

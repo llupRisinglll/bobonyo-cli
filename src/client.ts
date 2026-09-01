@@ -15,6 +15,7 @@ import {
 import {resolveRulesFile} from './rules-file';
 import {projectRoot} from './project-paths';
 import {builtinCavemanSkill, loadCustomCommands, loadSkills} from './custom';
+import {loadSubagents} from './subagents';
 import {readCodexAuth} from './codex-auth';
 import {loadSettings} from './settings';
 import {
@@ -108,6 +109,7 @@ const NANO_SYSTEM_PROMPT =
 const SUBAGENT_GUIDANCE =
 	'## Delegating work\n' +
 	'Use the `agent` tool proactively when delegation materially helps: broad codebase exploration, deep research, context-heavy investigation, isolated implementation, or independent verification. ' +
+	'Choose roles deliberately: use `explore` only for read-only discovery and research; use `general` for autonomous multi-step work, implementation, tests, commands, or verification. Omit `subagent_type` only when `general` is intended. ' +
 	'Launch independent read-only investigations in parallel when they cover different questions. ' +
 	'Use direct `glob`, `grep`, and `read_file` calls for simple targeted searches; do not delegate tiny tasks. ' +
 	'Do not duplicate work already assigned to a subagent. Main agent owns synthesis, decisions, integration, and final verification. ' +
@@ -141,6 +143,33 @@ function buildVolatileSystemInfo(): string {
 	// this block lists the loadable names. Same per-session stability class
 	// as AGENTS.md (skills rarely change mid-session).
 	const skills = loadSkills();
+	const agentCatalog = new Map(
+		[
+			{
+				name: 'general',
+				description:
+					'General-purpose worker for multi-step research, implementation, tests, commands, and verification.',
+			},
+			{
+				name: 'explore',
+				description:
+					'Read-only codebase search specialist for broad discovery and research.',
+			},
+		].map(agent => [agent.name, agent]),
+	);
+	for (const agent of loadSubagents()) {
+		agentCatalog.set(agent.name.toLowerCase(), {
+			name: agent.name,
+			description: agent.description || 'Custom project subagent.',
+		});
+	}
+	const agentBlock =
+		`\n\n## AVAILABLE SUBAGENTS\n` +
+		[...agentCatalog.values()]
+			.sort((left, right) => left.name.localeCompare(right.name))
+			.map(agent => `- ${agent.name}: ${agent.description}`)
+			.join('\n') +
+		`\nUse the agent tool only with a listed role. Project agents override built-in roles with the same name.`;
 	const skillsBlock =
 		skills.length > 0
 			? `\n\n## AVAILABLE SKILLS\n` +
@@ -174,7 +203,7 @@ function buildVolatileSystemInfo(): string {
 		`Current Working Directory: ${cwd}\n` +
 		'Bash commands start in this directory. Do not prepend `cd` unless ' +
 		'you intentionally need a different directory.\n' +
-		`${agents}${skillsBlock}${commandsBlock}${memory ? `\n\n${memory}` : ''}`
+		`${agents}${agentBlock}${skillsBlock}${commandsBlock}${memory ? `\n\n${memory}` : ''}`
 	);
 }
 

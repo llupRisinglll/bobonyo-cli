@@ -236,6 +236,11 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		expect(prompt).toMatch(
 			/already a delegated subagent.*do not delegate again/i,
 		);
+		expect(prompt).toContain('use `explore` only for read-only discovery');
+		expect(prompt).toContain('use `general` for autonomous multi-step work');
+		expect(prompt).toContain('## AVAILABLE SUBAGENTS');
+		expect(prompt).toContain('- general: General-purpose worker');
+		expect(prompt).toContain('- explore: Read-only codebase search specialist');
 	});
 	test('caveman instructions are injected into the stable prompt when enabled', () => {
 		setCavemanMode(true);

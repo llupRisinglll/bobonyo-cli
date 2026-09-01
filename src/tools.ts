@@ -707,7 +707,7 @@ export function toolArgsSummary(call: MockToolCall): string {
  */
 export function toolDisplayDetail(call: MockToolCall): string {
 	if (call.name === 'agent') {
-		const type = String(call.arguments.subagent_type ?? 'explore');
+		const type = String(call.arguments.subagent_type ?? 'general');
 		const task = toolArgsSummary(call);
 		return `agent:${type}${task ? `(${task})` : ''}`;
 	}
@@ -2354,7 +2354,8 @@ registerTool('agent', {
 			description: {type: 'string', description: 'Task for the subagent.'},
 			subagent_type: {
 				type: 'string',
-				description: 'Built-in or custom agent name. Defaults to explore.',
+				description:
+					'Built-in or custom agent name. Defaults to general; use explore only for read-only research.',
 			},
 			background: {
 				type: 'boolean',
@@ -2367,7 +2368,7 @@ registerTool('agent', {
 	async execute(args, ctx) {
 		const description =
 			text(args, 'description') || 'investigate the repository';
-		const subagentType = text(args, 'subagent_type') || 'explore';
+		const subagentType = text(args, 'subagent_type') || 'general';
 		const id = `agent:${subagentType}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 		const task = executeAgentRun(
 			id,
@@ -2534,14 +2535,14 @@ export const SUBAGENT_TYPES: Record<
 	general: {
 		label: 'General',
 		instruction:
-			'You are a general assistant agent. Complete the assigned task using ' +
-			'the available tools; read first, then act, and report what you did.',
+			'You are a general-purpose worker. Complete the assigned task using ' +
+			'the available tools. Handle multi-step research, implementation, tests, commands, and verification. Read first, then act, and report concise results and blockers. Do not delegate again.',
 	},
 	explore: {
 		label: 'Explore',
 		instruction:
-			'You are an exploration agent. Investigate the repository and report ' +
-			'findings concisely, cite files and lines you actually read.',
+			'You are a read-only exploration agent. Investigate the repository and report ' +
+			'findings concisely; cite files and lines you actually read. Do not edit, run mutating commands, or delegate again.',
 	},
 };
 
