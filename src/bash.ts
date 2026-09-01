@@ -267,6 +267,15 @@ export interface BashTurnResult {
 	cwd?: string;
 }
 
+/**
+ * VS Code's CLI talks to a host-editor IPC socket. Bubblewrap makes it a
+ * false-success no-op, so permit only an unadorned `code` invocation to use
+ * the host shell. Shell operators remain sandboxed: they are not launches.
+ */
+export function isHostDesktopLaunchCommand(command: string): boolean {
+	return /^\s*code(?:\s|$)/.test(command) && !/[;&|`$<>()\n]/.test(command);
+}
+
 export async function runBash(
 	command: string,
 	onProgress?: (output: string) => void,
@@ -329,6 +338,7 @@ export async function runBash(
 		cwd,
 		{
 			...sandboxSettings,
+			mode: isHostDesktopLaunchCommand(command) ? 'off' : sandboxSettings.mode,
 			writablePaths: [
 				...new Set([...sandboxSettings.writablePaths, ...extraWritablePaths]),
 			],

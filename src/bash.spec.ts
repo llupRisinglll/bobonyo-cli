@@ -13,7 +13,24 @@ import {
 	stripEchoedCommand,
 	stripTerminalControl,
 	normalizeBashCommand,
+	isHostDesktopLaunchCommand,
 } from './bash';
+
+describe('host desktop launches', () => {
+	test('runs bare VS Code CLI commands outside Bubblewrap IPC isolation', () => {
+		expect(isHostDesktopLaunchCommand('code src/app.tsx')).toBe(true);
+		expect(isHostDesktopLaunchCommand('  code --reuse-window README.md')).toBe(
+			true,
+		);
+	});
+
+	test('keeps shell expressions sandboxed', () => {
+		expect(isHostDesktopLaunchCommand('code src/app.tsx && echo nope')).toBe(
+			false,
+		);
+		expect(isHostDesktopLaunchCommand('echo code src/app.tsx')).toBe(false);
+	});
+});
 
 describe('avoidProcessMatcherSelfMatch', () => {
 	test('brackets pgrep -f literals so monitors do not match themselves', () => {
