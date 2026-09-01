@@ -1350,6 +1350,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(state).toMatch(/compactingLabel/);
 		expect(state).toMatch(/loadingDots\(frame\)/);
 	});
+
+	test('/compact preserves explicit user instructions in summarization prompt', () => {
+		const app = read('./app.tsx');
+		const commands = read('./commands.ts');
+		expect(app).toContain('Additional user compaction instructions');
+		expect(app).toMatch(/compactHistory\(ctx, instructions\)/);
+		expect(commands).toMatch(/ctx\.compact\(args\)/);
+	});
 	test('task bookkeeping renders as plain progress text, not tool chrome', () => {
 		const display = read('./tool-display.ts');
 		const history = read('./components/history.tsx');

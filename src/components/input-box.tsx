@@ -4,11 +4,17 @@ import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
+	COMMAND_ARGUMENT_HINTS,
 	COMMAND_DESCRIPTIONS,
 	commandNames,
 	customCommandNames,
 } from '../commands';
-import {loadCustomCommands, loadSkills} from '../custom';
+import {
+	loadCustomCommands,
+	loadSkills,
+	parseCommandArguments,
+	type ArgumentSpec,
+} from '../custom';
 import {
 	insertMention,
 	listProjectFiles,
@@ -145,6 +151,29 @@ export function insertSlashCommand(
 		value,
 		cursor: slash + name.length + 2,
 	};
+}
+
+function progressiveArgumentHint(spec: ArgumentSpec[], args: string): string {
+	if (!spec.length) return '';
+	const filled = parseCommandArguments(args).length;
+	return spec
+		.slice(filled)
+		.map(arg => (arg.required === false ? `[${arg.name}]` : `<${arg.name}>`))
+		.join(' ');
+}
+
+/** Gray fish-style argument suggestion after a complete leading slash command. */
+export function slashArgumentHint(inputText: string): string {
+	const match = inputText.match(/^\/([^\s]+)(?:\s(.*))?$/s);
+	if (!match) return '';
+	const [, name, args = ''] = match;
+	if (!name) return '';
+	const builtin = COMMAND_ARGUMENT_HINTS[name];
+	if (builtin) return args.trim() ? '' : builtin;
+	const command = loadCustomCommands().find(item => item.name === name);
+	if (command) return progressiveArgumentHint(command.arguments, args);
+	const skill = loadSkills().find(item => item.name === name);
+	return skill ? progressiveArgumentHint(skill.arguments, args) : '';
 }
 
 /** Printable character from OpenTUI key event, including shifted punctuation. */
@@ -1470,6 +1499,14 @@ export function InputBox(props: {
 										}
 									>
 										<text fg={CHALK_GREY}>/ commands, ! bash, ↑/↓ history</text>
+									</Show>
+									<Show
+										when={
+											index() === inputLines().length - 1 &&
+											slashArgumentHint(input())
+										}
+									>
+										<text fg={CHALK_GREY}> {slashArgumentHint(input())}</text>
 									</Show>
 								</box>
 							)}

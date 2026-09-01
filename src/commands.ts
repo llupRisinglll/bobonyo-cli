@@ -130,7 +130,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	exit: 'Quit bobonyo',
 	quit: 'Quit bobonyo',
 	clear: 'Start a new conversation',
-	compact: 'Compact the conversation',
+	compact: 'Compact the conversation; optional preservation instructions',
 	goal: 'Set or manage a long-running goal',
 	loop: 'Create, list, or stop scheduled thread jobs',
 	fork: 'Fork this conversation into a new session',
@@ -179,6 +179,17 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	remember: 'Save durable guidance',
 	forget: 'Forget memory by id or clear a scope',
 	preferences: 'Show durable memory',
+};
+
+/** Fish-style inline argument hints for built-in commands. */
+export const COMMAND_ARGUMENT_HINTS: Record<string, string> = {
+	compact: '[instructions to preserve]',
+	'herdr:fork': '<vertical|horizontal>',
+	goal: '<objective>|status|stop',
+	loop: '<interval> <task>|list|stop <id>',
+	resume: '<session id>',
+	rename: '<name>',
+	effort: '<minimal|low|medium|high|default>',
 };
 
 /**
@@ -235,7 +246,7 @@ const MOCK_PROMPTS: Record<string, string> = {
 export interface CommandContext {
 	exit: () => void;
 	clear: () => void;
-	compact: () => void;
+	compact: (instructions: string) => void;
 	goal: (args: string) => void;
 	loop: (args: string) => void;
 	fork: () => void;
@@ -400,7 +411,7 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			ctx.clear();
 			return true;
 		case 'compact':
-			ctx.compact();
+			ctx.compact(args);
 			return true;
 		case 'goal':
 			ctx.goal(args);

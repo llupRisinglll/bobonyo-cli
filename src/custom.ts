@@ -71,6 +71,28 @@ export function mapCommandArguments(
 	return values;
 }
 
+export function parseArgumentSpecs(value: unknown): ArgumentSpec[] {
+	return (Array.isArray(value) ? value : [])
+		.map((arg): ArgumentSpec | null => {
+			if (typeof arg === 'string') return {name: arg};
+			if (!arg || typeof arg !== 'object') return null;
+			const source = arg as Record<string, unknown>;
+			if (typeof source.name !== 'string') return null;
+			return {
+				name: source.name,
+				...(typeof source.type === 'string' ? {type: source.type} : {}),
+				...(typeof source.required === 'boolean'
+					? {required: source.required}
+					: {}),
+				...(typeof source.description === 'string'
+					? {description: source.description}
+					: {}),
+				...(typeof source.rest === 'boolean' ? {rest: source.rest} : {}),
+			};
+		})
+		.filter((arg): arg is ArgumentSpec => arg !== null);
+}
+
 export interface CustomTool {
 	name: string;
 	description: string;
@@ -86,6 +108,7 @@ export interface CustomTool {
 export interface Skill {
 	name: string;
 	description: string;
+	arguments: ArgumentSpec[];
 	subscribe?: string[];
 	body: string;
 	source: string;
@@ -387,6 +410,7 @@ export function builtinHerdrSkill(): Skill | null {
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
+			arguments: parseArgumentSpecs(frontmatter.arguments),
 			body,
 			source: file,
 		};
@@ -404,6 +428,7 @@ export function builtinCavemanSkill(): Skill | null {
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
+			arguments: parseArgumentSpecs(frontmatter.arguments),
 			body,
 			source: file,
 		};
@@ -435,6 +460,7 @@ export function loadSkills(): Skill[] {
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
+			arguments: parseArgumentSpecs(frontmatter.arguments),
 			subscribe: Array.isArray(subscribe) ? subscribe.map(String) : undefined,
 			body,
 			source: file,

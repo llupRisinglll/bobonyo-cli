@@ -109,6 +109,22 @@ async function mountInput(): Promise<TestRendererSetup> {
 }
 
 describe('InputBox caret rendering (Shift+Enter regression, render-level)', () => {
+	test('complete slash command shows gray argument shadow text', async () => {
+		const setup = await mountInput();
+		try {
+			setInput('/compact');
+			await setup.flush();
+			const text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(text).toContain('[instructions to preserve]');
+		} finally {
+			setup.renderer.destroy();
+			setInput('');
+		}
+	});
+
 	test('Up navigates past a recalled multiline prompt', async () => {
 		setInput('');
 		setPromptHistory(['older prompt', 'newest line one\nnewest line two']);

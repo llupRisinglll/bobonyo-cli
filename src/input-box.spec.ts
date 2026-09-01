@@ -21,6 +21,7 @@ import {
 	typedInputChar,
 	slashToken,
 	insertSlashCommand,
+	slashArgumentHint,
 } from './components/input-box';
 import {wrapText, wrapTextDetailed} from './text-wrap';
 
@@ -72,6 +73,15 @@ describe('bash mode input helpers', () => {
 	test('normalizes terminal Shift+1 event to bang', () => {
 		expect(typedInputChar({name: '1', shift: true})).toBe('!');
 		expect(typedInputChar({name: '1'})).toBe('1');
+	});
+});
+
+describe('slash argument hints', () => {
+	test('shows built-in compact and Herdr fork argument hints', () => {
+		expect(slashArgumentHint('/compact')).toContain('preserve');
+		expect(slashArgumentHint('/herdr:fork')).toBe('<vertical|horizontal>');
+		expect(slashArgumentHint('/compact keep migrations')).toBe('');
+		expect(slashArgumentHint('/caveman')).toBe('<mode>');
 	});
 });
 

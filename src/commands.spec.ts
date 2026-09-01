@@ -2,6 +2,7 @@ import {afterEach, describe, expect, test} from 'bun:test';
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {
 	BASE_COMMAND_NAMES,
+	COMMAND_ARGUMENT_HINTS,
 	commandNames,
 	MOCK_COMMAND_NAMES,
 	runCommand,
@@ -60,6 +61,24 @@ describe('commandNames', () => {
 });
 
 describe('runCommand routing', () => {
+	test('/compact forwards optional preservation instructions', () => {
+		const calls: Array<[string, unknown[]]> = [];
+		const ctx = new Proxy({} as CommandContext, {
+			get:
+				(_target, prop: string) =>
+				(...args: unknown[]) =>
+					calls.push([prop, args]),
+		});
+		expect(
+			runCommand('/compact preserve database migration details', ctx),
+		).toBe(true);
+		expect(calls).toEqual([
+			['compact', ['preserve database migration details']],
+		]);
+		expect(COMMAND_ARGUMENT_HINTS.compact).toContain('preserve');
+		expect(COMMAND_ARGUMENT_HINTS['herdr:fork']).toContain('vertical');
+	});
+
 	test('/goal and /loop route inline specs', () => {
 		const calls: Array<[string, unknown[]]> = [];
 		const ctx = new Proxy({} as CommandContext, {

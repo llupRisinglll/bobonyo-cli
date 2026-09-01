@@ -4069,6 +4069,7 @@ export function App() {
 	const summarizeContext = async (
 		ctx: ChatMessageLike[],
 		preservedTurns: number,
+		instructions = '',
 	): Promise<string> => {
 		let summary = '';
 		let attempt = microcompactToolResults(
@@ -4077,7 +4078,7 @@ export function App() {
 		).messages;
 		const compactRequest: ChatMessageLike = {
 			role: 'user',
-			content: buildSummarizationPrompt(workspaceCwd(), preservedTurns),
+			content: `${buildSummarizationPrompt(workspaceCwd(), preservedTurns)}${instructions.trim() ? `\n\nAdditional user compaction instructions:\n${instructions.trim()}\nTreat these as high-priority preservation requirements unless they conflict with safety or the required checkpoint structure.` : ''}`,
 		};
 		for (;;) {
 			try {
@@ -4124,6 +4125,7 @@ export function App() {
 
 	const compactHistory = async (
 		ctx: ChatMessageLike[],
+		instructions = '',
 	): Promise<ChatMessageLike[]> => {
 		setCompacting(true);
 		try {
@@ -4136,6 +4138,7 @@ export function App() {
 			const rawSummary = await summarizeContext(
 				partition.summarize,
 				partition.preservedTurns,
+				instructions,
 			);
 			if (!rawSummary) throw new Error('the model returned an empty summary');
 			const model = activeEndpoint().model;
@@ -4248,7 +4251,7 @@ export function App() {
 			return ctx;
 		}
 	};
-	const compact = async () => {
+	const compact = async (instructions = '') => {
 		void runHooks({event: 'SessionStart', sessionSource: 'compact'});
 		if (busy()) {
 			appendInfo('Cannot compact while a turn is running.');
@@ -4260,7 +4263,7 @@ export function App() {
 			return;
 		}
 		try {
-			await compactHistory(ctx);
+			await compactHistory(ctx, instructions);
 		} catch (error) {
 			appendError(
 				`Compaction failed: ${error instanceof Error ? error.message : String(error)}`,

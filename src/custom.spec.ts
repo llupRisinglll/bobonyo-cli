@@ -7,6 +7,7 @@ import {
 	expandCustomTool,
 	loadCustomTools,
 	loadSkills,
+	parseArgumentSpecs,
 } from './custom';
 import {cavemanMode, setCavemanMode} from './state';
 
@@ -39,6 +40,19 @@ const write = (rel: string, content: string): void => {
 };
 
 describe('loadSkills (bobonyo-local discovery, flat files)', () => {
+	test('loads skill argument metadata for progressive input hints', () => {
+		write(
+			'.nanocoder/skills/deploy.md',
+			'---\nname: deploy\narguments:\n  - name: environment\n  - name: version\n    required: false\n---\nbody',
+		);
+		expect(
+			loadSkills().find(skill => skill.name === 'deploy')?.arguments,
+		).toEqual([{name: 'environment'}, {name: 'version', required: false}]);
+		expect(parseArgumentSpecs(['one', {name: 'rest', rest: true}])).toEqual([
+			{name: 'one'},
+			{name: 'rest', rest: true},
+		]);
+	});
 	test('flat skills/*.md loads from the project dir', () => {
 		write('.nanocoder/skills/deploy.md', '---\nname: deploy\n---\nbody');
 		expect(loadSkills().map(skill => skill.name)).toContain('deploy');
