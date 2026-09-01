@@ -22,6 +22,8 @@ export interface BackgroundTask {
 	completion?: Promise<void>;
 	cancel?: () => void;
 	owner?: 'user' | 'goal' | 'loop';
+	/** Service processes remain monitorable but must not block turn completion. */
+	blocksCompletion?: boolean;
 }
 
 /**
@@ -105,6 +107,13 @@ function nextTaskId(): string {
 
 export function activeBgCount(): number {
 	return bgTasks().filter(task => task.running).length;
+}
+
+/** Background work which must finish before turn/goal completion. */
+export function activeBlockingBgCount(): number {
+	return bgTasks().filter(
+		task => task.running && task.blocksCompletion !== false,
+	).length;
 }
 
 /** Cancel every running Bash task owned by this Bobonyo process. */

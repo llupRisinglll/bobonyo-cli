@@ -86,6 +86,7 @@ import {
 } from './tools';
 import {
 	activeBgCount,
+	activeBlockingBgCount,
 	bgTasks,
 	cancelRunningBackgroundTasks,
 	normalizeBashCommand,
@@ -1827,7 +1828,7 @@ export function App() {
 		// iterations polling work that is still running.
 		if (
 			!options?.allowWhileTasksRun &&
-			(activeBgCount() > 0 || activeAgents() > 0)
+			(activeBlockingBgCount() > 0 || activeAgents() > 0)
 		)
 			return;
 		if (
@@ -1872,7 +1873,7 @@ export function App() {
 		if (!currentGoal) return;
 		const activeWork = [
 			...bgTasks()
-				.filter(task => task.running)
+				.filter(task => task.running && task.blocksCompletion !== false)
 				.map(task => `bash ${task.id}: ${task.command.slice(0, 180)}`),
 			...activeAgentRuns()
 				.filter(agent => agent.status === 'running')
@@ -1907,7 +1908,9 @@ export function App() {
 		});
 	}
 	function pendingBackgroundWorkMessage(): string | undefined {
-		const runningJobs = bgTasks().filter(task => task.running);
+		const runningJobs = bgTasks().filter(
+			task => task.running && task.blocksCompletion !== false,
+		);
 		const runningAgents = activeAgentRuns().filter(
 			agent => agent.status === 'running',
 		);

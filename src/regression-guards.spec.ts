@@ -1032,6 +1032,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/!waitingForBackgroundWork/);
 		expect(app).toMatch(/completionPopupController\.cancel\(\)/);
 	});
+	test('persistent service processes remain monitorable but never block completion', () => {
+		const bash = read('./bash.ts');
+		const persistent = read('./persistent-process.ts');
+		const app = read('./app.tsx');
+		expect(bash).toMatch(/export function activeBlockingBgCount/);
+		expect(bash).toMatch(/task\.running && task\.blocksCompletion !== false/);
+		expect(persistent).toMatch(/blocksCompletion: false/);
+		expect(app).toMatch(
+			/activeBlockingBgCount\(\) > 0 \|\| activeAgents\(\) > 0/,
+		);
+	});
 	test('only explicit process_start creates background work', () => {
 		const bash = read('./bash.ts');
 		const app = read('./app.tsx');

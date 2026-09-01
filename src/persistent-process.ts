@@ -69,6 +69,7 @@ export function startPersistentProcess(
 				exitCode: null,
 				startedAt: Date.now(),
 				owner,
+				blocksCompletion: false,
 				cancel: () => {
 					void stopPersistentProcess(row.id);
 				},

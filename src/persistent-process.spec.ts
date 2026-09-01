@@ -5,7 +5,12 @@ import {
 	stopPersistentProcess,
 	writePersistentProcess,
 } from './persistent-process';
-import {activeBgCount, bgTasks, setBgTasks} from './bash';
+import {
+	activeBgCount,
+	activeBlockingBgCount,
+	bgTasks,
+	setBgTasks,
+} from './bash';
 
 test('persistent process accepts input, reports output, and stops', async () => {
 	setBgTasks([]);
@@ -19,7 +24,9 @@ test('persistent process accepts input, reports output, and stops', async () => 
 		},
 	);
 	expect(activeBgCount()).toBe(1);
+	expect(activeBlockingBgCount()).toBe(0);
 	expect(bgTasks()[0]?.id).toBe(row.id);
+	expect(bgTasks()[0]?.blocksCompletion).toBe(false);
 	expect(writePersistentProcess(row.id, 'hello\n')).toContain('Wrote');
 	await Bun.sleep(100);
 	expect(persistentProcessStatus(row.id)).toContain('got:hello');
