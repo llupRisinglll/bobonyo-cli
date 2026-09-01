@@ -125,6 +125,28 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 		}
 	});
 
+	test('typed argument separator does not add another shadow-text gap', async () => {
+		const setup = await mountInput();
+		try {
+			setInput('/compact ');
+			await setup.flush();
+			const inputLine = setup
+				.captureSpans()
+				.lines.find(line =>
+					line.spans.some(span =>
+						span.text.includes('[instructions to preserve]'),
+					),
+				);
+			expect(inputLine).toBeDefined();
+			const text = inputLine!.spans.map(span => span.text).join('');
+			expect(text).toContain('/compact [instructions to preserve]');
+			expect(text).not.toContain('/compact  [instructions to preserve]');
+		} finally {
+			setup.renderer.destroy();
+			setInput('');
+		}
+	});
+
 	test('Up navigates past a recalled multiline prompt', async () => {
 		setInput('');
 		setPromptHistory(['older prompt', 'newest line one\nnewest line two']);

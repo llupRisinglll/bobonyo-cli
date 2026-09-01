@@ -176,6 +176,20 @@ export function slashArgumentHint(inputText: string): string {
 	return skill ? progressiveArgumentHint(skill.arguments, args) : '';
 }
 
+/**
+ * Keep a shadow hint anchored while user has only typed argument separators.
+ * The input caret already owns one end-of-line space, so rendering buffered
+ * separators too would walk the hint right on every Space press.
+ */
+export function shadowHintInputPrefix(
+	prefix: string,
+	inputText: string,
+): string {
+	if (!slashArgumentHint(inputText)) return prefix;
+	const match = prefix.match(/^(\/\S+)\s+$/);
+	return match?.[1] ?? prefix;
+}
+
 /** Printable character from OpenTUI key event, including shifted punctuation. */
 export function typedInputChar(event: {name: string; shift?: boolean}): string {
 	const char = event.name;
@@ -1446,7 +1460,13 @@ export function InputBox(props: {
 									>
 										<For
 											each={tokenizeInputLine(
-												line.slice(0, caretIndexFor(line, cursorInfo().column)),
+												shadowHintInputPrefix(
+													line.slice(
+														0,
+														caretIndexFor(line, cursorInfo().column),
+													),
+													input(),
+												),
 												knownCommands(),
 											)}
 										>
@@ -1506,7 +1526,7 @@ export function InputBox(props: {
 											slashArgumentHint(input())
 										}
 									>
-										<text fg={CHALK_GREY}> {slashArgumentHint(input())}</text>
+										<text fg={CHALK_GREY}>{slashArgumentHint(input())}</text>
 									</Show>
 								</box>
 							)}
