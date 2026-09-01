@@ -58,6 +58,7 @@ export function BackgroundJobsModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const active = () => activeRowPalette(colors());
 	const availableWidth = () => Math.max(1, dims().width - 2);
+	const availableHeight = () => Math.max(1, dims().height - 2);
 	const listCardWidth = () => Math.min(110, availableWidth());
 	const detailContentLines = () =>
 		detailAgent()
@@ -66,8 +67,8 @@ export function BackgroundJobsModal(props: {
 	const cardWidth = () => (detailId() ? availableWidth() : listCardWidth());
 	const cardHeight = () =>
 		detailId()
-			? Math.min(dims().height - 2, Math.max(7, detailContentLines() + 5))
-			: Math.max(12, Math.min(dims().height - 2, 34));
+			? Math.min(availableHeight(), Math.max(1, detailContentLines() + 5))
+			: Math.max(1, Math.min(availableHeight(), 34));
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
@@ -114,7 +115,7 @@ export function BackgroundJobsModal(props: {
 		const start = listStart(agents().length, count);
 		return agents().slice(start, start + count);
 	});
-	const detailVisibleLines = () => Math.max(4, cardHeight() - 8);
+	const detailVisibleLines = () => Math.max(1, cardHeight() - 8);
 	const detailLines = createMemo(() =>
 		backgroundJobDetailWindow(
 			detailTask()?.output ?? [],
@@ -405,7 +406,7 @@ export function BackgroundJobsModal(props: {
 								<History
 									embedded
 									width={detailHistoryWidth()}
-									height={Math.max(4, cardHeight() - 7)}
+									height={Math.max(1, cardHeight() - 7)}
 									messages={agentMessages}
 									running={() => detailAgent()?.status === 'running'}
 									streaming={() => detailAgent()?.streaming ?? ''}

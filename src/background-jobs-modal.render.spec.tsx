@@ -447,3 +447,34 @@ test('subagent details wrap long transcript rows inside a viewport-width card', 
 		setup.renderer.destroy();
 	}
 });
+
+test('subagent details never underflow on a 12-row terminal', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_tiny_detail',
+			name: 'explore',
+			description: 'tiny terminal',
+			output: '',
+			transcript: [],
+			streaming: '',
+			history: [{role: 'user', content: 'Task: inspect'}],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal onClose={() => {}} />,
+		{width: 95, height: 12},
+	);
+	try {
+		await setup.flush();
+		setup.mockInput.pressArrow('right');
+		setup.mockInput.pressEnter();
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'Subagent')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});

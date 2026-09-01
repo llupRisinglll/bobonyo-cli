@@ -2922,7 +2922,13 @@ async function runSubagent(
 	let transcript = initialHistory
 		? [`Follow-up: ${followupPrompt || description}`]
 		: [`Task: ${description}`];
-	const publish = (streamingText = '') => {
+	let lastStreamingPublishAt = 0;
+	const publish = (streamingText = '', force = true) => {
+		const now = Date.now();
+		if (!force && streamingText.trim() && now - lastStreamingPublishAt < 100) {
+			return;
+		}
+		if (streamingText.trim()) lastStreamingPublishAt = now;
 		const lines = streamingText.trim()
 			? [...transcript, shortText(streamingText.trim())]
 			: transcript;
@@ -2932,15 +2938,6 @@ async function runSubagent(
 			streaming: streamingText.trim(),
 			history: structuredClone(history),
 		});
-		if (agentId && streamingText.trim()) {
-			logSubagentEvent({
-				event: 'stream',
-				sessionId: toolContext.sessionId,
-				agentId,
-				agentName: subagentType,
-				detail: streamingText,
-			});
-		}
 	};
 	publish();
 	for (let round = 0; round < MAX_SUBAGENT_TOOL_ROUNDS; round++) {
@@ -2972,7 +2969,7 @@ async function runSubagent(
 			{
 				// C10: stream the subagent's reasoning/text into the running row so
 				// its per-call progress is visible while it works.
-				onText: text => publish(text),
+				onText: text => publish(text, false),
 				onReasoning: () => {},
 			},
 			signal,
@@ -3106,7 +3103,7 @@ async function runSubagent(
 			{
 				onText: text => {
 					finalization += text;
-					publish(finalization);
+					publish(finalization, false);
 				},
 				onReasoning: () => {},
 			},
