@@ -617,17 +617,19 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			// Header row and message row are DISTINCT — the message never
 			// overwrites the header (the old single-mangled-line bug).
 			const headerRow = rows.findIndex(row =>
-				row.includes('Queued messages (↑/↓ select, Enter edit, Del remove):'),
+				row.includes(
+					'Queued messages (↑/↓ select, Enter edit, Del remove · /queue',
+				),
 			);
 			expect(headerRow).toBeGreaterThanOrEqual(0);
-			expect(rows[headerRow]).not.toContain('(queued)');
+			expect(rows[headerRow]).not.toContain('(next round)');
 			const msgRow = rows.findIndex(row =>
 				row.includes('feel free to also research'),
 			);
 			expect(msgRow).toBeGreaterThan(headerRow);
 			// Tag + value are spaced: `(queued) feel` never `(queued)feel`.
-			expect(rows[msgRow]).toContain('(queued) feel free');
-			expect(rows[msgRow]).not.toContain('(queued)feel');
+			expect(rows[msgRow]).toMatch(/\(next round\)\s+feel free/);
+			expect(rows[msgRow]).not.toContain('(next round)feel');
 		} finally {
 			setPendingQueue([]);
 			setup.renderer.destroy();
