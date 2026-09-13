@@ -141,6 +141,50 @@ describe('GPT apply_patch parser and executor', () => {
 		);
 		expect(updated).toBe('function a() {\n  return 2;\n}\nfinal\n');
 	});
+
+	test('rejects collapsed one-line TSX additions before writing any file', () => {
+		const cwd = workspace();
+		writeFileSync(join(cwd, 'first.txt'), 'before\n');
+		writeFileSync(join(cwd, 'component.tsx'), 'export const Existing = 1;\n');
+		const collapsed =
+			"export const Existing=()=>{return <box><text>new</text><text>{['alpha','beta','gamma','delta'].map(value=><span>{value}</span>)}</text><text>more content makes this malformed addition unmistakably huge</text></box>}";
+		const patch = `*** Begin Patch
+*** Update File: first.txt
+@@
+-before
++after
+*** Update File: component.tsx
+@@
+-export const Existing = 1;
++${collapsed}
+*** End Patch`;
+		expect(() => executeApplyPatch(cwd, patch)).toThrow(
+			/collapsed code.*Retry with proper indentation and line breaks/,
+		);
+		expect(readFileSync(join(cwd, 'first.txt'), 'utf8')).toBe('before\n');
+		expect(readFileSync(join(cwd, 'component.tsx'), 'utf8')).toBe(
+			'export const Existing = 1;\n',
+		);
+	});
+
+	test('preserves long non-code additions and existing formatting exactly', () => {
+		const cwd = workspace();
+		const existing = 'const legacy={bad:true}\n';
+		writeFileSync(join(cwd, 'component.ts'), existing);
+		const longString = 'x'.repeat(220);
+		executeApplyPatch(
+			cwd,
+			`*** Begin Patch
+*** Update File: component.ts
+@@
+ const legacy={bad:true}
++export const message = '${longString}';
+*** End Patch`,
+		);
+		expect(readFileSync(join(cwd, 'component.ts'), 'utf8')).toBe(
+			`${existing}export const message = '${longString}';\n`,
+		);
+	});
 });
 
 test('apply_patch tool snapshots every affected path for undo', async () => {

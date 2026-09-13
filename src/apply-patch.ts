@@ -7,11 +7,12 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import {dirname, isAbsolute, relative, resolve} from 'node:path';
+import {dirname, extname, isAbsolute, relative, resolve} from 'node:path';
 
 export interface PatchChunk {
 	oldLines: string[];
 	newLines: string[];
+	addedLines?: string[];
 	context?: string;
 	endOfFile?: boolean;
 }
@@ -40,6 +41,43 @@ export interface ApplyPatchDisplayChange {
 	path: string;
 	targetPath?: string;
 	rows: ApplyPatchDisplayRow[];
+}
+
+const FORMATTED_CODE_EXTENSIONS = new Set([
+	'.css',
+	'.js',
+	'.jsx',
+	'.less',
+	'.mjs',
+	'.scss',
+	'.ts',
+	'.tsx',
+]);
+
+const MAX_STRUCTURED_ADDITION_LENGTH = 160;
+
+function looksLikeCollapsedCode(line: string): boolean {
+	if (line.length < MAX_STRUCTURED_ADDITION_LENGTH) return false;
+	const delimiters = line.match(/[{};]|<\/?[A-Za-z]/g)?.length ?? 0;
+	return delimiters >= 4;
+}
+
+function validateAddedCodeFormatting(
+	hunk: PatchHunk,
+	targetPath: string,
+): void {
+	if (!FORMATTED_CODE_EXTENSIONS.has(extname(targetPath).toLowerCase())) return;
+	const additions =
+		hunk.type === 'add'
+			? hunk.content.replace(/\n$/, '').split('\n')
+			: hunk.type === 'update'
+				? hunk.chunks.flatMap(chunk => chunk.addedLines ?? [])
+				: [];
+	const collapsed = additions.find(looksLikeCollapsedCode);
+	if (!collapsed) return;
+	throw new Error(
+		`patch addition in ${hunk.path} is ${collapsed.length} characters of collapsed code. Retry with proper indentation and line breaks; do not submit minified or huge one-line additions.`,
+	);
 }
 
 function cleanPatchText(input: string): string {
@@ -112,6 +150,7 @@ export function parseApplyPatch(input: string): PatchHunk[] {
 				index += 1;
 				const oldLines: string[] = [];
 				const newLines: string[] = [];
+				const addedLines: string[] = [];
 				let endOfFile = false;
 				while (
 					index < end &&
@@ -128,13 +167,16 @@ export function parseApplyPatch(input: string): PatchHunk[] {
 						oldLines.push(line.slice(1));
 						newLines.push(line.slice(1));
 					} else if (line.startsWith('-')) oldLines.push(line.slice(1));
-					else if (line.startsWith('+')) newLines.push(line.slice(1));
-					else throw new Error(`invalid update line: ${line}`);
+					else if (line.startsWith('+')) {
+						const added = line.slice(1);
+						newLines.push(added);
+						addedLines.push(added);
+					} else throw new Error(`invalid update line: ${line}`);
 				}
 				if (oldLines.length === 0 && newLines.length === 0) {
 					throw new Error(`empty update chunk for ${path}`);
 				}
-				chunks.push({oldLines, newLines, context, endOfFile});
+				chunks.push({oldLines, newLines, addedLines, context, endOfFile});
 			}
 			if (chunks.length === 0)
 				throw new Error(`Update File ${path} has no chunks`);
@@ -281,6 +323,7 @@ export function planApplyPatch(
 			cwd,
 			hunk.type === 'update' && hunk.movePath ? hunk.movePath : hunk.path,
 		);
+		validateAddedCodeFormatting(hunk, targetPath);
 		if (targets.has(path) || targets.has(targetPath)) {
 			throw new Error(`patch modifies a path more than once: ${hunk.path}`);
 		}
