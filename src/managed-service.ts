@@ -3,6 +3,7 @@ import {mkdirSync, readFileSync} from 'node:fs';
 import {dirname, relative, resolve} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
 import {buildSandboxCommand} from './sandbox';
+import type {SandboxCommand, SandboxSettings} from './sandbox';
 import {commandSandboxSettings, loadSettings} from './settings';
 
 export type ManagedServiceRestart = 'always' | 'on-failure' | 'no';
@@ -30,6 +31,13 @@ interface CommandResult {
 }
 
 export type ManagedServiceRunner = (argv: string[]) => CommandResult;
+export type ManagedServiceSandboxBuilder = (
+	command: string,
+	cwd: string,
+	settings: SandboxSettings,
+	available?: boolean,
+	workspaceRoot?: string,
+) => SandboxCommand;
 
 export interface UserManagerTransport {
 	systemctl: string[];
@@ -184,6 +192,7 @@ export function checkManagedServiceSupervisor(
 export function startManagedService(
 	options: ManagedServiceOptions,
 	runner: ManagedServiceRunner = defaultRunner,
+	sandboxBuilder: ManagedServiceSandboxBuilder = buildSandboxCommand,
 ): string {
 	const identity = managedServiceIdentity(options.name, options.workspaceRoot);
 	const cwd = resolve(options.cwd);
@@ -196,7 +205,7 @@ export function startManagedService(
 	if (!options.command.trim()) throw new Error('Service command is required.');
 	const settings = loadSettings();
 	const sandboxSettings = commandSandboxSettings(settings);
-	const sandbox = buildSandboxCommand(
+	const sandbox = sandboxBuilder(
 		options.command,
 		cwd,
 		{

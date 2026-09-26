@@ -150,7 +150,7 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 				.captureSpans()
 				.lines.flatMap(line => line.spans.map(span => span.text))
 				.join('\n');
-			expect(text).toContain('❯ /impeccable');
+			expect(text).toMatch(/❯\s+\/impeccable/);
 		} finally {
 			setup.renderer.destroy();
 			setInput('');

@@ -210,7 +210,7 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 	});
 	test('the Herdr skill is advertised to the model and loadable by exact name', () => {
 		const prompt = buildSystemPrompt('full');
-		expect(prompt).toMatch(/- herdr \([^\n]+\/skills\/herdr\.md\):/);
+		expect(prompt).toMatch(/- herdr \([^\n]+\):/);
 		expect(prompt).toContain('Use the skill tool to load a skill');
 	});
 	test('loaded skills are reused until compaction removes their instructions', () => {

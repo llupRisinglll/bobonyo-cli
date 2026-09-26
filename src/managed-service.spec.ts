@@ -11,11 +11,24 @@ import {
 	stopManagedService,
 	type ManagedServiceRunner,
 } from './managed-service';
+import type {ManagedServiceSandboxBuilder} from './managed-service';
 
 let root = '';
 let data = '';
 const originalData = process.env.BOBONYO_DATA_DIR;
 let originalMode: string | undefined;
+const testSandboxBuilder: ManagedServiceSandboxBuilder = (
+	command,
+	_cwd,
+	settings,
+) =>
+	settings.mode === 'off'
+		? {argv: ['bash', '-c', command], active: false, backend: 'none'}
+		: {
+				argv: ['bwrap', '--', 'bash', '-c', command],
+				active: true,
+				backend: 'bubblewrap',
+			};
 
 beforeEach(() => {
 	originalMode = process.env.BOBONYO_MODE;
@@ -145,6 +158,7 @@ describe('managed service lifecycle command construction', () => {
 					restart: 'always',
 				},
 				runner,
+				testSandboxBuilder,
 			);
 			expect(started).toContain('invocation: abc');
 			const run = calls.find(call => call[0] === 'systemd-run') ?? [];
@@ -193,6 +207,7 @@ describe('managed service lifecycle command construction', () => {
 					workspaceRoot: root,
 				},
 				runner,
+				testSandboxBuilder,
 			),
 		).toThrow('foreign systemd unit collision');
 	});

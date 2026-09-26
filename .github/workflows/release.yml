@@ -32,11 +32,17 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Install ripgrep for LSP fallback tests
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+
       - name: Verify
         run: |
           bun run typecheck
           bun test
           bun run build
+
+      - name: Check release version plan
+        run: node scripts/release.mjs --dry-run
 
       - name: Consume change sets
         id: release

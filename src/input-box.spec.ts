@@ -1,4 +1,7 @@
-import {describe, expect, test} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {
 	atomicTokens,
 	bashDisplayValue,
@@ -78,6 +81,29 @@ describe('bash mode input helpers', () => {
 });
 
 describe('slash argument hints', () => {
+	let configRoot = '';
+	let oldConfig: string | undefined;
+	let oldLegacyConfig: string | undefined;
+	beforeEach(() => {
+		oldConfig = process.env.NANOCODER_CONFIG_DIR;
+		oldLegacyConfig = process.env.BOBONYO_CONFIG_DIR;
+		configRoot = mkdtempSync(join(tmpdir(), 'bobonyo-input-skills-'));
+		const skills = join(configRoot, 'skills');
+		mkdirSync(skills, {recursive: true});
+		writeFileSync(
+			join(skills, 'impeccable.md'),
+			'---\nname: impeccable\nargument-hint: "[shape|polish] [scope]"\n---\nfixture',
+		);
+		process.env.BOBONYO_CONFIG_DIR = configRoot;
+		process.env.NANOCODER_CONFIG_DIR = configRoot;
+	});
+	afterEach(() => {
+		if (oldConfig === undefined) delete process.env.NANOCODER_CONFIG_DIR;
+		else process.env.NANOCODER_CONFIG_DIR = oldConfig;
+		if (oldLegacyConfig === undefined) delete process.env.BOBONYO_CONFIG_DIR;
+		else process.env.BOBONYO_CONFIG_DIR = oldLegacyConfig;
+		rmSync(configRoot, {recursive: true, force: true});
+	});
 	test('shows built-in compact and Herdr fork argument hints', () => {
 		expect(slashArgumentHint('/compact')).toContain('preserve');
 		expect(slashArgumentHint('/herdr:fork')).toBe('<vertical|horizontal>');
@@ -90,7 +116,7 @@ describe('slash argument hints', () => {
 	});
 	test('uses OpenClaude-style argument-hint metadata for skills', () => {
 		expect(slashArgumentHint('/impeccable')).toContain('[shape');
-		expect(slashArgumentHint('/impeccable ')).toContain('init|document');
+		expect(slashArgumentHint('/impeccable ')).toContain('[scope]');
 	});
 });
 

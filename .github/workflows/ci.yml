@@ -22,6 +22,8 @@ jobs:
 
       - name: Install
         run: bun install --frozen-lockfile
+      - name: Install ripgrep for LSP fallback tests
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
 
       # Every commit with source/build changes must carry a change set
       # (AGENTS.md rule); malformed entries are rejected here too.

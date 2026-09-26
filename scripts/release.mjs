@@ -185,6 +185,25 @@ const entries = collectChangesets();
 const pkg = JSON.parse(readFileSync(packagePath, 'utf8'));
 const current = pkg.version;
 
+const publishedTags = execFileSync('git', ['tag', '--list', 'v*'], {
+	cwd: root,
+	encoding: 'utf8',
+})
+	.trim()
+	.split('\n')
+	.filter(tag => /^v\d+\.\d+\.\d+$/.test(tag))
+	.map(tag => tag.slice(1))
+	.sort((left, right) => {
+		const a = left.split('.').map(Number);
+		const b = right.split('.').map(Number);
+		return b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
+	});
+if (publishedTags.length > 0 && publishedTags[0] !== current) {
+	throw new Error(
+		`Version drift: package.json is ${current}, latest release tag is v${publishedTags[0]}. Reconcile version before consuming change sets.`,
+	);
+}
+
 if (entries.length === 0) {
 	console.log(`release.mjs: no pending change sets (version stays ${current})`);
 	emitOutputs(false, current);
@@ -197,6 +216,18 @@ const level = entries.reduce(
 );
 const version = bumpVersion(current, level);
 const section = releaseSection(version, entries);
+
+// Never silently reuse a released version: stale package.json state must be
+// reconciled with tags before a new release can proceed.
+const existingTag = execFileSync('git', ['tag', '--list', `v${version}`], {
+	cwd: root,
+	encoding: 'utf8',
+}).trim();
+if (existingTag) {
+	throw new Error(
+		`Refusing release: v${version} already exists. Reconcile package.json version with release tags first.`,
+	);
+}
 
 console.log(
 	`release.mjs: ${entries.length} change set(s) → ${current} → ${version} (${level})`,
