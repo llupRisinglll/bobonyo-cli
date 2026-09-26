@@ -38,3 +38,8 @@ verification, configuration ownership, and safety. These rules supplement it.
   update `CHANGELOG.md`, tag `vX.Y.Z`, and publish a GitHub Release.
   Never edit `package.json`'s `version` by hand and never hand-edit a
   generated `CHANGELOG.md` release section.
+- **After every push**, check whether the release workflow bumped the version
+  (run `gh run list --limit 1` or read `package.json` after a short wait)
+  and **report back to the user** with the version bump result: the old
+  version, the new version, and whether the GitHub Release was published.
+  Do not skip this report — the user expects visibility into every release.
