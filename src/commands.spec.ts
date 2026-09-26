@@ -249,4 +249,20 @@ describe('runCommand routing', () => {
 			else process.env.BOBONYO_CONFIG_DIR = previous;
 		}
 	});
+
+	test('unknown slash-input returns false (no error, falls through to message)', () => {
+		const calls: Array<[string, unknown[]]> = [];
+		const ctx = new Proxy({} as CommandContext, {
+			get: (_target, prop: string) =>
+				prop === 'onBuiltinCommand'
+					? undefined
+					: (...args: unknown[]) => calls.push([prop, args]),
+		});
+		// File paths, natural language, anything unrecognized → false.
+		expect(runCommand('/home/user/file.txt', ctx)).toBe(false);
+		expect(runCommand('/this is a question about code', ctx)).toBe(false);
+		expect(runCommand('/skill:nonexistent', ctx)).toBe(false);
+		// No error was shown — calls list is empty.
+		expect(calls).toEqual([]);
+	});
 });

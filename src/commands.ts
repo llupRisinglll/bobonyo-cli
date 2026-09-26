@@ -409,8 +409,8 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			});
 			return true;
 		}
-		appendInfo(`Unknown skill '${skillName}'.`);
-		return true;
+		// Unknown skill — fall through to regular message path.
+		return false;
 	}
 	if (
 		(BASE_COMMAND_NAMES as readonly string[]).includes(name) ||
@@ -616,10 +616,10 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 				});
 				return true;
 			}
-			appendInfo(
-				`Unknown command or skill: /${name}. Type /help for the list.`,
-			);
-			return true;
+			// Unknown command or skill — return false so the caller falls
+			// through to the regular message path (file paths, natural
+			// language, anything starting with /). No error shown.
+			return false;
 	}
 }
 
