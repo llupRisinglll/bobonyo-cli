@@ -904,7 +904,19 @@ export function App() {
 						}
 					});
 				}
-				if (provider.modelDiscoveryUrl) {
+				if (provider.codexAccount) {
+					// ChatGPT-account codex catalog (login token, no
+					// modelDiscoveryUrl): refresh at startup too, so a newly
+					// launched model lands on the list without opening /model
+					// first.
+					void discoverCodexAccountModels(provider.baseUrl).then(models => {
+						if (models.length > 0) {
+							setDiscoveredModels(prev => ({...prev, [provider.id]: models}));
+							setActiveEndpoint(prev => ({...prev, models}));
+							void refreshModelWindows(provider, models);
+						}
+					});
+				} else if (provider.modelDiscoveryUrl) {
 					void discoverModels(provider).then(models => {
 						if (models.length > 0) {
 							setActiveEndpoint(prev => ({...prev, models}));

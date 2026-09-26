@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
 	applyProviderDeletion,
+	CODEX_CATALOG_CLIENT_VERSION,
 	codexClientVersion,
 	discoverCodexAccountModels,
 	discoverModels,
@@ -420,6 +421,12 @@ describe('discoverModels (full-URL contract)', () => {
 			);
 			expect(models).toEqual(['gpt-5.5', 'gpt-5.6-terra']);
 			expect(requested).toContain('/models?client_version=');
+			// Version-GATED catalogs: the request must use the full-catalog
+			// floor version, never the installed (or fallback) codex CLI
+			// version — that is exactly what hid GPT-6-class launches.
+			expect(requested).toContain(
+				`client_version=${CODEX_CATALOG_CLIENT_VERSION}`,
+			);
 			const saved = JSON.parse(
 				readFileSync(modelCatalogCachePath(), 'utf8'),
 			) as {entries: Record<string, {models: string[]; at: number}>};
@@ -427,6 +434,46 @@ describe('discoverModels (full-URL contract)', () => {
 				'gpt-5.5',
 				'gpt-5.6-terra',
 			]);
+		} finally {
+			globalThis.fetch = originalFetch;
+			if (prevHome === undefined) delete process.env.CODEX_HOME;
+			else process.env.CODEX_HOME = prevHome;
+		}
+	});
+
+	test('codex account discovery drops backend-internal hidden rows', async () => {
+		const codexHome = join(configDir, 'codex-home-hide');
+		mkdirSync(codexHome, {recursive: true});
+		writeFileSync(
+			join(codexHome, 'auth.json'),
+			JSON.stringify({
+				tokens: {access_token: 'tok-account', account_id: 'acc-1'},
+			}),
+			'utf8',
+		);
+		const prevHome = process.env.CODEX_HOME;
+		process.env.CODEX_HOME = codexHome;
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () =>
+			new Response(
+				JSON.stringify({
+					models: [
+						{slug: 'gpt-6-astra', visibility: 'list'},
+						{slug: 'gpt-reserve', visibility: 'hide'},
+						{slug: 'codex-auto-review', visibility: 'hide'},
+						{slug: 'gpt-5.6-luna'},
+					],
+				}),
+				{status: 200},
+			)) as unknown as typeof fetch;
+		try {
+			// A DIFFERENT baseUrl than the test above: the in-memory catalog
+			// cache is keyed by discovery URL and would otherwise serve the
+			// previous test's result within its TTL.
+			const models = await discoverCodexAccountModels(
+				'https://chatgpt.com/backend-api/codex-alt',
+			);
+			expect(models).toEqual(['gpt-6-astra', 'gpt-5.6-luna']);
 		} finally {
 			globalThis.fetch = originalFetch;
 			if (prevHome === undefined) delete process.env.CODEX_HOME;

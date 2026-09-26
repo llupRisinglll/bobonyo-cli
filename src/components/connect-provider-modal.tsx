@@ -37,15 +37,20 @@ const CODEX_MODELS = [
 	'gpt-5.4-codex-mini',
 ];
 /**
- * The ChatGPT-ACCOUNT codex backend's model catalog (fetched live from
- * /backend-api/codex/models). The `gpt-5.5-codex` family is API-key-only —
- * the account endpoint rejects it with 400.
+ * The ChatGPT-ACCOUNT codex backend's model catalog SEED (the live
+ * /backend-api/codex/models fetch supersedes it after connect). The
+ * `gpt-5.5-codex` family is API-key-only — the account endpoint rejects
+ * it with 400. Keep this list equal to the account catalog's VISIBLE rows
+ * so a newly launched model shows even before the first discovery lands.
  */
 const CODEX_ACCOUNT_MODELS = [
-	'gpt-5.5',
+	'gpt-6-astra',
+	'gpt-6-sol',
+	'gpt-6-luna',
+	'gpt-5.6-sol',
 	'gpt-5.6-terra',
 	'gpt-5.6-luna',
-	'gpt-5.4-mini',
+	'gpt-5.5',
 ];
 
 // The CURRENT DeepSeek catalog (the /models endpoint returns v4-flash/v4-pro;

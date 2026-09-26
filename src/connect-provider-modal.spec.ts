@@ -20,16 +20,15 @@ import {
 } from './components/connect-provider-modal';
 
 const rows = PROVIDER_PRESETS.map(preset => ({
-	kind: (preset.id === 'custom' ? 'custom' : 'provider') as 'provider' | 'custom',
+	kind: (preset.id === 'custom' ? 'custom' : 'provider') as
+		'provider' | 'custom',
 	preset,
 	count: 0,
 }));
 
 describe('filterConnectPicker (opencode-style provider list)', () => {
 	test('an empty query keeps every preset', () => {
-		expect(filterConnectPicker(rows, '')).toHaveLength(
-			PROVIDER_PRESETS.length,
-		);
+		expect(filterConnectPicker(rows, '')).toHaveLength(PROVIDER_PRESETS.length);
 	});
 
 	test('matches preset titles case-insensitively', () => {
@@ -43,9 +42,7 @@ describe('filterConnectPicker (opencode-style provider list)', () => {
 	});
 
 	test('no match returns the empty row (never a blank card)', () => {
-		expect(filterConnectPicker(rows, 'azure')).toEqual([
-			{kind: 'empty'},
-		]);
+		expect(filterConnectPicker(rows, 'azure')).toEqual([{kind: 'empty'}]);
 	});
 });
 
@@ -79,24 +76,21 @@ describe('provider presets (known endpoints, never asked)', () => {
 			PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')?.baseUrl,
 		).toBe('https://token-plan-sgp.xiaomimimo.com');
 		expect(
-			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')
-				?.baseUrl,
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')?.baseUrl,
 		).toBe('https://opencode.ai/zen/v1');
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')
 				?.modelDiscoveryUrl,
 		).toBe('https://opencode.ai/zen/v1/models');
 		expect(
-			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')
-				?.baseUrl,
+			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')?.baseUrl,
 		).toBe('https://opencode.ai/zen/go/v1');
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')
 				?.modelDiscoveryUrl,
 		).toBe('https://opencode.ai/zen/go/v1/models');
 		expect(
-			PROVIDER_PRESETS.find(preset => preset.id === 'anthropic')
-				?.sdkProvider,
+			PROVIDER_PRESETS.find(preset => preset.id === 'anthropic')?.sdkProvider,
 		).toBe('anthropic');
 		expect(
 			PROVIDER_PRESETS.find(preset => preset.id === 'openrouter')
@@ -124,12 +118,16 @@ describe('provider presets (known endpoints, never asked)', () => {
 		});
 		expect(codexAccountProvider('codex-pro').id).toBe('codex-pro');
 		// The ChatGPT-account backend rejects the API-key `gpt-5.5-codex`
-		// family (400 "not supported"); it serves gpt-5.5 / gpt-5.6-* instead.
+		// family (400 "not supported"); it serves the GPT-6 / gpt-5.6
+		// account catalog instead.
 		expect(codexAccountProvider().models).toEqual([
-			'gpt-5.5',
+			'gpt-6-astra',
+			'gpt-6-sol',
+			'gpt-6-luna',
+			'gpt-5.6-sol',
 			'gpt-5.6-terra',
 			'gpt-5.6-luna',
-			'gpt-5.4-mini',
+			'gpt-5.5',
 		]);
 	});
 
@@ -167,9 +165,7 @@ describe('provider presets (known endpoints, never asked)', () => {
 	});
 
 	test('buildPresetProvider routes codex through the responses builder', () => {
-		const codexPreset = PROVIDER_PRESETS.find(
-			preset => preset.id === 'codex',
-		)!;
+		const codexPreset = PROVIDER_PRESETS.find(preset => preset.id === 'codex')!;
 		expect(buildPresetProvider(codexPreset, 'codex', 'sk-9')).toMatchObject({
 			sdkProvider: 'responses',
 			apiKey: 'sk-9',
@@ -182,9 +178,7 @@ describe('provider presets (known endpoints, never asked)', () => {
 	});
 
 	test('OpenCode Zen connects WITHOUT a key (anonymous free tier)', () => {
-		const zen = PROVIDER_PRESETS.find(
-			preset => preset.id === 'opencode-zen',
-		)!;
+		const zen = PROVIDER_PRESETS.find(preset => preset.id === 'opencode-zen')!;
 		expect(zen.optionalKey).toBe(true);
 		const provider = buildPresetProvider(zen, 'opencode-zen', '  ');
 		expect(provider).not.toBeNull();
@@ -197,20 +191,16 @@ describe('provider presets (known endpoints, never asked)', () => {
 		// The free models are seeded so the picker works before discovery.
 		expect(provider!.models).toContain('deepseek-v4-flash-free');
 		// A key is still accepted when the user has a subscription.
-		expect(
-			buildPresetProvider(zen, 'opencode-zen', 'sk-zen')?.apiKey,
-		).toBe('sk-zen');
+		expect(buildPresetProvider(zen, 'opencode-zen', 'sk-zen')?.apiKey).toBe(
+			'sk-zen',
+		);
 	});
 
 	test('OpenCode Go requires a subscription key', () => {
-		const go = PROVIDER_PRESETS.find(
-			preset => preset.id === 'opencode-go',
-		)!;
+		const go = PROVIDER_PRESETS.find(preset => preset.id === 'opencode-go')!;
 		expect(go.optionalKey).toBeUndefined();
 		expect(buildPresetProvider(go, 'opencode-go', '  ')).toBeNull();
-		expect(
-			buildPresetProvider(go, 'opencode-go', 'sk-go'),
-		).toMatchObject({
+		expect(buildPresetProvider(go, 'opencode-go', 'sk-go')).toMatchObject({
 			id: 'opencode-go',
 			baseUrl: 'https://opencode.ai/zen/go/v1',
 			modelDiscoveryUrl: 'https://opencode.ai/zen/go/v1/models',
@@ -267,9 +257,7 @@ describe('maskSecret (edit-placeholder API key masking)', () => {
 	test('ENV:VAR references keep their shape, never leak the secret', () => {
 		expect(maskSecret('ENV:OPENAI_API_KEY')).toContain('ENV:');
 		expect(maskSecret('ENV:OPENAI_API_KEY')).toContain('…');
-		expect(maskSecret('ENV:OPENAI_API_KEY')).not.toContain(
-			'OPENAI_API_KEY',
-		);
+		expect(maskSecret('ENV:OPENAI_API_KEY')).not.toContain('OPENAI_API_KEY');
 	});
 });
 
@@ -302,9 +290,7 @@ describe('editPlaceholder (blank = keep old value, edit flow)', () => {
 
 	test('key/models hints degrade gracefully when unset', () => {
 		const noKey = {...provider, apiKey: undefined};
-		expect(editPlaceholder('custom-key', noKey)).toBe(
-			'optional — no key set',
-		);
+		expect(editPlaceholder('custom-key', noKey)).toBe('optional — no key set');
 		const noModels = {...provider, models: []};
 		expect(editPlaceholder('custom-models', noModels)).toBe('optional');
 	});
@@ -317,9 +303,7 @@ describe('editPlaceholder (blank = keep old value, edit flow)', () => {
 
 describe('knownPresetFor (skip the base-URL step in the edit flow)', () => {
 	test('matches by the preset id, including (n) suffixes', () => {
-		expect(knownPresetFor({id: 'deepseek', baseUrl: 'x'})?.id).toBe(
-			'deepseek',
-		);
+		expect(knownPresetFor({id: 'deepseek', baseUrl: 'x'})?.id).toBe('deepseek');
 		expect(knownPresetFor({id: 'opencode-go (2)', baseUrl: 'x'})?.id).toBe(
 			'opencode-go',
 		);
@@ -332,8 +316,7 @@ describe('knownPresetFor (skip the base-URL step in the edit flow)', () => {
 		});
 		expect(go?.id).toBe('opencode-go');
 		expect(
-			knownPresetFor({id: 'x', baseUrl: 'https://api.deepseek.com/'})
-				?.id,
+			knownPresetFor({id: 'x', baseUrl: 'https://api.deepseek.com/'})?.id,
 		).toBe('deepseek');
 	});
 
@@ -410,9 +393,7 @@ describe('providerColumns (responsive options grid)', () => {
 });
 
 describe('presetConnectionCount (n connected)', () => {
-	const deepseek = PROVIDER_PRESETS.find(
-		preset => preset.id === 'deepseek',
-	)!;
+	const deepseek = PROVIDER_PRESETS.find(preset => preset.id === 'deepseek')!;
 	const xiaomi = PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')!;
 	const codex = PROVIDER_PRESETS.find(preset => preset.id === 'codex')!;
 	const custom = PROVIDER_PRESETS.find(preset => preset.id === 'custom')!;
@@ -468,9 +449,7 @@ describe('presetConnectionCount (n connected)', () => {
 });
 
 describe('presetConnections (edit targets for the manage step)', () => {
-	const deepseek = PROVIDER_PRESETS.find(
-		preset => preset.id === 'deepseek',
-	)!;
+	const deepseek = PROVIDER_PRESETS.find(preset => preset.id === 'deepseek')!;
 	const xiaomi = PROVIDER_PRESETS.find(preset => preset.id === 'xiaomi')!;
 	const codex = PROVIDER_PRESETS.find(preset => preset.id === 'codex')!;
 	const custom = PROVIDER_PRESETS.find(preset => preset.id === 'custom')!;

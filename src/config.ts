@@ -631,6 +631,48 @@ export function codexClientVersion(): string {
 }
 
 /**
+ * The codex catalog endpoint filters models SERVER-SIDE: every model row
+ * carries a `minimal_client_version`, and a catalog request with an older
+ * `client_version` never even sees models gated above it. Tying the request
+ * to the INSTALLED codex CLI version (or its fallback) therefore hides
+ * every newly launched model — GPT-6-class launches included — until the
+ * CLI catches up, instead of "a new model is automatically on the list".
+ * bobonyo is its own harness: its model support does not derive from the
+ * codex CLI's version, so it requests the FULL catalog with a high floor
+ * version and only falls back to the honest installed-CLI version when the
+ * endpoint refuses the floor.
+ */
+export const CODEX_CATALOG_CLIENT_VERSION = '999.0.0';
+
+/**
+ * One codex catalog request: the LISTABLE model slugs (rows with
+ * `visibility: 'hide'` — `gpt-reserve`, `codex-auto-review` — are backend
+ * internals the codex harness never shows).
+ */
+async function fetchCodexAccountCatalog(
+	catalogUrl: string,
+	accessToken: string,
+	accountId?: string,
+): Promise<string[]> {
+	const response = await fetch(catalogUrl, {
+		headers: {
+			accept: 'application/json',
+			authorization: `Bearer ${accessToken}`,
+			...(accountId ? {'chatgpt-account-id': accountId} : {}),
+			originator: 'bobonyo',
+		},
+	});
+	if (!response.ok) throw new Error(`codex models ${response.status}`);
+	const body = (await response.json()) as {
+		models?: Array<{slug?: string; visibility?: string}>;
+	};
+	return (body.models ?? [])
+		.filter(model => model.visibility !== 'hide')
+		.map(model => model.slug)
+		.filter((id): id is string => Boolean(id));
+}
+
+/**
  * Live model discovery for the ChatGPT-ACCOUNT codex backend: its catalog
  * endpoint needs the `codex login` token + account id (a generic Bearer
  * apiKey fetch can't), so it reads ~/.codex/auth.json itself and caches to
@@ -640,7 +682,8 @@ export function codexClientVersion(): string {
 export async function discoverCodexAccountModels(
 	baseUrl: string,
 ): Promise<string[]> {
-	const discoveryUrl = `${baseUrl.replace(/\/+$/, '')}/models?client_version=${codexClientVersion()}`;
+	const base = baseUrl.replace(/\/+$/, '');
+	const discoveryUrl = `${base}/models?client_version=${CODEX_CATALOG_CLIENT_VERSION}`;
 	const now = Date.now();
 	const memory = discoveryCache.get(discoveryUrl);
 	if (memory && now - memory.at < DISCOVERY_TTL_MS) return memory.models;
@@ -656,21 +699,25 @@ export async function discoverCodexAccountModels(
 	try {
 		const auth = readCodexAuth();
 		if (!auth.accessToken) throw new Error('no codex login');
-		const response = await fetch(discoveryUrl, {
-			headers: {
-				accept: 'application/json',
-				authorization: `Bearer ${auth.accessToken}`,
-				...(auth.accountId ? {'chatgpt-account-id': auth.accountId} : {}),
-				originator: 'bobonyo',
-			},
-		});
-		if (!response.ok) throw new Error(`codex models ${response.status}`);
-		const body = (await response.json()) as {
-			models?: Array<{slug?: string}>;
-		};
-		const ids = (body.models ?? [])
-			.map(model => model.slug)
-			.filter((id): id is string => Boolean(id));
+		let ids: string[] = [];
+		try {
+			ids = await fetchCodexAccountCatalog(
+				discoveryUrl,
+				auth.accessToken,
+				auth.accountId,
+			);
+		} catch {
+			ids = [];
+		}
+		if (ids.length === 0) {
+			// Defensive: if the endpoint ever stops honoring the full-catalog
+			// floor version, retry with the honest installed CLI version.
+			ids = await fetchCodexAccountCatalog(
+				`${base}/models?client_version=${codexClientVersion()}`,
+				auth.accessToken,
+				auth.accountId,
+			);
+		}
 		if (ids.length === 0) return ids;
 		discoveryCache.set(discoveryUrl, {at: now, models: ids});
 		disk.entries[discoveryUrl] = {models: ids, at: now};

@@ -467,15 +467,26 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const config = read('./config.ts');
 		expect(config).toMatch(/export async function discoverCodexAccountModels/);
 		expect(config).toMatch(/chatgpt-account-id/);
-		// The catalog request's client_version tracks the INSTALLED codex CLI
-		// (cached), so the backend never gates models on a stale hardcoded
-		// version — new models (e.g. gpt-5.6-sol on a paid plan) appear once
-		// the account can serve them.
+		// The catalog request is version-GATED server side (each model row
+		// carries a `minimal_client_version`): requesting with the installed
+		// codex CLI version hides every model launched after that CLI. The
+		// catalog must therefore be requested with the full-catalog floor
+		// version (honest CLI version only as a defensive fallback), or new
+		// models (the GPT-6 line) never reach the picker automatically.
+		expect(config).toMatch(/CODEX_CATALOG_CLIENT_VERSION/);
 		expect(config).toMatch(/codexClientVersion\(\)/);
 		expect(config).toMatch(/execFileSync\('codex', \['--version'\]/);
+		// `visibility: 'hide'` rows (gpt-reserve, codex-auto-review) are
+		// backend internals — the codex harness never lists them.
+		expect(config).toMatch(/visibility !== 'hide'/);
 		const app = read('./app.tsx');
 		expect(app).toMatch(
 			/provider\.codexAccount\n\s*\? discoverCodexAccountModels/,
+		);
+		// The active codex provider refreshes its catalog at STARTUP too,
+		// not only when /model opens.
+		expect(app).toMatch(
+			/if \(provider\.codexAccount\) \{\n[\s\S]{0,400}discoverCodexAccountModels\(provider\.baseUrl\)/,
 		);
 	});
 

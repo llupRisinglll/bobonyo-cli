@@ -28,7 +28,7 @@ export function supportsNativeImageInput(endpoint: {
 	if (endpoint.codexAccount) return true;
 	return (
 		endpoint.sdkProvider === 'responses' &&
-		/(?:codex|gpt-5)/i.test(
+		/(?:codex|gpt-[56])/i.test(
 			`${endpoint.id ?? ''} ${endpoint.name ?? ''} ${endpoint.model}`,
 		)
 	);
