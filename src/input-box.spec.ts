@@ -88,6 +88,10 @@ describe('slash argument hints', () => {
 		expect(slashArgumentHint('/compact  ')).toBe('');
 		expect(slashArgumentHint('/compact keep')).toBe('');
 	});
+	test('uses OpenClaude-style argument-hint metadata for skills', () => {
+		expect(slashArgumentHint('/impeccable')).toContain('[shape');
+		expect(slashArgumentHint('/impeccable ')).toContain('init|document');
+	});
 });
 
 describe('lineTickerVisible (line-mode thinking ticker row)', () => {

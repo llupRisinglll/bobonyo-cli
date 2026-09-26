@@ -43,10 +43,12 @@ import {
 	tasks,
 } from './state';
 import {snapshotFileBeforeMutation, snapshotMutationTargets} from './file-undo';
+import {createWorkGraph, recordWorkEvent, upsertWorkNode} from './work-graph';
 import {appendMemory, clearMemory, forgetMemory} from './memory';
 import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
 import {runBashPostHooks, runBashPreHooks, runHooks} from './hooks';
 import {loadSettings} from './settings';
+import {autoApprovesTools} from './modes';
 import {
 	listMCPResources,
 	listMCPResourceTemplates,
@@ -61,6 +63,20 @@ import {
 	type ReviewRoutingPlan,
 } from './review-routing';
 import {logSubagentEvent} from './subagent-logs';
+import {
+	formatSubagentResults,
+	loadSubagentResults,
+	archiveSubagentResponse,
+	subagentResultText,
+} from './subagent-results';
+import {
+	boundedResearchText,
+	findResearchMemory,
+	researchMemoryKey,
+	researchInputHash,
+	saveResearchMemory,
+} from './work-graph';
+import {nextAgentDisplayLabel} from './agent-label';
 import {pathInsideWorkspace} from './bash-removal-guard';
 import {
 	enterWorktree,
@@ -71,6 +87,7 @@ import {
 import {executeLspOperation} from './lsp-tool';
 import {fetchPublicText} from './public-web-fetch';
 import {validateToolArguments} from './tool-schema';
+import {AGENT_TASK_DESCRIPTION, taskOwnershipError} from './task-ownership';
 import {
 	applyPatchDisplayChanges,
 	applyPatchPaths,
@@ -85,6 +102,14 @@ import {
 	stopPersistentProcess,
 	writePersistentProcess,
 } from './persistent-process';
+import {
+	checkManagedServiceSupervisor,
+	managedServiceLogs,
+	managedServiceStatus,
+	restartManagedService,
+	startManagedService,
+	stopManagedService,
+} from './managed-service';
 import type {Mode, ToolProfile} from './settings';
 import type {SessionTask, TaskStatus} from './state';
 
@@ -96,8 +121,14 @@ export interface ToolResult {
 }
 
 export interface ToolContext {
+	/** Checklist owner. Omit only for the main conversation. */
+	agentId?: string;
+	/** Reject checklist writes from superseded agent attempts. */
+	agentGeneration?: number;
 	/** Current session id for session-scoped persistence. */
 	sessionId?: string;
+	/** Durable orchestration graph for this parent turn. */
+	workGraphId?: string;
 	/** Live output callback (bash streams lines as they arrive). */
 	onProgress?: (content: string) => void;
 	/** Parent tool-call id, used by fan-out tools for child rows. */
@@ -121,6 +152,8 @@ export interface ToolContext {
 	) => Promise<string>;
 	/** Persist asynchronous state changes such as background-agent progress. */
 	onStateChange?: () => void;
+	/** Debounced persistence hook for high-frequency agent stream updates. */
+	onAgentProgress?: () => void;
 	/** PreToolUse-rewritten args already checked by caller. */
 	preprocessedArgs?: Record<string, unknown>;
 	/** Tell the parent turn that detached work now owns execution. */
@@ -132,6 +165,7 @@ export interface ToolContext {
 		status: 'completed' | 'failed' | 'cancelled' | 'incomplete',
 		output: string,
 		owner: 'user' | 'goal' | 'loop',
+		graphId?: string,
 	) => void;
 }
 
@@ -164,9 +198,34 @@ const NON_PARALLEL_TOOLS = new Set([
 	'agent_cancel',
 ]);
 const activeAgentControllers = new Map<string, AbortController>();
+const activeAgentGenerations = new Map<string, number>();
 const activeAgentMessages = new Map<string, string[]>();
 const agentStatusWaiters = new Map<string, Set<() => void>>();
+const reviewBatchPromises = new Map<string, Promise<string>>();
+
+export function reviewBatchKey(input: {
+	graphId?: string;
+	sessionId?: string;
+	root: string;
+	base: string;
+	reviewers: string[];
+	changedFiles?: string[];
+}): string {
+	return [
+		input.graphId ?? `session:${input.sessionId ?? 'unknown'}`,
+		input.root,
+		input.base,
+		input.reviewers
+			.map(name => name.toLowerCase())
+			.sort()
+			.join(','),
+		(input.changedFiles ?? []).join('\n'),
+	].join('|');
+}
 export const MAX_SUBAGENT_TOOL_ROUNDS = 24;
+/** Hard stop for detached work. A child must not own a shell or provider
+ * stream forever when it picked a server command or the provider wedged. */
+export const MAX_SUBAGENT_DURATION_MS = 15 * 60 * 1000;
 export const SUBAGENT_FINALIZATION_PROMPT =
 	'Provide your final response now. Do not call tools. Summarize verified findings, ' +
 	'completed work, blockers, and unresolved items using the evidence already in your history.';
@@ -196,20 +255,33 @@ function queueAgentMessage(id: string, message: string): void {
 		...(activeAgentMessages.get(id) ?? []),
 		message,
 	]);
-	notifyAgentStatus(id);
 }
 function drainAgentMessages(id: string): string[] {
 	const messages = activeAgentMessages.get(id) ?? [];
 	activeAgentMessages.delete(id);
 	return messages;
 }
-function agentSignal(id: string, parent?: AbortSignal): AbortSignal {
+function agentSignal(
+	id: string,
+	parent?: AbortSignal,
+): {signal: AbortSignal; generation: number; dispose: () => void} {
 	const controller = new AbortController();
+	const generation = (activeAgentGenerations.get(id) ?? 0) + 1;
+	activeAgentGenerations.set(id, generation);
 	activeAgentControllers.set(id, controller);
+	const abortFromParent = () => controller.abort();
 	if (parent?.aborted) controller.abort();
-	else
-		parent?.addEventListener('abort', () => controller.abort(), {once: true});
-	return controller.signal;
+	else parent?.addEventListener('abort', abortFromParent, {once: true});
+	const timer = setTimeout(() => controller.abort(), MAX_SUBAGENT_DURATION_MS);
+	timer.unref?.();
+	return {
+		signal: controller.signal,
+		generation,
+		dispose: () => {
+			clearTimeout(timer);
+			parent?.removeEventListener('abort', abortFromParent);
+		},
+	};
 }
 
 export function registerTool(
@@ -323,7 +395,7 @@ export function requiresApproval(
 	alwaysAllow: string[] = [],
 	externalPathGranted = false,
 ): boolean {
-	if (mode === 'yolo' || mode === 'auto-accept') return false;
+	if (autoApprovesTools(mode)) return false;
 	if (externalPathGranted) return false;
 	if (
 		alwaysAllow.includes(name) ||
@@ -364,6 +436,9 @@ const PLAN_EXCLUDED = new Set([
 	'process_start',
 	'process_input',
 	'process_stop',
+	'service_start',
+	'service_restart',
+	'service_stop',
 	'enter_worktree',
 	'exit_worktree',
 	'remove_worktree',
@@ -559,6 +634,7 @@ async function requestExternalWriteAccess(
 	operation: string,
 ): Promise<string | null> {
 	const target = resolve(path);
+	if (loadSettings().mode === 'yolo') return externalGrantRoot(target);
 	const workspaceRoot = resolve(ctx.workspaceRoot || ctx.cwd || process.cwd());
 	if (pathWithinWorkspace(target, workspaceRoot)) return workspaceRoot;
 	for (const granted of sessionExternalWriteGrants) {
@@ -620,6 +696,7 @@ const CLAUDE_CODE_NAMES: Record<string, string> = {
 	agent: 'agent',
 	agent_message: 'AgentMessage',
 	agent_status: 'AgentStatus',
+	agent_history: 'AgentHistory',
 	agent_wait: 'AgentWait',
 	agent_cancel: 'AgentCancel',
 	question: 'Question',
@@ -628,6 +705,12 @@ const CLAUDE_CODE_NAMES: Record<string, string> = {
 	process_input: 'ProcessInput',
 	process_status: 'ProcessStatus',
 	process_stop: 'ProcessStop',
+	service_check: 'ServiceCheck',
+	service_start: 'ServiceStart',
+	service_status: 'ServiceStatus',
+	service_logs: 'ServiceLogs',
+	service_restart: 'ServiceRestart',
+	service_stop: 'ServiceStop',
 	lsp: 'LSP',
 	enter_worktree: 'EnterWorktree',
 	exit_worktree: 'ExitWorktree',
@@ -766,7 +849,7 @@ export async function executeTool(
 	if (!validation.valid) {
 		return {
 			tool_call_id: call.id,
-			content: `Error: Invalid tool arguments for ${canonicalName}: ${validation.errors.join('; ')}`,
+			content: `Error: Invalid tool arguments for ${canonicalName}: ${validation.errors.join('; ')}${canonicalName === 'execute_bash' ? '. Bash accepts only command. To intentionally use another directory, put cd "<directory>" && <command> inside command. Nothing was executed.' : ''}`,
 		};
 	}
 	try {
@@ -806,7 +889,8 @@ export async function executeTool(
 			displayArgs = {
 				title:
 					typeof effectiveArgs.title === 'string' ? effectiveArgs.title : '',
-				tasks: tasks().map(task => ({...task})),
+				tasks: structuredClone(contextTasks(ctx)),
+				...(ctx.agentId ? {agentId: ctx.agentId} : {}),
 			};
 		}
 		if (canonicalName !== 'execute_bash') {
@@ -1178,7 +1262,9 @@ registerTool('request_permissions', {
 	},
 	readOnly: true,
 	async execute(args, ctx) {
-		if (!ctx.askUser) return 'Error: user interaction is unavailable.';
+		const unrestricted = loadSettings().mode === 'yolo';
+		if (!unrestricted && !ctx.askUser)
+			return 'Error: user interaction is unavailable.';
 		const requested = Array.isArray(args.permissions)
 			? args.permissions.flatMap(value => {
 					if (!value || typeof value !== 'object') return [];
@@ -1200,21 +1286,23 @@ registerTool('request_permissions', {
 		const unknown = requested.filter(row => !toolRegistry.has(row.tool));
 		if (unknown.length)
 			return `Error: unknown tools: ${unknown.map(row => row.tool).join(', ')}`;
-		const answer = await ctx.askUser(
-			`Grant these tools for this session?\n${requested
-				.map(row => {
-					const operation = row.operation
-						? `\n  Command: ${row.operation}`
-						: '';
-					const paths = row.paths.length
-						? `\n  External paths: ${row.paths.join(', ')}`
-						: '';
-					return `${row.tool}: ${row.reason}${operation}${paths}`;
-				})
-				.join('\n')}`,
-			[{label: 'Grant'}, {label: 'Deny'}],
-			false,
-		);
+		const answer = unrestricted
+			? 'Grant'
+			: await ctx.askUser!(
+					`Grant these tools for this session?\n${requested
+						.map(row => {
+							const operation = row.operation
+								? `\n  Command: ${row.operation}`
+								: '';
+							const paths = row.paths.length
+								? `\n  External paths: ${row.paths.join(', ')}`
+								: '';
+							return `${row.tool}: ${row.reason}${operation}${paths}`;
+						})
+						.join('\n')}`,
+					[{label: 'Grant'}, {label: 'Deny'}],
+					false,
+				);
 		if (answer !== 'Grant') return 'Permission denied.';
 		for (const row of requested) {
 			sessionPermissionGrants.add(row.tool);
@@ -1234,7 +1322,9 @@ registerTool('execute_bash', {
 		'covers; prefer edit_file/write_file or apply_patch for editing ' +
 		'files and delete_file for deleting them). Commands start in the ' +
 		'Current Working Directory from SYSTEM INFORMATION; do not prepend ' +
-		'`cd` unless intentionally changing directories. ' +
+		'`cd` unless intentionally changing directories. Only command is accepted; ' +
+		'workdir/cwd arguments are rejected. Use `cd "<directory>" && <command>` ' +
+		'inside command when targeting another repository. ' +
 		'ALWAYS write a one-line PRE-TOOL BRIEF before calling this tool — ' +
 		'what you are about to run and why, ≤8 words (e.g. "run tests to ' +
 		'verify") — THEN call it in the same message; this requirement ' +
@@ -1249,6 +1339,7 @@ registerTool('execute_bash', {
 		'Violating commands are REFUSED before they run.',
 	parameters: {
 		type: 'object',
+		additionalProperties: false,
 		properties: {
 			command: {
 				type: 'string',
@@ -1337,6 +1428,7 @@ registerTool('execute_bash', {
 					result.task!.exitCode === 0 ? 'completed' : 'failed',
 					result.task!.output.join('\n'),
 					result.task!.owner ?? ctx.backgroundOwner ?? 'user',
+					ctx.workGraphId,
 				),
 			);
 		}
@@ -1365,6 +1457,7 @@ registerTool('process_start', {
 					completed.exitCode === 0 ? 'completed' : 'failed',
 					completed.output.join('\n'),
 					completed.owner ?? 'user',
+					ctx.workGraphId,
 				),
 		);
 		return `Started ${row.id} (pid ${row.proc.pid}).`;
@@ -1405,6 +1498,125 @@ registerTool('process_stop', {
 	},
 	execute(args) {
 		return stopPersistentProcess(text(args, 'process_id'));
+	},
+});
+
+registerTool('service_check', {
+	description:
+		'Check whether a permission-scoped host supervisor bridge is available for managed services.',
+	parameters: {type: 'object', properties: {}},
+	readOnly: true,
+	execute() {
+		return checkManagedServiceSupervisor();
+	},
+});
+registerTool('service_start', {
+	description:
+		'Start or replace one named workspace-scoped service under the host user manager. The service survives tool return and uses systemd restart and cgroup cleanup. Command runs inside the workspace sandbox.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {
+				type: 'string',
+				description: 'Stable service name within this workspace.',
+			},
+			command: {type: 'string'},
+			cwd: {
+				type: 'string',
+				description: 'Optional working directory inside workspace root.',
+			},
+			restart: {
+				type: 'string',
+				enum: ['always', 'on-failure', 'no'],
+			},
+		},
+		required: ['name', 'command'],
+	},
+	execute(args, ctx) {
+		const root = ctx.workspaceRoot || projectRoot(ctx.cwd || process.cwd());
+		const cwd = text(args, 'cwd')
+			? resolve(ctx.cwd || root, text(args, 'cwd'))
+			: ctx.cwd || root;
+		const restart = text(args, 'restart');
+		return startManagedService({
+			name: text(args, 'name'),
+			command: text(args, 'command'),
+			cwd,
+			workspaceRoot: root,
+			restart:
+				restart === 'always' || restart === 'no' ? restart : 'on-failure',
+		});
+	},
+});
+registerTool('service_status', {
+	description:
+		'Inspect one named workspace-scoped managed service, including exact invocation id, main pid, and cgroup.',
+	parameters: {
+		type: 'object',
+		properties: {name: {type: 'string'}},
+		required: ['name'],
+	},
+	readOnly: true,
+	execute(args, ctx) {
+		return managedServiceStatus(
+			text(args, 'name'),
+			ctx.workspaceRoot || projectRoot(ctx.cwd || process.cwd()),
+		);
+	},
+});
+registerTool('service_logs', {
+	description:
+		'Read recent output from one named workspace-scoped managed service log.',
+	parameters: {
+		type: 'object',
+		properties: {
+			name: {type: 'string'},
+			lines: {type: 'integer', minimum: 1, maximum: 1000},
+		},
+		required: ['name'],
+	},
+	readOnly: true,
+	execute(args, ctx) {
+		const rawLines = args.lines;
+		const lines =
+			typeof rawLines === 'number' && Number.isFinite(rawLines)
+				? rawLines
+				: 100;
+		return managedServiceLogs(
+			text(args, 'name'),
+			ctx.workspaceRoot || projectRoot(ctx.cwd || process.cwd()),
+			lines,
+		);
+	},
+});
+registerTool('service_restart', {
+	description:
+		'Restart the exact named workspace-scoped managed service without touching other workspaces.',
+	parameters: {
+		type: 'object',
+		properties: {name: {type: 'string'}},
+		required: ['name'],
+	},
+	execute(args, ctx) {
+		return restartManagedService(
+			text(args, 'name'),
+			ctx.workspaceRoot || projectRoot(ctx.cwd || process.cwd()),
+		);
+	},
+});
+registerTool('service_stop', {
+	description:
+		'Stop the exact named workspace-scoped managed service and its complete systemd control group.',
+	parameters: {
+		type: 'object',
+		properties: {name: {type: 'string'}},
+		required: ['name'],
+	},
+	execute(args, ctx) {
+		return stopManagedService(
+			text(args, 'name'),
+			ctx.workspaceRoot || projectRoot(ctx.cwd || process.cwd()),
+		);
 	},
 });
 
@@ -2089,126 +2301,187 @@ registerTool('review_changes', {
 			: changedFiles
 				? `REVIEW_PLAN: ${plan.mode} reviewers: ${reviewers.join(', ')}\nChanged files: ${changedFiles.join(', ') || '(none)'}`
 				: `REVIEW_PLAN: all reviewers (could not resolve diff against ${base})`;
-		const live = new Map<string, string>();
-		const render = () =>
-			[...live.entries()]
-				.map(([name, output]) => {
-					const status = output.startsWith('@@DONE@@')
-						? 'completed'
-						: 'running';
-					const text = output.replace(/^@@DONE@@\n?/, '').trim() || 'Working…';
-					return `✦ Ran agent:${name}(review current git diff) ${status}\n  └  ${text}`;
-				})
-				.join('\n');
-		const results = await Promise.all(
-			reviewers.map(async name => {
-				const id = `review:${name}:${Date.now()}:${Math.random()}`;
-				logSubagentEvent({
-					event: 'started',
-					sessionId: ctx.sessionId,
-					agentId: id,
-					agentName: name,
-					detail: 'review current git diff',
-				});
-				const signal = agentSignal(id, ctx.signal);
-				setActiveAgents(prev => prev + 1);
-				live.set(name, '');
-				setActiveAgentRuns(prev => [
-					...prev,
-					{
-						id,
-						name,
-						description: 'review current git diff',
-						output: '',
-						transcript: [],
-						streaming: '',
-						history: [],
-						status: 'running',
-					},
-				]);
-				ctx.onProgress?.(render());
-				let incomplete = false;
-				try {
-					const result = await runSubagent(
-						name,
-						`Review current git diff against ${base}. Read-only. Return ` +
-							'REVIEW_PASSED if no blockers, otherwise REVIEW_FINDINGS with every ' +
-							'finding including file and line. Do not edit, commit, push, or create a PR.',
-						update => {
-							live.set(name, update.tail);
+		const batchKey = reviewBatchKey({
+			graphId: ctx.workGraphId,
+			sessionId: ctx.sessionId,
+			root,
+			base,
+			reviewers,
+			changedFiles,
+		});
+		const existingBatch = reviewBatchPromises.get(batchKey);
+		if (existingBatch) return existingBatch;
+		let resolveBatch!: (value: string) => void;
+		let rejectBatch!: (reason?: unknown) => void;
+		const batchPromise = new Promise<string>((resolve, reject) => {
+			resolveBatch = resolve;
+			rejectBatch = reject;
+		});
+		reviewBatchPromises.set(batchKey, batchPromise);
+		if (reviewBatchPromises.size > 100) {
+			reviewBatchPromises.delete(reviewBatchPromises.keys().next().value!);
+		}
+		try {
+			const live = new Map<string, string>();
+			const render = () =>
+				[...live.entries()]
+					.map(([name, output]) => {
+						const status = output.startsWith('@@DONE@@')
+							? 'completed'
+							: 'running';
+						const text =
+							output.replace(/^@@DONE@@\n?/, '').trim() || 'Working…';
+						return `✦ Ran agent:${name}(review ${name} findings) ${status}\n  └  ${text}`;
+					})
+					.join('\n');
+			const results = await Promise.all(
+				reviewers.map(async name => {
+					const id = `review:${name}:${Date.now()}:${Math.random()}`;
+					logSubagentEvent({
+						event: 'started',
+						sessionId: ctx.sessionId,
+						agentId: id,
+						agentName: name,
+						detail: 'review current git diff',
+					});
+					const attempt = agentSignal(id, ctx.signal);
+					const signal = attempt.signal;
+					const generation = attempt.generation;
+					setActiveAgents(prev => prev + 1);
+					live.set(name, '');
+					setActiveAgentRuns(prev => {
+						const run = {
+							id,
+							generation,
+							graphId: ctx.workGraphId,
+							name,
+							description: `Review ${name} findings in current diff`,
+							displayLabel: nextAgentDisplayLabel(
+								`Review ${name} findings in current diff`,
+								prev.filter(row => row.status === 'running'),
+							),
+							output: '',
+							transcript: [],
+							streaming: '',
+							history: [],
+							tasks: [],
+							status: 'running' as const,
+							startedAt: Date.now(),
+							tokensUsed: 0,
+							lastProgressAt: Date.now(),
+						};
+						return [...prev, run];
+					});
+					ctx.onProgress?.(render());
+					let incomplete = false;
+					try {
+						const result = await runSubagent(
+							name,
+							`Review current git diff against ${base}. Read-only. Return ` +
+								'REVIEW_PASSED if no blockers, otherwise REVIEW_FINDINGS with every ' +
+								'finding including file and line. Do not edit, commit, push, or create a PR.',
+							update => {
+								live.set(name, update.tail);
+								setActiveAgentRuns(prev =>
+									prev.map(row =>
+										row.id === id
+											? {
+													...row,
+													graphId: ctx.workGraphId,
+													output: update.tail,
+													transcript: update.transcript,
+													streaming: update.streaming,
+													history: update.history ?? row.history,
+													tokensUsed: update.tokensUsed,
+													lastProgressAt: Date.now(),
+												}
+											: row,
+									),
+								);
+								ctx.onProgress?.(render());
+							},
+							signal,
+							undefined,
+							undefined,
+							ctx,
+							id,
+						);
+						incomplete = subagentResultIsIncomplete(result);
+						logSubagentEvent({
+							event: 'finished',
+							sessionId: ctx.sessionId,
+							agentId: id,
+							agentName: name,
+							status: incomplete ? 'incomplete' : 'completed',
+						});
+						if (incomplete) {
 							setActiveAgentRuns(prev =>
 								prev.map(row =>
 									row.id === id
-										? {
-												...row,
-												output: update.tail,
-												transcript: update.transcript,
-												streaming: update.streaming,
-												history: update.history,
-											}
+										? {...row, status: 'incomplete', finishedAt: Date.now()}
 										: row,
 								),
 							);
-							ctx.onProgress?.(render());
-						},
-						signal,
-					);
-					incomplete = subagentResultIsIncomplete(result);
-					logSubagentEvent({
-						event: 'finished',
-						sessionId: ctx.sessionId,
-						agentId: id,
-						agentName: name,
-						status: incomplete ? 'incomplete' : 'completed',
-					});
-					if (incomplete) {
+						}
+						live.set(name, `@@DONE@@\n${result}`);
+						ctx.onProgress?.(render());
+						appendMessage({
+							role: 'tool',
+							content: result,
+							toolId: `${ctx.toolCallId ?? 'review'}:${name}`,
+							tool: {
+								name: 'agent',
+								detail: `agent:${name}(review current git diff)`,
+								output: result,
+							},
+						});
+						return `## ${name}\n${result}`;
+					} catch (error) {
+						const detail =
+							error instanceof Error ? error.message : String(error);
+						logSubagentEvent({
+							event: 'error',
+							sessionId: ctx.sessionId,
+							agentId: id,
+							agentName: name,
+							detail,
+						});
+						live.set(name, `@@DONE@@\nREVIEW_ERROR: ${detail}`);
+						ctx.onProgress?.(render());
 						setActiveAgentRuns(prev =>
 							prev.map(row =>
-								row.id === id ? {...row, status: 'incomplete'} : row,
-							),
-						);
-					}
-					live.set(name, `@@DONE@@\n${result}`);
-					ctx.onProgress?.(render());
-					appendMessage({
-						role: 'tool',
-						content: result,
-						toolId: `${ctx.toolCallId ?? 'review'}:${name}`,
-						tool: {
-							name: 'agent',
-							detail: `agent:${name}(review current git diff)`,
-							output: result,
-						},
-					});
-					return `## ${name}\n${result}`;
-				} catch (error) {
-					logSubagentEvent({
-						event: 'error',
-						sessionId: ctx.sessionId,
-						agentId: id,
-						agentName: name,
-						detail: error instanceof Error ? error.message : String(error),
-					});
-					setActiveAgentRuns(prev =>
-						prev.map(row => (row.id === id ? {...row, status: 'error'} : row)),
-					);
-					throw error;
-				} finally {
-					activeAgentControllers.delete(id);
-					setActiveAgentRuns(prev =>
-						prev
-							.slice(-20)
-							.map(row =>
-								row.id === id && row.status === 'running'
-									? {...row, status: incomplete ? 'incomplete' : 'completed'}
+								row.id === id
+									? {...row, status: 'error', finishedAt: Date.now()}
 									: row,
 							),
-					);
-					setActiveAgents(prev => Math.max(0, prev - 1));
-				}
-			}),
-		);
-		return `${planText}\n\n${results.join('\n\n')}`;
+						);
+						return `## ${name}\nREVIEW_ERROR: ${detail}`;
+					} finally {
+						attempt.dispose();
+						activeAgentControllers.delete(id);
+						setActiveAgentRuns(prev =>
+							prev.slice(-20).map(row =>
+								row.id === id && row.status === 'running'
+									? {
+											...row,
+											status: incomplete ? 'incomplete' : 'completed',
+											finishedAt: Date.now(),
+										}
+									: row,
+							),
+						);
+						setActiveAgents(prev => Math.max(0, prev - 1));
+					}
+				}),
+			);
+			const output = `${planText}\n\n${results.join('\n\n')}`;
+			resolveBatch(output);
+			return output;
+		} catch (error) {
+			reviewBatchPromises.delete(batchKey);
+			rejectBatch(error);
+			throw error;
+		}
 	},
 });
 async function executeAgentRun(
@@ -2231,7 +2504,26 @@ async function executeAgentRun(
 	// Background agents outlive the model turn that launched them. Inherit
 	// session metadata, not its AbortSignal; Esc on the main turn must not
 	// silently kill detached work.
-	const signal = agentSignal(id, detached ? undefined : ctx.signal);
+	const attempt = agentSignal(id, detached ? undefined : ctx.signal);
+	const signal = attempt.signal;
+	const generation = attempt.generation;
+	const graphId =
+		ctx.workGraphId ?? `session:${ctx.sessionId ?? 'unknown'}:agents`;
+	const nodeId = `agent-node:${id}:${generation}`;
+	createWorkGraph(graphId, ctx.sessionId ?? 'unknown', description);
+	upsertWorkNode({
+		id: nodeId,
+		graphId,
+		kind: 'subagent',
+		status: 'running',
+		title: description,
+		createdAt: Date.now(),
+		updatedAt: Date.now(),
+	});
+	recordWorkEvent(`${nodeId}:started`, graphId, 'started', nodeId, {
+		agentId: id,
+		subagentType,
+	});
 	let finalStatus: 'completed' | 'incomplete' | 'cancelled' | 'error' =
 		'completed';
 	let finalOutput = '';
@@ -2242,7 +2534,10 @@ async function executeAgentRun(
 				row.id === id
 					? {
 							...row,
+							generation,
 							status: 'running',
+							startedAt: Date.now(),
+							tokensUsed: 0,
 							streaming: '',
 							output: `Follow-up: ${prompt}`,
 							retrieved,
@@ -2251,49 +2546,82 @@ async function executeAgentRun(
 			),
 		);
 	} else {
-		setActiveAgentRuns(prev => [
-			...prev,
-			{
+		setActiveAgentRuns(prev => {
+			const run = {
 				id,
+				graphId,
+				generation,
 				name: subagentType,
 				description,
+				displayLabel: nextAgentDisplayLabel(
+					description,
+					prev.filter(row => row.status === 'running'),
+				),
 				output: '',
 				transcript: [],
 				streaming: '',
 				history: [],
-				status: 'running',
+				tasks: [],
+				status: 'running' as const,
+				startedAt: Date.now(),
+				tokensUsed: 0,
+				lastProgressAt: Date.now(),
 				retrieved,
-			},
-		]);
+			};
+			return [...prev, run];
+		});
 	}
-	ctx.onStateChange?.();
-	notifyAgentStatus(id);
+	(ctx.onAgentProgress ?? ctx.onStateChange)?.();
 	try {
+		const memoryKey =
+			subagentType === 'general'
+				? undefined
+				: `${ctx.cwd ?? process.cwd()}:${subagentType}:${researchMemoryKey(description)}`;
+		const inputHash = ctx.cwd ? researchInputHash(ctx.cwd) : undefined;
+		const priorFinding = memoryKey
+			? findResearchMemory('project', memoryKey, inputHash)
+			: undefined;
+		const effectivePrompt = priorFinding
+			? `${prompt}\n\nPrior durable exploration finding from this project:\n${priorFinding.text}\n\nUse it as a starting point. Verify only changed or unresolved parts; do not repeat unchanged exploration.`
+			: prompt;
 		const result = await runSubagent(
 			subagentType,
 			description,
 			update => {
 				setActiveAgentRuns(prev =>
-					prev.map(row =>
-						row.id === id
-							? {
-									...row,
-									output: update.tail,
-									transcript: update.transcript,
-									streaming: update.streaming,
-									history: update.history,
-								}
-							: row,
-					),
+					prev.map(row => {
+						if (row.id !== id || row.generation !== generation) return row;
+						return {
+							...row,
+							output: update.tail,
+							transcript: update.transcript,
+							streaming: update.streaming,
+							history: update.history ?? row.history,
+							tokensUsed: update.tokensUsed,
+							lastProgressAt: Date.now(),
+						};
+					}),
 				);
-				ctx.onStateChange?.();
+				(ctx.onAgentProgress ?? ctx.onStateChange)?.();
 			},
 			signal,
 			history,
-			prompt,
+			effectivePrompt,
 			ctx,
 			id,
 		);
+		if (memoryKey && result.trim()) {
+			saveResearchMemory({
+				id: `research:${memoryKey}`,
+				scope: 'project',
+				key: memoryKey,
+				text: boundedResearchText(result),
+				sourceNodeId: nodeId,
+				inputHash,
+				createdAt: priorFinding?.createdAt ?? Date.now(),
+				updatedAt: Date.now(),
+			});
+		}
 		if (subagentResultIsIncomplete(result)) finalStatus = 'incomplete';
 		finalOutput = result;
 		return result;
@@ -2305,7 +2633,9 @@ async function executeAgentRun(
 		finalStatus = status;
 		finalOutput = error instanceof Error ? error.message : String(error);
 		setActiveAgentRuns(prev =>
-			prev.map(row => (row.id === id ? {...row, status} : row)),
+			prev.map(row =>
+				row.id === id && row.generation === generation ? {...row, status} : row,
+			),
 		);
 		logSubagentEvent({
 			event: status,
@@ -2318,21 +2648,48 @@ async function executeAgentRun(
 		notifyAgentStatus(id);
 		throw error;
 	} finally {
-		activeAgentControllers.delete(id);
+		attempt.dispose();
+		if (activeAgentGenerations.get(id) === generation) {
+			activeAgentControllers.delete(id);
+		}
 		setActiveAgentRuns(prev =>
-			prev
-				.slice(-20)
-				.map(row =>
-					row.id === id && row.status === 'running'
-						? {...row, status: finalStatus, streaming: ''}
-						: row,
-				),
+			prev.slice(-20).map(row =>
+				row.id === id &&
+				row.generation === generation &&
+				row.status === 'running'
+					? {
+							...row,
+							status: finalStatus,
+							streaming: '',
+							finishedAt: Date.now(),
+						}
+					: row,
+			),
 		);
 		logSubagentEvent({
 			event: 'finished',
 			sessionId: ctx.sessionId,
 			agentId: id,
 			agentName: subagentType,
+			status: finalStatus,
+		});
+		upsertWorkNode({
+			id: nodeId,
+			graphId,
+			kind: 'subagent',
+			status:
+				finalStatus === 'error'
+					? 'failed'
+					: finalStatus === 'cancelled'
+						? 'cancelled'
+						: 'completed',
+			title: description,
+			result: finalOutput,
+			metadata: {finalStatus},
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+		});
+		recordWorkEvent(`${nodeId}:finished`, graphId, 'finished', nodeId, {
 			status: finalStatus,
 		});
 		setActiveAgents(prev => Math.max(0, prev - 1));
@@ -2345,6 +2702,7 @@ async function executeAgentRun(
 				finalStatus === 'error' ? 'failed' : finalStatus,
 				finalOutput,
 				ctx.backgroundOwner ?? 'user',
+				ctx.workGraphId,
 			);
 		}
 	}
@@ -2359,7 +2717,8 @@ registerTool('agent', {
 			subagent_type: {
 				type: 'string',
 				description:
-					'Built-in or custom agent name. Defaults to general; use explore only for read-only research.',
+					'Defaults to general. Use explore only when explicitly requesting read-only research; otherwise choose a custom agent name.',
+				default: 'general',
 			},
 			background: {
 				type: 'boolean',
@@ -2372,7 +2731,10 @@ registerTool('agent', {
 	async execute(args, ctx) {
 		const description =
 			text(args, 'description') || 'investigate the repository';
-		const subagentType = text(args, 'subagent_type') || 'general';
+		const background = args.background !== false;
+		const requestedType = text(args, 'subagent_type');
+		const subagentType =
+			!requestedType || requestedType === 'explore' ? 'general' : requestedType;
 		const id = `agent:${subagentType}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 		const task = executeAgentRun(
 			id,
@@ -2381,20 +2743,20 @@ registerTool('agent', {
 			undefined,
 			description,
 			ctx,
-			args.background !== true,
-			args.background === true,
+			!background,
+			background,
 		);
-		if (args.background === true) {
+		if (background) {
 			ctx.onDetachedWork?.('agent', id);
 			void task.catch(() => {});
-			return `Started background agent ${id}\nUse agent_status or /ps to inspect it, agent_message to continue it, and agent_cancel to stop it.`;
+			return `Started background agent ${id}. Continue launching every agent requested in this batch. Do not report results until all launched agents settle; completion notifications will resume the parent once the batch is done.`;
 		}
 		return task;
 	},
 });
 registerTool('agent_message', {
 	description:
-		'Continue an existing completed or errored subagent using its preserved chat history.',
+		'Send a revision to an existing subagent without replacing its task context. Running agents receive the message at the next safe model boundary; settled agents resume their preserved history and original work graph.',
 	parameters: {
 		type: 'object',
 		properties: {
@@ -2408,6 +2770,7 @@ registerTool('agent_message', {
 	async execute(args, ctx) {
 		const id = text(args, 'agent_id');
 		const message = text(args, 'message');
+		const background = args.background !== false;
 		const run = activeAgentRuns().find(row => row.id === id);
 		if (!run) return `Error: agent ${id} not found.`;
 		if (!message) return 'Error: agent_message requires a message.';
@@ -2421,21 +2784,21 @@ registerTool('agent_message', {
 			run.description,
 			structuredClone(run.history),
 			message,
-			ctx,
-			args.background !== true,
-			args.background === true,
+			{...ctx, workGraphId: run.graphId ?? ctx.workGraphId},
+			!background,
+			background,
 		);
-		if (args.background === true) {
+		if (background) {
 			ctx.onDetachedWork?.('agent', id);
 			void task.catch(() => {});
-			return `Continued background agent ${id}`;
+			return `Continued background agent ${id}. Wait for the running agent batch to settle before reporting results.`;
 		}
 		return task;
 	},
 });
 registerTool('agent_status', {
 	description:
-		'List delegated agents or inspect one agent status and recent human-readable tail.',
+		'List up to twenty bounded delegated-agent status summaries, or provide agent_id for one agent status and full settled response. Use agent_history to retrieve older responses after resume, compaction, or pruning.',
 	parameters: {type: 'object', properties: {agent_id: {type: 'string'}}},
 	readOnly: true,
 	execute(args) {
@@ -2445,6 +2808,17 @@ registerTool('agent_status', {
 			: activeAgentRuns();
 		if (runs.length === 0)
 			return id ? `Agent ${id} not found.` : 'No delegated agents.';
+		if (!id) {
+			return [
+				...runs
+					.slice(-20)
+					.map(
+						run =>
+							`${shortText(run.id, 160)} · ${run.status} · agent:${shortText(run.name, 80)}(${shortText(run.description, 120)})\n  └  ${shortText(run.output, 120) || 'No output yet.'}`,
+					),
+				`${runs.length > 20 ? `Showing latest 20 of ${runs.length} agents. ` : ''}Use agent_history to list saved agents or retrieve full responses by agent_id.`,
+			].join('\n');
+		}
 		const observedIds = new Set(runs.map(run => run.id));
 		setActiveAgentRuns(previous =>
 			previous.map(run =>
@@ -2456,9 +2830,41 @@ registerTool('agent_status', {
 		return runs
 			.map(
 				run =>
-					`${run.id} · ${run.status} · agent:${run.name}(${run.description})\n  └  ${run.output.trim() || 'Working…'}`,
+					`${run.id} · ${run.status} · agent:${run.name}(${run.description})\n  └  ${subagentResultText(run).trim() || 'Working…'}`,
 			)
 			.join('\n');
+	},
+});
+registerTool('agent_history', {
+	description:
+		'Retrieve saved delegated-agent responses from this session without rerunning agents. Omit agent_id to list saved agents; provide it for full responses, including earlier follow-ups. Survives resume, compaction, and live-row pruning. Responses are historical evidence, not proof that the current diff passes review. Use offset/limit character pagination for long reports.',
+	parameters: {
+		type: 'object',
+		properties: {
+			agent_id: {type: 'string'},
+			offset: {
+				type: 'integer',
+				minimum: 0,
+				description: 'Zero-based character offset; defaults to 0.',
+			},
+			limit: {
+				type: 'integer',
+				minimum: 1,
+				maximum: 24000,
+				description: 'Maximum characters; defaults to 12000.',
+			},
+		},
+	},
+	readOnly: true,
+	execute(args, ctx) {
+		const warnings: string[] = [];
+		const output = formatSubagentResults(
+			loadSubagentResults(ctx.sessionId, activeAgentRuns(), warnings),
+			text(args, 'agent_id'),
+			Number(args.offset),
+			Number(args.limit),
+		);
+		return [output, ...warnings.map(warning => `[${warning}]`)].join('\n');
 	},
 });
 registerTool('agent_wait', {
@@ -2486,7 +2892,7 @@ registerTool('agent_wait', {
 			setActiveAgentRuns(previous =>
 				previous.map(row => (row.id === id ? {...row, retrieved: true} : row)),
 			);
-			return `${id} · ${initial.status}\n  └  ${initial.output.trim() || 'No output.'}`;
+			return `${id} · ${initial.status}\n  └  ${subagentResultText(initial).trim() || 'No output.'}`;
 		}
 		const timeout = Math.max(
 			1,
@@ -2504,6 +2910,8 @@ registerTool('agent_wait', {
 			const waiters = agentStatusWaiters.get(id) ?? new Set<() => void>();
 			waiters.add(wake);
 			agentStatusWaiters.set(id, waiters);
+			const current = activeAgentRuns().find(row => row.id === id);
+			if (current && current.status !== 'running') wake();
 		});
 		const run = activeAgentRuns().find(row => row.id === id);
 		if (run && run.status !== 'running') {
@@ -2512,7 +2920,7 @@ registerTool('agent_wait', {
 			);
 		}
 		return run
-			? `${id} · ${run.status}\n  └  ${run.output.trim() || 'Working…'}`
+			? `${id} · ${run.status}\n  └  ${subagentResultText(run).trim() || 'Working…'}`
 			: `Agent ${id} no longer exists.`;
 	},
 });
@@ -2556,6 +2964,49 @@ const TASK_STATUSES = new Set<TaskStatus>([
 	'completed',
 	'cancelled',
 ]);
+
+function checklistAgent(ctx: ToolContext) {
+	const run = activeAgentRuns().find(row => row.id === ctx.agentId);
+	if (!run) throw new Error(`Agent ${ctx.agentId} not found.`);
+	if (
+		ctx.agentGeneration !== undefined &&
+		run.generation !== ctx.agentGeneration
+	) {
+		throw new Error(`Agent ${ctx.agentId} attempt is no longer current.`);
+	}
+	return run;
+}
+
+function contextTasks(ctx: ToolContext): SessionTask[] {
+	return ctx.agentId === undefined
+		? tasks()
+		: (checklistAgent(ctx).tasks ?? []);
+}
+
+function setContextTasks(
+	ctx: ToolContext,
+	next: SessionTask[] | ((previous: SessionTask[]) => SessionTask[]),
+	title?: string,
+): void {
+	if (ctx.agentId === undefined) {
+		setTasks(next);
+	} else {
+		const run = checklistAgent(ctx);
+		const updated = typeof next === 'function' ? next(run.tasks ?? []) : next;
+		setActiveAgentRuns(previous =>
+			previous.map(row =>
+				row.id === run.id
+					? {
+							...row,
+							tasks: updated,
+							...(title !== undefined ? {tasksTitle: title} : {}),
+						}
+					: row,
+			),
+		);
+	}
+	ctx.onStateChange?.();
+}
 export function normalizeTaskList(value: unknown): Array<{
 	id: string;
 	title: string;
@@ -2630,7 +3081,8 @@ registerTool('write_tasks', {
 		'can strike them through. Include only work the agent must perform. Never ' +
 		'add user-owned actions such as waiting for user input, approval, manual ' +
 		'verification, or confirmation. Mention those outside the checklist. Use ' +
-		'title as a concise imperative task-list title, task titles as imperative text, and activeForm as present-continuous text. Both titles must be supplied by the model; never derive either from pre-tool narration.',
+		'title as a concise imperative task-list title, task titles as imperative text, and activeForm as present-continuous text. Both titles must be supplied by the model; never derive either from pre-tool narration. ' +
+		AGENT_TASK_DESCRIPTION,
 	parameters: {
 		type: 'object',
 		properties: {
@@ -2644,14 +3096,21 @@ registerTool('write_tasks', {
 					type: 'object',
 					properties: {
 						id: {type: 'string'},
-						title: {type: 'string'},
-						activeForm: {type: 'string'},
+						title: {type: 'string', description: AGENT_TASK_DESCRIPTION},
+						activeForm: {
+							type: 'string',
+							description:
+								'Present-continuous agent action, never waiting for the user.',
+						},
 						status: {
 							type: 'string',
 							enum: ['pending', 'in_progress', 'completed', 'cancelled'],
 						},
 						dependsOn: {type: 'array', items: {type: 'string'}},
-						owner: {type: 'string'},
+						owner: {
+							type: 'string',
+							description: 'Agent identifier only; never the user or a human.',
+						},
 					},
 					required: ['title', 'status'],
 				},
@@ -2659,14 +3118,18 @@ registerTool('write_tasks', {
 		},
 		required: ['title', 'tasks'],
 	},
-	execute(args) {
+	execute(args, ctx) {
 		const next = normalizeTaskList(args.tasks);
 		const title = typeof args.title === 'string' ? args.title.trim() : '';
 		if (!title) return 'Error: write_tasks requires a non-empty title.';
 		if (Array.isArray(args.tasks) && next.length !== args.tasks.length) {
 			return 'Error: every task must provide a non-empty title and valid status.';
 		}
-		setTasks(next);
+		for (const task of next) {
+			const error = taskOwnershipError(task);
+			if (error) return error;
+		}
+		setContextTasks(ctx, next, title);
 		if (next.length === 0) return 'Tasks updated: no tasks.';
 		const icons: Record<TaskStatus, string> = {
 			pending: '·',
@@ -2684,8 +3147,8 @@ registerTool('write_tasks', {
 		return (
 			`${title} updated (${unfinished} remaining):\n${lines.join('\n')}\n` +
 			(unfinished > 0
-				? 'Continue with the in-progress task and update this list immediately after each status change.'
-				: 'All tasks completed.')
+				? 'Continue available work. Keep blocked items unfinished; do not resubmit an unchanged list or narrate this update.'
+				: 'All tasks completed. Report the substantive outcome, not this checklist update.')
 		);
 	},
 });
@@ -2695,19 +3158,27 @@ function taskText(task: SessionTask): string {
 }
 registerTool('task_create', {
 	description:
-		'Create one task with a stable id, optional owner, and dependencies.',
+		'Create one task with a stable id, optional agent owner, and dependencies. ' +
+		AGENT_TASK_DESCRIPTION,
 	parameters: {
 		type: 'object',
 		properties: {
-			title: {type: 'string'},
-			activeForm: {type: 'string'},
-			owner: {type: 'string'},
+			title: {type: 'string', description: AGENT_TASK_DESCRIPTION},
+			activeForm: {
+				type: 'string',
+				description:
+					'Present-continuous agent action, never waiting for the user.',
+			},
+			owner: {
+				type: 'string',
+				description: 'Agent identifier only; never the user or a human.',
+			},
 			depends_on: {type: 'array', items: {type: 'string'}},
 		},
 		required: ['title'],
 	},
-	execute(args) {
-		const id = `task_${Date.now().toString(36)}_${tasks().length + 1}`;
+	execute(args, ctx) {
+		const id = `task_${Date.now().toString(36)}_${contextTasks(ctx).length + 1}`;
 		const task: SessionTask = {
 			id,
 			title: text(args, 'title'),
@@ -2718,7 +3189,9 @@ registerTool('task_create', {
 				: undefined,
 			status: 'pending',
 		};
-		setTasks(prev => [...prev, task]);
+		const error = taskOwnershipError(task);
+		if (error) return error;
+		setContextTasks(ctx, prev => [...prev, task]);
 		return taskText(task);
 	},
 });
@@ -2726,8 +3199,9 @@ registerTool('task_list', {
 	description: 'List all tasks with ids, status, owners, and dependencies.',
 	parameters: {type: 'object', properties: {}},
 	readOnly: true,
-	execute() {
-		return tasks().length ? tasks().map(taskText).join('\n') : 'No tasks.';
+	execute(_args, ctx) {
+		const current = contextTasks(ctx);
+		return current.length ? current.map(taskText).join('\n') : 'No tasks.';
 	},
 });
 registerTool('task_get', {
@@ -2738,8 +3212,10 @@ registerTool('task_get', {
 		required: ['task_id'],
 	},
 	readOnly: true,
-	execute(args) {
-		const task = tasks().find(row => row.id === text(args, 'task_id'));
+	execute(args, ctx) {
+		const task = contextTasks(ctx).find(
+			row => row.id === text(args, 'task_id'),
+		);
 		return task
 			? taskText(task)
 			: `Error: task ${text(args, 'task_id')} not found.`;
@@ -2747,30 +3223,40 @@ registerTool('task_get', {
 });
 registerTool('task_update', {
 	description:
-		'Update one task by id. A task cannot start until all dependencies are completed.',
+		'Update one task by id. A task cannot start until all dependencies are completed. ' +
+		AGENT_TASK_DESCRIPTION,
 	parameters: {
 		type: 'object',
 		properties: {
 			task_id: {type: 'string'},
-			title: {type: 'string'},
-			activeForm: {type: 'string'},
+			title: {type: 'string', description: AGENT_TASK_DESCRIPTION},
+			activeForm: {
+				type: 'string',
+				description:
+					'Present-continuous agent action, never waiting for the user.',
+			},
 			status: {
 				type: 'string',
 				enum: ['pending', 'in_progress', 'completed', 'cancelled'],
 			},
-			owner: {type: 'string'},
+			owner: {
+				type: 'string',
+				description: 'Agent identifier only; never the user or a human.',
+			},
 			depends_on: {type: 'array', items: {type: 'string'}},
 		},
 		required: ['task_id'],
 	},
-	execute(args) {
+	execute(args, ctx) {
 		const id = text(args, 'task_id');
-		const current = tasks().find(task => task.id === id);
+		const current = contextTasks(ctx).find(task => task.id === id);
 		if (!current) return `Error: task ${id} not found.`;
 		const status = text(args, 'status') as TaskStatus;
 		if (status === 'in_progress') {
 			const blocked = (current.dependsOn ?? []).filter(
-				dep => tasks().find(task => task.id === dep)?.status !== 'completed',
+				dep =>
+					contextTasks(ctx).find(task => task.id === dep)?.status !==
+					'completed',
 			);
 			if (blocked.length)
 				return `Error: task ${id} is blocked by ${blocked.join(', ')}.`;
@@ -2787,7 +3273,9 @@ registerTool('task_update', {
 				? {dependsOn: args.depends_on.map(String)}
 				: {}),
 		};
-		setTasks(prev =>
+		const error = taskOwnershipError(updated);
+		if (error) return error;
+		setContextTasks(ctx, prev =>
 			prev.map(task =>
 				task.id === id
 					? updated
@@ -2810,8 +3298,11 @@ export interface SubagentProgressUpdate {
 	tail: string;
 	transcript: string[];
 	streaming: string;
-	history: ChatMessageLike[];
+	history?: ChatMessageLike[];
+	tokensUsed?: number;
 }
+
+export const SUBAGENT_PROGRESS_INTERVAL_MS = 500;
 
 export function subagentTranscriptTail(lines: string[], maxLines = 6): string {
 	return lines.slice(-Math.max(1, maxLines)).join('\n');
@@ -2889,6 +3380,9 @@ async function runSubagent(
 	// Custom agents (`.bobonyo/agents/*.md` or legacy `.nanocoder`, user
 	// agents) carry their own
 	// system prompt; built-ins fall back to the registry instructions.
+	const agentGeneration = activeAgentRuns().find(
+		row => row.id === agentId,
+	)?.generation;
 	const startHook = await runHooks({
 		event: 'SubagentStart',
 		agentName: subagentType,
@@ -2922,10 +3416,15 @@ async function runSubagent(
 	let transcript = initialHistory
 		? [`Follow-up: ${followupPrompt || description}`]
 		: [`Task: ${description}`];
+	let tokensUsed = 0;
 	let lastStreamingPublishAt = 0;
 	const publish = (streamingText = '', force = true) => {
 		const now = Date.now();
-		if (!force && streamingText.trim() && now - lastStreamingPublishAt < 100) {
+		if (
+			!force &&
+			streamingText.trim() &&
+			now - lastStreamingPublishAt < SUBAGENT_PROGRESS_INTERVAL_MS
+		) {
 			return;
 		}
 		if (streamingText.trim()) lastStreamingPublishAt = now;
@@ -2936,7 +3435,8 @@ async function runSubagent(
 			tail: subagentTranscriptTail(lines),
 			transcript: lines,
 			streaming: streamingText.trim(),
-			history: structuredClone(history),
+			history: force ? structuredClone(history) : undefined,
+			tokensUsed,
 		});
 	};
 	publish();
@@ -2979,8 +3479,9 @@ async function runSubagent(
 			undefined,
 			endpoint,
 		);
+		tokensUsed += Number(result.usage?.total_tokens ?? 0) || 0;
 		if (result.toolCalls.length === 0) {
-			const finalText = result.text.trim() || 'Subagent produced no output.';
+			let finalText = result.text.trim() || 'Subagent produced no output.';
 			if (agentId) {
 				logSubagentEvent({
 					event: 'round_finished',
@@ -3011,6 +3512,19 @@ async function runSubagent(
 				agentName: subagentType,
 				data: {description, result: finalText},
 			});
+			if (agentId)
+				finalText = archiveSubagentResponse(toolContext.sessionId, {
+					id: agentId,
+					name: subagentType,
+					description,
+					status: 'completed',
+					output: finalText,
+				});
+			history = [
+				...history.slice(0, -1),
+				{role: 'assistant', content: finalText},
+			];
+			publish();
 			if (agentId) {
 				logSubagentEvent({
 					event: 'final_response',
@@ -3047,6 +3561,8 @@ async function runSubagent(
 			}
 			const toolResult = await executeTool(call, {
 				...toolContext,
+				agentId,
+				agentGeneration,
 				signal,
 				// A subagent's detached shell belongs to the subagent, not the
 				// parent's foreground turn. Do not let its handoff callback break
@@ -3126,10 +3642,18 @@ async function runSubagent(
 			});
 		}
 	}
-	const finalText =
+	let finalText =
 		finalization ||
 		`Subagent ${subagentType} reached its tool-round budget without a final report. ` +
 			'Review the latest tool output and continue with agent_message.';
+	if (agentId)
+		finalText = archiveSubagentResponse(toolContext.sessionId, {
+			id: agentId,
+			name: subagentType,
+			description,
+			status: finalization ? 'completed' : 'incomplete',
+			output: finalText,
+		});
 	transcript = [...transcript, shortText(finalText)];
 	history = [...history, {role: 'assistant', content: finalText}];
 	publish();

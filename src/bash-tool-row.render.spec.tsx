@@ -36,6 +36,35 @@ function allRows(frame: CapturedFrame): string[] {
 }
 
 describe('bash box renders the command ONCE (echoed-command dedup)', () => {
+	test('uses rounded border with breathing room inside', async () => {
+		const setup = await testRender(
+			() => (
+				<BashToolRow
+					header={[{text: '$ echo hi'}]}
+					body={[[{text: 'hi'}]]}
+					status="done"
+					glyph="✦"
+					hovered={false}
+					width={40}
+					md={testMd}
+				/>
+			),
+			{width: 40, height: 12},
+		);
+		await setup.flush();
+		const rows = allRows(setup.captureSpans());
+		const commandRow = rows.findIndex(row => row.includes('$ echo hi'));
+		expect(commandRow).toBeGreaterThanOrEqual(0);
+		expect(rows[commandRow]).toContain('│ $ echo hi');
+		expect(rows.slice(0, commandRow)).toContainEqual(
+			expect.stringContaining('╭'),
+		);
+		expect(rows.slice(commandRow + 1)).toContainEqual(
+			expect.stringContaining('╰'),
+		);
+		setup.renderer.destroy();
+	});
+
 	test('hover highlight starts at column zero and spans full row', async () => {
 		const raw = formatToolEntry(
 			{
@@ -118,7 +147,7 @@ describe('bash box renders the command ONCE (echoed-command dedup)', () => {
 		expect(rows.some(row => row.includes('EXIT_CODE: 0'))).toBe(true);
 		// The row paints `│hi<spaces>│` (both box borders), so the content
 		// check must match the inner cell, not the row end.
-		expect(rows.some(row => row.includes('│hi'))).toBe(true);
+		expect(rows.some(row => row.includes('│ hi'))).toBe(true);
 		setup.renderer.destroy();
 	});
 
@@ -159,7 +188,7 @@ describe('bash box renders the command ONCE (echoed-command dedup)', () => {
 		await new Promise(resolve => setTimeout(resolve, 50));
 		const rows = allRows(setup.captureSpans());
 		expect(rows.filter(row => row.includes(cmd)).length).toBe(1);
-		expect(rows.some(row => row.includes('│line 2'))).toBe(true);
+		expect(rows.some(row => row.includes('│ line 2'))).toBe(true);
 		setup.renderer.destroy();
 	});
 

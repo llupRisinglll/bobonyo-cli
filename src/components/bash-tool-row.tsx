@@ -93,6 +93,7 @@ export function BashToolRow(props: {
 						border
 						borderStyle="rounded"
 						borderColor={colors().secondary}
+						paddingX={1}
 					>
 						{/* Command line: the header chunks carry `$ ` + the
 					    bash-highlighted command. */}

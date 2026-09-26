@@ -2,7 +2,7 @@ import '@opentui/solid/preload';
 import {describe, expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
 import {RGBA, type CapturedFrame, type CapturedLine} from '@opentui/core';
-import {For, Show} from 'solid-js';
+import {For, Show, createSignal} from 'solid-js';
 import type {TestRendererSetup} from '@opentui/core/testing';
 import {InputBox} from './components/input-box';
 import {
@@ -125,6 +125,38 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 		}
 	});
 
+	test('global skills appear in slash completion suggestions', async () => {
+		const setup = await mountInput();
+		try {
+			await setup.mockInput.typeText('/impeccable');
+			await setup.flush();
+			const text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(text).toContain('/impeccable');
+		} finally {
+			setup.renderer.destroy();
+			setInput('');
+		}
+	});
+
+	test('selected completion keeps a visible gap after the arrow', async () => {
+		const setup = await mountInput();
+		try {
+			await setup.mockInput.typeText('/impeccable');
+			await setup.flush();
+			const text = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(text).toContain('❯ /impeccable');
+		} finally {
+			setup.renderer.destroy();
+			setInput('');
+		}
+	});
+
 	test('first typed argument separator keeps anchored shadow text and cursor', async () => {
 		const setup = await mountInput();
 		try {
@@ -168,6 +200,103 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			setup.renderer.destroy();
 			setPromptHistory([]);
 			setHistoryIndex(-1);
+		}
+	});
+
+	test('Down enters agents only from latest empty input, while Up still recalls history', async () => {
+		setInput('');
+		setPromptHistory(['older prompt', 'newest prompt']);
+		setHistoryIndex(-1);
+		setPendingQueue([
+			{
+				value: '<task_notification>{"taskId":"agent_1"}</task_notification>',
+				source: 'task',
+				owner: 'goal',
+			},
+		]);
+		const directions: Array<'up' | 'down'> = [];
+		const setup = await testRender(
+			() => (
+				<InputBox
+					onSubmit={() => {}}
+					agentNavigationIndex={-1}
+					onAgentNavigate={direction => {
+						directions.push(direction);
+						return true;
+					}}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			setup.mockInput.pressArrow('up');
+			expect(input()).toBe('newest prompt');
+			expect(directions).toEqual([]);
+			setup.mockInput.pressArrow('down');
+			expect(input()).toBe('');
+			expect(directions).toEqual([]);
+			setup.mockInput.pressArrow('up');
+			setup.mockInput.pressArrow('up');
+			expect(input()).toBe('older prompt');
+			setup.mockInput.pressArrow('down');
+			expect(input()).toBe('newest prompt');
+			expect(directions).toEqual([]);
+			setup.mockInput.pressArrow('down');
+			expect(input()).toBe('');
+			expect(directions).toEqual([]);
+			setup.mockInput.pressArrow('down');
+			expect(directions).toEqual(['down']);
+		} finally {
+			setPendingQueue([]);
+			setPromptHistory([]);
+			setHistoryIndex(-1);
+			setup.renderer.destroy();
+		}
+	});
+
+	test('agent navigation hides caret paint without shifting input hint', async () => {
+		setInput('');
+		setSpinnerFrame(0);
+		const [agentIndex, setAgentIndex] = createSignal(-1);
+		const setup = await testRender(
+			() => (
+				<InputBox
+					onSubmit={() => {}}
+					agentNavigationIndex={agentIndex()}
+					onAgentNavigate={() => true}
+				/>
+			),
+			{width: 80, height: 24, kittyKeyboard: true},
+		);
+		try {
+			await setup.flush();
+			const visibleHintColumn = columnOfText(
+				setup
+					.captureSpans()
+					.lines.find(line =>
+						line.spans.some(span => span.text.includes('/ commands')),
+					)!,
+				'/ commands',
+			);
+			expect(caretSpans(setup.captureSpans())).toHaveLength(1);
+
+			setAgentIndex(0);
+			await setup.flush();
+			expect(caretSpans(setup.captureSpans())).toHaveLength(0);
+			const hiddenHintLine = setup
+				.captureSpans()
+				.lines.find(line =>
+					line.spans.some(span => span.text.includes('/ commands')),
+				)!;
+			expect(columnOfText(hiddenHintLine, '/ commands')).toBe(
+				visibleHintColumn,
+			);
+
+			setAgentIndex(-1);
+			await setup.flush();
+			expect(caretSpans(setup.captureSpans())).toHaveLength(1);
+		} finally {
+			setup.renderer.destroy();
 		}
 	});
 
@@ -261,6 +390,40 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			setThinkingActive(false);
 			setReasoning('');
 			setThinkingMode('hidden');
+			setup.renderer.destroy();
+		}
+	});
+
+	test('mounted busy row repaints gear and all three dot frames', async () => {
+		setBusy(true);
+		setThinkingMode('hidden');
+		setThinkingActive(false);
+		setSpinnerFrame(0);
+		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
+			width: 80,
+			height: 24,
+		});
+		const busyText = (): string =>
+			setup
+				.captureSpans()
+				.lines.map(line => line.spans.map(span => span.text).join(''))
+				.find(line => line.includes('Working')) ?? '';
+		try {
+			await setup.flush();
+			expect(busyText()).toContain('⚙ Working .');
+
+			setSpinnerFrame(4);
+			await setup.flush();
+			expect(busyText()).toContain('✦ Working ..');
+
+			setSpinnerFrame(8);
+			await setup.flush();
+			expect(busyText()).toContain('⚙ Working ...');
+		} finally {
+			setBusy(false);
+			setThinkingActive(false);
+			setThinkingMode('hidden');
+			setSpinnerFrame(0);
 			setup.renderer.destroy();
 		}
 	});

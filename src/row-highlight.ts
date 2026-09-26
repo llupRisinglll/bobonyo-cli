@@ -231,7 +231,7 @@ export function tokenizeToolRow(
 		(line, index, isHeader) => {
 			if (isHeader) {
 				const activity = line.match(
-					/^(?:[✦⚙]\s*)?(Explored|Navigated Web|.+ MCP)$/,
+					/^(?:[✦⚙]\s*)?(Explored|Navigated Web|Skills triggered|.+ MCP)$/,
 				);
 				if (activity) {
 					return [chunk(activity[1] ?? line, defaultFg, bold())];
@@ -254,14 +254,22 @@ export function tokenizeToolRow(
 			const branch = line.match(/^(\s*[├└│]\s*)(.*)$/);
 			if (branch) {
 				const body = branch[2] ?? '';
-				const actionEnd = mcpActivity
-					? body.indexOf('(') === -1
-						? body.length
-						: body.indexOf('(')
-					: (body.match(/^[^\s(]+/)?.[0].length ?? 0);
+				const continuation = !/[├└]/.test(branch[1] ?? '');
+				const skillsActivity = activityHeader === 'Skills triggered';
+				const actionEnd = skillsActivity
+					? (body.match(/^\S+/)?.[0].length ?? 0)
+					: mcpActivity
+						? body.indexOf('(') === -1
+							? body.length
+							: body.indexOf('(')
+						: (body.match(/^[^\s(]+/)?.[0].length ?? 0);
 				return [
 					chunk(branch[1] ?? '', palette.fg.secondary, dim()),
-					chunk(body.slice(0, actionEnd), palette.fg.primary, bold()),
+					chunk(
+						body.slice(0, actionEnd),
+						continuation ? defaultFg : palette.fg.primary,
+						continuation ? 0 : bold(),
+					),
 					chunk(body.slice(actionEnd), defaultFg),
 				];
 			}

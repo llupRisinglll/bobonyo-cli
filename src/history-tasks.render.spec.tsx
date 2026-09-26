@@ -3,7 +3,7 @@ import {expect, test} from 'bun:test';
 import {testRender} from '@opentui/solid';
 import {createSignal} from 'solid-js';
 import {History} from './components/history';
-import {setTasks, type ChatMessage} from './state';
+import {setActiveAgentRuns, setTasks, type ChatMessage} from './state';
 
 function snapshot(id: string, title: string, brief?: string): ChatMessage {
 	return {
@@ -101,5 +101,66 @@ test('History renders saved task rows and keeps them while replacement runs', as
 	} finally {
 		setup.renderer.destroy();
 		setTasks([]);
+	}
+});
+
+test('History renders finished-agent summary inside chat history', async () => {
+	setActiveAgentRuns([
+		{
+			id: 'review-api',
+			name: 'review-api',
+			description: 'Review API changes',
+			output: 'REVIEW_PASSED',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'completed',
+			finishedAt: Date.now(),
+		},
+		{
+			id: 'review-db',
+			name: 'review-db',
+			description: 'Review DB changes',
+			output: '',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => (
+			<History
+				embedded
+				width={100}
+				height={20}
+				messages={createSignal<ChatMessage[]>([])[0]}
+				running={() => true}
+				reasoning={() => ''}
+				streaming={() => ''}
+				liveOutputs={() => ({})}
+			/>
+		),
+		{width: 100, height: 20},
+	);
+	const text = () =>
+		setup
+			.captureSpans()
+			.lines.map(line => line.spans.map(span => span.text).join(''))
+			.join('\n');
+	try {
+		const deadline = Date.now() + 4000;
+		do {
+			await setup.flush();
+			if (text().includes('✦ Agent Finished')) break;
+			await Bun.sleep(25);
+		} while (Date.now() < deadline);
+		expect(text()).toContain('✦  Agent Finished');
+		expect(text()).toContain(
+			'review-api - result passed waiting for 1 more agents',
+		);
+	} finally {
+		setup.renderer.destroy();
+		setActiveAgentRuns([]);
 	}
 });

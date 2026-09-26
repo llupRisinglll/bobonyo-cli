@@ -29,6 +29,10 @@ describe('isDeleteKey (shared backspace decoder)', () => {
 		expect(isDeleteKey({name: 'j', ctrl: true})).toBe(false);
 		expect(isDeleteKey({name: 'c', ctrl: true})).toBe(false);
 	});
+
+	test('Escape is not Ctrl+C', () => {
+		expect({name: 'escape', ctrl: false}).not.toMatchObject({ctrl: true});
+	});
 });
 
 /**

@@ -30,7 +30,28 @@ export function shouldRenderRunningToolMessage(
 	toolName: string,
 	hasRunningAgent: boolean,
 ): boolean {
-	return toolName !== 'agent' || !hasRunningAgent;
+	void hasRunningAgent;
+	return !isAgentControlTool(toolName);
+}
+
+/** Running delegated agents render in the inline navigator and `/ps`, never
+ * as noisy duplicate rows in the main chat transcript. */
+export function shouldRenderAgentInHistory(
+	toolName: string,
+	running: boolean,
+): boolean {
+	void running;
+	return !isAgentControlTool(toolName);
+}
+
+export function isAgentControlTool(toolName: string): boolean {
+	return [
+		'agent',
+		'agent_wait',
+		'agent_status',
+		'agent_message',
+		'agent_cancel',
+	].includes(toolName);
 }
 
 /**

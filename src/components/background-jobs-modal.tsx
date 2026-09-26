@@ -17,6 +17,7 @@ import {History} from './history';
 import {subagentDisplayMessages} from '../subagent-transcript';
 import {formatSubagentCompactTail} from '../subagent-tail';
 import {formatGoal, type SessionGoal} from '../goal-loop';
+import {agentDisplayLabels} from '../agent-label';
 
 const JOB_TAIL_LINES = 4;
 const AGENT_TAIL_LINES = 4;
@@ -51,6 +52,7 @@ export function BackgroundJobsModal(props: {
 	onClose: () => void;
 	goal?: SessionGoal;
 	initialTab?: ActivityTab;
+	initialAgentId?: string;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
@@ -67,7 +69,9 @@ export function BackgroundJobsModal(props: {
 	const cardWidth = () => (detailId() ? availableWidth() : listCardWidth());
 	const cardHeight = () =>
 		detailId()
-			? Math.min(availableHeight(), Math.max(1, detailContentLines() + 5))
+			? detailAgent()
+				? availableHeight()
+				: Math.min(availableHeight(), Math.max(1, detailContentLines() + 5))
 			: Math.max(1, Math.min(availableHeight(), 34));
 	const cardY = () =>
 		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
@@ -79,7 +83,9 @@ export function BackgroundJobsModal(props: {
 		y <= cardY() + cardHeight();
 	const [tab, setTab] = createSignal<ActivityTab>(props.initialTab ?? 'jobs');
 	const [selected, setSelected] = createSignal(0);
-	const [detailId, setDetailId] = createSignal<string | null>(null);
+	const [detailId, setDetailId] = createSignal<string | null>(
+		props.initialAgentId ?? null,
+	);
 	const [detailOffset, setDetailOffset] = createSignal(0);
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
@@ -95,12 +101,20 @@ export function BackgroundJobsModal(props: {
 			run => run.status === 'running' || run.status === 'cancelled',
 		),
 	);
+	const agentLabels = createMemo(() => agentDisplayLabels(agents()));
+	const runningAgentCount = createMemo(
+		() => agents().filter(run => run.status === 'running').length,
+	);
 	const detailTask = createMemo(
 		() => jobs().find(task => task.id === detailId()) ?? null,
 	);
 	const detailAgent = createMemo(
 		() => agents().find(agent => agent.id === detailId()) ?? null,
 	);
+	const agentMessages = createMemo(() => {
+		const agent = detailAgent();
+		return agent ? subagentDisplayMessages(agent) : [];
+	});
 	const listRowsPerJob = JOB_TAIL_LINES + 2; // command + tail + gap
 	const listRowsPerAgent = AGENT_TAIL_LINES + 2; // header + tail + gap
 	const visibleCount = (rowsPerItem: number) =>
@@ -125,11 +139,28 @@ export function BackgroundJobsModal(props: {
 			detailOffset(),
 		),
 	);
-	const agentMessages = createMemo(() => {
-		const agent = detailAgent();
-		return agent ? subagentDisplayMessages(agent) : [];
-	});
 	const detailHistoryWidth = () => Math.max(1, cardWidth() - 8);
+	const scrollDetail = (direction: 'up' | 'down', pages = false): void => {
+		const delta = pages ? detailVisibleLines() : 1;
+		setDetailOffset(value =>
+			direction === 'up'
+				? Math.min(
+						Math.max(
+							0,
+							(detailAgent()?.transcript.length ??
+								detailTask()?.output.length ??
+								0) - detailVisibleLines(),
+						),
+						value + delta,
+					)
+				: Math.max(0, value - delta),
+		);
+	};
+	createEffect(() => {
+		if (!detailId() || detailOffset() !== 0) return;
+		void (detailAgent()?.transcript.length ?? detailTask()?.output.length ?? 0);
+		setTimeout(() => setDetailOffset(0), 0);
+	});
 
 	createEffect(() => {
 		const count =
@@ -166,7 +197,11 @@ export function BackgroundJobsModal(props: {
 			return true;
 		}
 		if (detailId()) {
-			if (detailAgent()) return;
+			if (detailAgent()) {
+				// Embedded History owns agent transcript scrolling. Do not swallow
+				// arrow/page keys here; its native scrollbox handles them.
+				return false;
+			}
 			const detailOutputLength =
 				detailAgent()?.transcript.length ?? detailTask()?.output.length ?? 0;
 			const maxOffset = Math.max(0, detailOutputLength - detailVisibleLines());
@@ -277,6 +312,13 @@ export function BackgroundJobsModal(props: {
 				paddingX={2}
 				paddingY={1}
 				flexDirection="column"
+				{...({
+					onMouseScroll: (event: {scroll?: {direction?: string}}) => {
+						const direction = event.scroll?.direction;
+						if (direction === 'up' || direction === 'down')
+							scrollDetail(direction);
+					},
+				} as any)}
 			>
 				<box flexDirection="row" height={1}>
 					<text fg={colors().primary} attributes={bold()}>
@@ -319,7 +361,7 @@ export function BackgroundJobsModal(props: {
 							<text
 								fg={tab() === 'agents' ? colors().base : colors().secondary}
 								attributes={tab() === 'agents' ? bold() : dim()}
-							>{`Agents (${agents().length})`}</text>
+							>{`Agents (${runningAgentCount()})`}</text>
 						</box>
 						<box width={1} />
 						<box
@@ -518,8 +560,10 @@ export function BackgroundJobsModal(props: {
 									AGENT_TAIL_LINES,
 									Math.max(20, cardWidth() - 14),
 								);
+								const label =
+									agentLabels()[index()] ?? run.displayLabel ?? run.description;
 								const seg = liveRowSegments(
-									`✦ Ran agent:${run.name}(${run.description}) ${
+									`✦ Ran agent:${run.name}(${label}) ${
 										run.status === 'running' ? 'running' : 'interrupted'
 									}\n${tail}`,
 									'agentrow',

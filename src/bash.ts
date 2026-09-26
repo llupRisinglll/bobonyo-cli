@@ -4,9 +4,10 @@
  */
 
 import {createSignal} from 'solid-js';
+import {statSync} from 'node:fs';
 import {isAbsolute, relative, resolve, sep} from 'node:path';
 import {checkBashRemovalSafety} from './bash-removal-guard';
-import {loadSettings} from './settings';
+import {commandSandboxSettings} from './settings';
 import {buildSandboxCommand} from './sandbox';
 import {projectRoot} from './project-paths';
 
@@ -267,25 +268,62 @@ export interface BashTurnResult {
 	cwd?: string;
 }
 
-/**
- * VS Code's CLI talks to a host-editor IPC socket. Bubblewrap makes it a
- * false-success no-op, so permit only an unadorned `code` invocation to use
- * the host shell. Shell operators remain sandboxed: they are not launches.
- */
+/** Refuse stale cwd commands rather than reinterpret relative paths elsewhere. */
+export function bashCwdFailure(
+	cwd: string | undefined,
+	workspaceRoot?: string,
+): BashTurnResult | undefined {
+	if (cwd) {
+		try {
+			if (statSync(cwd).isDirectory()) return undefined;
+		} catch {
+			// A deleted or inaccessible directory cannot safely launch a command.
+		}
+	}
+	let recovery = 'Restart BoboNyo from an existing workspace directory.';
+	if (workspaceRoot && isAbsolute(workspaceRoot)) {
+		try {
+			if (statSync(workspaceRoot).isDirectory()) {
+				recovery = `Restart BoboNyo from the existing launch workspace ${JSON.stringify(workspaceRoot)}, then review relative paths before retrying.`;
+			}
+		} catch {
+			// Never recommend another missing directory as a recovery target.
+		}
+	}
+	return {
+		content: `REFUSED: Bash working directory ${cwd ? JSON.stringify(cwd) : '(unavailable)'} no longer exists, is inaccessible, or is not a directory. Command was not executed; no fallback directory was used. ${recovery}`,
+	};
+}
+
+export function sandboxFailureMessage(reason: string): string {
+	return `${reason}\nIf this command requires host access, you can disable sandboxing at your own risk: /settings → Behavior → Command sandbox → off.`;
+}
+
+/** VS Code CLI needs host IPC, which bubblewrap hides. */
 export function isHostDesktopLaunchCommand(command: string): boolean {
-	return /^\s*code(?:\s|$)/.test(command) && !/[;&|`$<>()\n]/.test(command);
+	return /(?:^|(?:&&|;)\s*)code(?:\s|$)/.test(command) && !/\n/.test(command);
 }
 
 export async function runBash(
 	command: string,
 	onProgress?: (output: string) => void,
 	signal?: AbortSignal,
-	cwd = process.cwd(),
+	cwd?: string,
 	onCwdChange?: (cwd: string) => void,
 	owner: BackgroundTask['owner'] = 'user',
-	workspaceRoot = projectRoot(cwd),
+	workspaceRoot?: string,
 	extraWritablePaths: string[] = [],
 ): Promise<BashTurnResult> {
+	if (cwd === undefined) {
+		try {
+			cwd = process.cwd();
+		} catch {
+			return bashCwdFailure(undefined, workspaceRoot)!;
+		}
+	}
+	const cwdFailure = bashCwdFailure(cwd, workspaceRoot);
+	if (cwdFailure) return cwdFailure;
+	workspaceRoot ??= projectRoot(cwd);
 	command = avoidProcessMatcherSelfMatch(command);
 	// Non-negotiable containment gate. Approval mode never overrides this:
 	// shell deletion may touch literal targets strictly below workspace only.
@@ -328,11 +366,7 @@ export async function runBash(
 			}
 		}
 	};
-	const sandboxSettings = loadSettings().sandbox ?? {
-		mode: 'auto' as const,
-		network: true,
-		writablePaths: [],
-	};
+	const sandboxSettings = commandSandboxSettings();
 	const sandbox = buildSandboxCommand(
 		wrappedCommand,
 		cwd,
@@ -347,24 +381,46 @@ export async function runBash(
 		workspaceRoot,
 	);
 	if (sandbox.argv.length === 0) {
-		return {content: `REFUSED: ${sandbox.reason}`, cwd};
+		return {
+			content: `REFUSED: ${sandboxFailureMessage(sandbox.reason ?? 'sandbox unavailable')}`,
+			cwd,
+		};
 	}
-	const proc = Bun.spawn(sandbox.argv, {
+	// xdg-open dispatches to KDE's legacy kde-open whenever these variables
+	// are present. On this host that helper hangs, while the generic handler
+	// correctly uses the registered browser through GIO. This is an opener
+	// environment fix, not a command-name exception; every sandboxed command
+	// keeps the same filesystem policy.
+	const childEnv: Record<string, string | undefined> = {
+		...process.env,
+		TERM: 'dumb',
+		NO_COLOR: '1',
+		FORCE_COLOR: '0',
+		CLICOLOR: '0',
+		CLICOLOR_FORCE: '0',
+	};
+	delete childEnv.KDE_SESSION_VERSION;
+	delete childEnv.KDE_FULL_SESSION;
+	delete childEnv.XDG_CURRENT_DESKTOP;
+	const spawnOptions = {
 		cwd,
-		stdout: 'pipe',
-		stderr: 'pipe',
-		env: {
-			...process.env,
-			TERM: 'dumb',
-			NO_COLOR: '1',
-			FORCE_COLOR: '0',
-			CLICOLOR: '0',
-			CLICOLOR_FORCE: '0',
-		},
+		stdout: 'pipe' as const,
+		stderr: 'pipe' as const,
+		env: childEnv,
 		// Separate process group: Esc must kill bash AND descendants (gh/npm/
 		// test runners), not leave a grandchild holding stdout pipes open.
 		detached: process.platform !== 'win32',
-	});
+	};
+	let proc;
+	try {
+		proc = Bun.spawn(sandbox.argv, spawnOptions);
+	} catch (error) {
+		// cwd can disappear after preflight. ENOENT alone also means a missing
+		// executable, so only report cwd recovery when the directory is invalid.
+		const failure = bashCwdFailure(cwd, workspaceRoot);
+		if (failure) return failure;
+		throw error;
+	}
 
 	// ABORT SIGNAL: when the user presses Esc (the turn's AbortController
 	// fires), kill the spawned process immediately so the tool loop

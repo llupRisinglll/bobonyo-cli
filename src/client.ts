@@ -14,6 +14,7 @@ import {
 } from './state';
 import {resolveRulesFile} from './rules-file';
 import {projectRoot} from './project-paths';
+import {projectContextPrompt} from './project-context';
 import {builtinCavemanSkill, loadCustomCommands, loadSkills} from './custom';
 import {loadSubagents} from './subagents';
 import {readCodexAuth} from './codex-auth';
@@ -23,6 +24,7 @@ import {
 	parseOpenCodeLimitError,
 } from './opencode-limit';
 import {resolveSystemPrompt, type SystemPromptStyle} from './system-prompt';
+import {PLAIN_RESPONSE_GUIDANCE} from './plain-response';
 import {renderPersistentMemory} from './memory';
 import {estimateTokens} from './tokenize';
 
@@ -113,6 +115,11 @@ const SUBAGENT_GUIDANCE =
 	'Launch independent read-only investigations in parallel when they cover different questions. ' +
 	'Use direct `glob`, `grep`, and `read_file` calls for simple targeted searches; do not delegate tiny tasks. ' +
 	'Do not duplicate work already assigned to a subagent. Main agent owns synthesis, decisions, integration, and final verification. ' +
+	'Preserve task ownership when new user messages arrive: distinguish a revision to existing work, an unrelated new task, and work explicitly dependent on an earlier task. ' +
+	'Tell the user your routing decision briefly before acting: identify the task being revised, the independent work being launched, or the specific prerequisite being awaited. Explain why; do not imply that queue admission means execution or that unrelated workers must finish. ' +
+	'For a revision, use agent_message with the original worker ID so its transcript and assignment remain intact; running workers receive it at a safe boundary. For unrelated work, use a fresh worker with a self-contained assignment and leave existing workers running. ' +
+	'For dependent work, record the specific prerequisite task or worker and wait for its result to be integrated before starting that work; do not wait for unrelated workers. Do not replace an existing checklist with an unrelated task or infer completion from a global Working indicator. ' +
+	'If the referenced task is ambiguous, ask a focused ownership question rather than guessing. Queue delivery only admits a message to the coordinator; it does not authorize executing deferred work immediately. ' +
 	'If you are already a delegated subagent, execute assigned task directly and do not delegate again unless explicitly required.';
 
 /**
@@ -203,7 +210,7 @@ function buildVolatileSystemInfo(): string {
 		`Current Working Directory: ${cwd}\n` +
 		'Bash commands start in this directory. Do not prepend `cd` unless ' +
 		'you intentionally need a different directory.\n' +
-		`${agents}${agentBlock}${skillsBlock}${commandsBlock}${memory ? `\n\n${memory}` : ''}`
+		`${projectContextPrompt()}${agents}${agentBlock}${skillsBlock}${commandsBlock}${memory ? `\n\n${memory}` : ''}`
 	);
 }
 
@@ -258,9 +265,12 @@ export function buildSystemParts(
 	// change (same class as switching tool profile), never a per-turn one.
 	const caveman =
 		!options?.disableCaveman && cavemanMode() ? builtinCavemanSkill() : null;
-	const stable = caveman
+	const styled = caveman
 		? `${base}\n\n## CAVEMAN MODE\n${caveman.body.trim()}`
 		: base;
+	// Communication clarity is a harness default, not an optional style.
+	// Keep it after custom/caveman instructions so terseness cannot hide action.
+	const stable = `${styled}\n\n${PLAIN_RESPONSE_GUIDANCE}`;
 	return {stable, volatile: buildVolatileSystemInfo()};
 }
 
@@ -512,6 +522,16 @@ export interface StreamHandlers {
 	onReasoning: (delta: string) => void;
 	/** Provider entered a reasoning block before first readable summary delta. */
 	onReasoningStart?: () => void;
+	/** Responses API completed a provider-hosted native web-search action. */
+	onWebSearch?: (action?: NativeWebSearchAction) => void;
+}
+
+export interface NativeWebSearchAction {
+	type?: string;
+	query?: string;
+	queries?: string[];
+	url?: string;
+	pattern?: string;
 }
 
 export interface ToolCatalogEntry {
@@ -1596,6 +1616,7 @@ async function responsesStreamOnce(
 			call_id?: string;
 			name?: string;
 			arguments?: string;
+			action?: NativeWebSearchAction;
 		};
 		response?: {
 			status?: string;
@@ -1718,6 +1739,9 @@ async function responsesStreamOnce(
 								arguments: item.arguments ?? '',
 							});
 						}
+					}
+					if (item?.type === 'web_search_call') {
+						handlers.onWebSearch?.(item.action);
 					}
 					break;
 				}
@@ -2006,10 +2030,16 @@ const TOOL_POSITIONAL_ARGS: Record<string, string[]> = {
 	process_input: ['process_id', 'input'],
 	process_status: ['process_id'],
 	process_stop: ['process_id'],
+	service_start: ['name', 'command', 'cwd', 'restart'],
+	service_status: ['name'],
+	service_logs: ['name', 'lines'],
+	service_restart: ['name'],
+	service_stop: ['name'],
 	lsp: ['operation', 'query', 'path'],
 	agent: ['description', 'subagent_type', 'background'],
 	agent_message: ['agent_id', 'message', 'background'],
 	agent_status: ['agent_id'],
+	agent_history: ['agent_id', 'offset', 'limit'],
 	agent_wait: ['agent_id', 'timeout_ms'],
 	agent_cancel: ['agent_id'],
 	task_create: ['title', 'activeForm', 'owner', 'depends_on'],

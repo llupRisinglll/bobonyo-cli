@@ -16,6 +16,36 @@ import {
 } from './compaction-state';
 
 describe('deterministic compaction state', () => {
+	test('post-compaction directive resumes work without checklist narration', () => {
+		const snapshot = parseCompactionStateSnapshot(
+			buildCompactionStateSnapshot({
+				sessionId: 'silent',
+				cwd: '/repo',
+				workspaceRoot: '/repo',
+				transcriptPath: '/data/session.json',
+				tasks: [{id: 'release', title: 'Build release', status: 'pending'}],
+				loopJobs: [],
+				agents: [],
+				messages: [],
+				context: [],
+				availableSkills: [],
+				model: 'test',
+				budgets: {
+					maxSkills: 1,
+					maxSkillTokens: 100,
+					maxTotalSkillTokens: 100,
+					maxFiles: 1,
+					maxFileTokens: 100,
+					maxTotalFileTokens: 100,
+				},
+			}),
+		);
+		expect(snapshot?.directive).toContain('Checklist bookkeeping is silent');
+		expect(snapshot?.directive).toContain(
+			'no prose announcement, confirmation, or task-list recap',
+		);
+		expect(snapshot?.tasks[0]?.status).toBe('pending');
+	});
 	test('preserves tasks, goal, loops, agents, skills, files, and transcript path', () => {
 		const context = [
 			{

@@ -3,6 +3,7 @@ import type {ChatMessageLike} from './client';
 import type {LoopJob, SessionGoal} from './goal-loop';
 import type {ActiveAgentRun, ChatMessage, SessionTask} from './state';
 import {estimateTokens} from './tokenize';
+import {SILENT_CHECKLIST_GUIDANCE} from './plain-response';
 
 export const COMPACTION_STATE_PREFIX =
 	'[BOBONYO_AUTHORITATIVE_COMPACTION_STATE_V1]';
@@ -331,7 +332,8 @@ export function buildCompactionStateSnapshot(
 	const data: CompactionStateSnapshotData = {
 		version: 1,
 		directive:
-			'This generated state is authoritative. Resume active work directly. Do not recap, ask what to do next, redo completed discovery, or stop merely to report progress. Continue active goal and checklist as if compaction never occurred. Use transcriptPath only when an exact older detail is needed.',
+			'This generated state is authoritative. Resume active work directly. Do not recap, ask what to do next, redo completed discovery, or stop merely to report progress. Continue active goal and checklist as if compaction never occurred. Use transcriptPath only when an exact older detail is needed. ' +
+			SILENT_CHECKLIST_GUIDANCE,
 		session: {
 			id: input.sessionId,
 			cwd: input.cwd,

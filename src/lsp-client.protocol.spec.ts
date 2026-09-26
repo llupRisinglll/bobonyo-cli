@@ -60,3 +60,15 @@ process.stdin.on('data', chunk => {
 		await client.close();
 	}
 });
+
+test('closed LSP client rejects late notifications without EPIPE', async () => {
+	root = mkdtempSync(join(tmpdir(), 'bobonyo-dead-lsp-'));
+	const server = join(root, 'server.ts');
+	writeFileSync(server, 'process.exit(0)');
+	const client = new StdioLspClient(root, [process.execPath, server]);
+	await Bun.sleep(25);
+	await client.close();
+	await expect(client.notify('window/logMessage', {})).rejects.toThrow(
+		'LSP client is closed',
+	);
+});

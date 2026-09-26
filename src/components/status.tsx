@@ -3,15 +3,12 @@ import {createMemo, Show} from 'solid-js';
 import {useTerminalDimensions} from '@opentui/solid';
 import {
 	activeEndpoint,
-	activeAgents,
 	deepSeekBalance,
 	mode,
 	providerUsage,
-	toolProfile,
 	usageHistory,
 } from '../state';
 import {createTextAttributes} from '@opentui/core';
-import {resolveProfile} from '../tools';
 import {colors} from '../theme';
 import {statusPathLabel} from '../status-path';
 import {
@@ -21,6 +18,7 @@ import {
 	sessionCacheUsage,
 } from '../provider-usage';
 import {isDeepSeek, isXiaomiMiMo} from '../deepseek';
+import {modeLabel as labelForMode} from '../modes';
 
 /**
  * Mode line, parity flavor of nanocoder's footer: mode · model · ctx.
@@ -31,24 +29,7 @@ export function Status(props: {cwd?: string} = {}) {
 	// The `bg: n` segment is GONE: background jobs now surface as a
 	// floating top-right notification (`background jobs: n`, click or /ps
 	// opens the live modal) instead of a status-line digit.
-	const agents = createMemo(() => {
-		const count = activeAgents();
-		return count > 0 ? ` · agents: ${count}` : '';
-	});
-	const modeLabel = createMemo(() => {
-		const current = mode();
-		return current === 'yolo' ? 'yolo' : `${current} mode`;
-	});
-	// Parity: the tune label shows the RESOLVED profile, and flags its auto
-	// origin with `(auto)` on wide terminals (narrow ones drop the suffix).
-	const tuneLabel = createMemo(() => {
-		const chosen = toolProfile();
-		const resolved = resolveProfile(chosen, activeEndpoint().model);
-		const wide = (terminalDimensions().width ?? 80) >= 100;
-		return chosen === 'auto' && wide
-			? `tune: ${resolved} (auto)`
-			: `tune: ${resolved}`;
-	});
+	const modeLabel = createMemo(() => labelForMode(mode()));
 	// `Cred: $n` (DeepSeek) between tune and the counts; label secondary,
 	// amount primary — mirrors the `tune:` two-tone pair.
 	const credSegment = () => {
@@ -89,19 +70,15 @@ export function Status(props: {cwd?: string} = {}) {
 		const user = process.env.USER ?? 'user';
 		// Keep the footer on ONE row (a wrapped status line would paint over
 		// the input box's bottom border on narrow panes): size the path to the
-		// remaining width after the FULL left segment (mode/tune/model/ctx/
-		// agents/bg, forgetting any part makes the line overflow and OpenTUI
+		// remaining width after the FULL left segment (mode/cache/usage,
+		// forgetting any part makes the line overflow and OpenTUI
 		// clips `~N%`/`bg: N` digits out of the middle nodes).
 		const width = Math.max(24, (terminalDimensions().width ?? 80) - 2);
 		const left =
-			`⏵⏵⏵ ${modeLabel()} · tune: ` +
-			`${tuneLabel().replace(/^tune:\s*/, '')}` +
+			`⏵⏵⏵ ${modeLabel()}` +
 			credSegment() +
 			cacheRateSegment() +
-			usageSegment() +
-			// The agents count appears mid-line, budget it too or a narrow
-			// pane clips the digit at the status-line edge.
-			agents();
+			usageSegment();
 		return statusPathLabel({left, user, cwd, width});
 	});
 	return (
@@ -109,11 +86,6 @@ export function Status(props: {cwd?: string} = {}) {
 			<text fg={colors().error} attributes={bold()}>
 				⏵⏵⏵ {modeLabel()}
 			</text>
-			{/* Leading spaces live in the FOLLOWING node, OpenTUI trims
-			    trailing whitespace from a text node, which ate the space
-			    between `tune:` and the value. */}
-			<text fg={colors().secondary}> · tune:</text>
-			<text fg={colors().primary}> {tuneLabel().replace(/^tune:\s*/, '')}</text>
 			<Show when={isDeepSeek(activeEndpoint()) && deepSeekBalance()}>
 				<text fg={colors().secondary}> · Cred:</text>
 				<text fg={colors().primary}>
@@ -144,7 +116,6 @@ export function Status(props: {cwd?: string} = {}) {
 					{formatTokens(providerUsage()!.totalTokens)}
 				</text>
 			</Show>
-			<text fg={colors().secondary}>{agents()}</text>
 			<box flexGrow={1} />
 			<text fg={colors().secondary}>{cwdLabel()}</text>
 		</box>

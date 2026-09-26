@@ -9,9 +9,10 @@
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {bobonyoConfigDir} from './bobonyo-paths';
-import type {SandboxMode} from './sandbox';
+import type {SandboxMode, SandboxSettings} from './sandbox';
+import {isMode, type Mode} from './modes';
 
-export type Mode = 'yolo' | 'auto-accept' | 'normal' | 'plan';
+export type {Mode} from './modes';
 /**
  * How the harness shows the model's thinking:
  * - `hidden`: no Thought blocks at all; the Working indicator says
@@ -32,6 +33,8 @@ export type ResumeCwdMode = 'session' | 'current' | 'ask';
 
 export interface Settings {
 	mode: Mode;
+	/** Version 2 distinguishes explicitly unsandboxed yolo from legacy yolo. */
+	modeVersion?: 2;
 	toolProfile: ToolProfile;
 	maxMessages: number;
 	/** Active theme id (see src/theme.ts, omnicode / tokyo-night / …). */
@@ -93,7 +96,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-	mode: 'yolo',
+	mode: 'default',
 	toolProfile: 'full',
 	maxMessages: 1000,
 	thinkingMode: 'hidden',
@@ -133,10 +136,15 @@ export function loadSettings(): Settings {
 	} catch {
 		// corrupt settings, defaults
 	}
-	const mode = (process.env.BOBONYO_MODE ??
-		process.env.NANOCODER_MODE ??
-		settings.mode ??
-		DEFAULTS.mode) as Mode;
+	// Old saved yolo meant today's default. Only versioned settings or an
+	// explicit environment/CLI override may enable unsandboxed yolo.
+	const savedMode =
+		settings.mode === 'yolo' && settings.modeVersion !== 2
+			? 'default'
+			: settings.mode;
+	const rawModeSetting =
+		process.env.BOBONYO_MODE ?? process.env.NANOCODER_MODE ?? savedMode;
+	const mode = isMode(rawModeSetting) ? rawModeSetting : DEFAULTS.mode;
 	const toolProfile = (process.env.BOBONYO_PROFILE ??
 		process.env.NANOCODER_PROFILE ??
 		settings.toolProfile ??
@@ -210,9 +218,8 @@ export function loadSettings(): Settings {
 			? settings.systemPrompt
 			: DEFAULTS.systemPrompt;
 	return {
-		mode: ['yolo', 'auto-accept', 'normal', 'plan'].includes(mode)
-			? mode
-			: DEFAULTS.mode,
+		mode,
+		modeVersion: 2,
 		toolProfile: ['full', 'minimal', 'nano', 'auto'].includes(toolProfile)
 			? toolProfile
 			: DEFAULTS.toolProfile,
@@ -282,9 +289,24 @@ export function saveSettings(settings: Settings): void {
 	mkdirSync(base, {recursive: true});
 	writeFileSync(
 		join(base, 'settings.json'),
-		`${JSON.stringify(settings, null, 2)}\n`,
+		`${JSON.stringify({...settings, modeVersion: 2}, null, 2)}\n`,
 		'utf8',
 	);
+}
+
+/** Effective execution policy, separate from persisted sandbox preferences. */
+export function commandSandboxSettings(
+	settings: Settings = loadSettings(),
+): SandboxSettings {
+	const sandbox = settings.sandbox ?? DEFAULTS.sandbox!;
+	return settings.mode === 'yolo' ? {...sandbox, mode: 'off'} : {...sandbox};
+}
+
+/** A deliberate in-session mode change also supersedes the launch flag. */
+export function saveModeSettings(mode: Mode): void {
+	const settings = loadSettings();
+	saveSettings({...settings, mode});
+	process.env.BOBONYO_MODE = mode;
 }
 
 /**

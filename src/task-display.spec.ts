@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
 import {formatTaskStatusText, formatToolEntry} from './tool-display';
-import {renderToolRun} from './components/history';
+import {latestSettledTaskMessages, renderToolRun} from './components/history';
 import type {ChatMessage} from './state';
 import {setTasks} from './state';
 
@@ -51,7 +51,12 @@ test('task rows render explicit list title and task titles', () => {
 		},
 	]);
 	const rendered = taskTool('Review memory implementation');
-	expect(rendered).toBe('Working on: Review memory implementation');
+	expect(rendered).toContain('```taskrow:running');
+	expect(rendered).toContain(
+		'Review memory implementation (1 done, 1 in progress, 0 open)',
+	);
+	expect(rendered).toContain('◆ Check production build status');
+	expect(rendered).toContain('› Deploying release');
 });
 
 test('task progress uses human-readable status text, not tool chrome', () => {
@@ -67,9 +72,7 @@ test('task progress uses human-readable status text, not tool chrome', () => {
 	expect(formatTaskStatusText(tool, 'done')).toBe(
 		'Finished working on: Run full verification gates',
 	);
-	expect(formatToolEntry(tool, false, 'done')).toBe(
-		'Finished working on: Run full verification gates',
-	);
+	expect(formatToolEntry(tool, false, 'done')).toContain('```taskrow:done');
 });
 
 test('task lifecycle output preserves task_update status', () => {
@@ -87,7 +90,8 @@ test('task lifecycle output preserves task_update status', () => {
 test('task row does not derive list title from pre-tool text', () => {
 	setTasks([{id: '1', title: 'Inspect code', status: 'pending'}]);
 	const rendered = taskTool('Inspect implementation');
-	expect(rendered).toBe('Working on: Inspect implementation');
+	expect(rendered).toContain('✦ Inspect implementation');
+	expect(rendered).toContain('· Inspect code');
 });
 
 test('superseded task snapshot collapses to title plus summary', () => {
@@ -105,7 +109,10 @@ test('superseded task snapshot collapses to title plus summary', () => {
 		false,
 		'done',
 	);
-	expect(rendered).toBe('Finished working on: Review completed work');
+	expect(rendered).toContain(
+		'Review completed work (1 done, 0 in progress, 0 open)',
+	);
+	expect(rendered).not.toContain('◆ Inspect code');
 });
 
 test('superseded task snapshot without pre-tool text is hidden', () => {
@@ -122,7 +129,7 @@ test('superseded task snapshot without pre-tool text is hidden', () => {
 			},
 		},
 	};
-	expect(renderToolRun([oldSnapshot], 80, new Map())).toEqual([]);
+	expect(renderToolRun([oldSnapshot], 80, new Map(), new Set())).toEqual([]);
 });
 
 test('legacy settled task snapshots without saved args do not read unrelated current tasks', () => {
@@ -132,7 +139,8 @@ test('legacy settled task snapshots without saved args do not read unrelated cur
 		false,
 		'done',
 	);
-	expect(rendered).toBe('Finished working on: task checklist');
+	expect(rendered).toContain('```taskrow:done');
+	expect(rendered).toContain('(0 done, 0 in progress, 0 open)');
 	expect(rendered).not.toContain('New unrelated task');
 });
 
@@ -141,7 +149,8 @@ test('settled task snapshots with saved args keep their own group', () => {
 	const rendered = savedTaskTool([
 		{id: 'old', title: 'Old completed group', status: 'completed'},
 	]);
-	expect(rendered).toBe('Finished working on: Finish implementation');
+	expect(rendered).toContain('◆ Old completed group');
+	expect(rendered).not.toContain('New unrelated task');
 });
 test('resumed settled task rows keep the diamond and spacing', () => {
 	const row: ChatMessage = {
@@ -157,7 +166,66 @@ test('resumed settled task rows keep the diamond and spacing', () => {
 	};
 	const rendered =
 		renderToolRun([row], 80, new Map(), new Set([row]))[0]?.text ?? '';
-	expect(rendered).toContain('Finished working on: Resume task display');
-	expect(rendered).not.toContain('✦  Finished');
-	expect(rendered).toContain('```inforow:done');
+	expect(rendered).toContain('✦ Resume task display');
+	expect(rendered).toContain('```taskrow:done');
+});
+
+test('an explicitly empty running snapshot never borrows live tasks', () => {
+	setTasks([{id: 'other', title: 'Unrelated live work', status: 'pending'}]);
+	const rendered = formatToolEntry(
+		{
+			name: 'write_tasks',
+			detail: '',
+			output: '',
+			args: {title: 'Clear list', tasks: []},
+		},
+		false,
+		'running',
+	);
+	expect(rendered).toContain('(0 done, 0 in progress, 0 open)');
+	expect(rendered).not.toContain('Unrelated live work');
+});
+
+test('running updates preserve latest settled snapshot in each user turn', () => {
+	const snapshot = (toolId: string, running = false): ChatMessage => ({
+		role: 'tool',
+		content: '',
+		toolId,
+		running,
+		tool: {name: 'write_tasks', detail: '', output: '', args: {tasks: []}},
+	});
+	const old = snapshot('old');
+	const latest = snapshot('latest');
+	const pending = snapshot('pending', true);
+	const previousTurn = snapshot('previous-turn');
+	expect([
+		...latestSettledTaskMessages([
+			previousTurn,
+			{role: 'user', content: 'Next'},
+			old,
+			latest,
+			pending,
+		]),
+	]).toEqual([latest, previousTurn]);
+});
+
+test('superseded snapshots preserve meaningful narration without task rows', () => {
+	const message: ChatMessage = {
+		role: 'tool',
+		content: '',
+		brief: 'Keep deployment blocked until checks pass.',
+		tool: {
+			name: 'write_tasks',
+			detail: '',
+			output: '',
+			args: {
+				title: 'Verify release',
+				tasks: [{title: 'Inspect build', status: 'completed'}],
+			},
+		},
+	};
+	const rows = renderToolRun([message], 80, new Map(), new Set());
+	expect(rows[0]?.brief).toBe(message.brief);
+	expect(rows[0]?.text).toContain('Verify release (1 done');
+	expect(rows[0]?.text).not.toContain('◆ Inspect build');
 });

@@ -100,7 +100,15 @@ interface CodexUsagePayload {
 		limit_name?: string | null;
 		rate_limit?: CodexRateLimitDetails | null;
 	}> | null;
-	rate_limit_reset_credits?: {available_count?: number} | null;
+	rate_limit_reset_credits?: {
+		available_count?: number;
+		credits?: Array<{
+			id?: string;
+			title?: string | null;
+			expires_at?: number | null;
+			status?: string;
+		}> | null;
+	} | null;
 	credits?: {
 		has_credits?: boolean;
 		unlimited?: boolean;
@@ -115,6 +123,41 @@ interface CodexUsagePayload {
 			resets_at?: number;
 		} | null;
 	} | null;
+}
+
+export interface CodexResetCredit {
+	id: string;
+	title: string;
+	expiresAt?: number;
+}
+
+export async function fetchCodexResetCredits(
+	baseUrl: string,
+): Promise<CodexResetCredit[]> {
+	const cacheKey = baseUrl.replace(/\/+$/, '').replace(/\/codex$/, '');
+	try {
+		const auth = readCodexAuth();
+		if (!auth.accessToken) return [];
+		const response = await fetch(`${cacheKey}/wham/usage`, {
+			headers: {
+				accept: 'application/json',
+				authorization: `Bearer ${auth.accessToken}`,
+				...(auth.accountId ? {'chatgpt-account-id': auth.accountId} : {}),
+				originator: 'bobonyo',
+			},
+		});
+		if (!response.ok) return [];
+		const body = (await response.json()) as CodexUsagePayload;
+		return (body.rate_limit_reset_credits?.credits ?? [])
+			.filter(credit => credit.id && credit.status !== 'redeemed')
+			.map(credit => ({
+				id: credit.id!,
+				title: credit.title || 'Full reset',
+				expiresAt: credit.expires_at ?? undefined,
+			}));
+	} catch {
+		return [];
+	}
 }
 
 /**
@@ -166,7 +209,13 @@ export function codexLimitRows(payload: CodexUsagePayload): StatusRow[] {
 	}
 	const resetCount = payload.rate_limit_reset_credits?.available_count;
 	if (typeof resetCount === 'number' && resetCount >= 0) {
-		rows.push({label: 'Resets available', value: String(resetCount)});
+		rows.push({
+			label: 'Resets available',
+			value:
+				resetCount > 0
+					? `${resetCount} · use /usage to see details and reset`
+					: '0',
+		});
 	}
 	const monthly = payload.spend_control?.individual_limit;
 	if (monthly?.remaining_percent != null) {

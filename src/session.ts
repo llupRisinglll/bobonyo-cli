@@ -22,16 +22,27 @@ import {join} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
 import {displayToolName, toolArgsSummary} from './tools';
 import type {ChatMessageLike, MockToolCall} from './client';
-import type {ActiveAgentRun, ChatMessage, SessionTask} from './state';
+import type {
+	ActiveAgentRun,
+	ChatMessage,
+	SessionUsageSnapshot,
+	SessionTask,
+} from './state';
 import type {LoopJob, SessionGoal} from './goal-loop';
 import {copySessionMemory} from './memory';
+import {isTaskNotification} from './background-notification';
+import type {GraphContextSnapshot} from './graph-context';
 
 export interface SessionMeta {
 	id: string;
 	name: string;
 	createdAt: number;
 	updatedAt: number;
+	/** Epoch milliseconds when latest user prompt was sent. */
+	lastMessageAt?: number;
 	firstMessage: string;
+	/** Latest user prompt, used by the resume picker preview. */
+	lastMessage?: string;
 	/** Working directory the conversation was created in (for /resume's
 	 *  current-folder filter; legacy sessions may not carry it). */
 	cwd?: string;
@@ -45,12 +56,16 @@ export interface SessionMeta {
 export interface SessionData extends SessionMeta {
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
+	/** Missing in legacy sessions; never infer graph ownership from the transcript. */
+	graphContexts?: GraphContextSnapshot;
 	/** Codex-style persisted long-running goal. */
 	goal?: SessionGoal;
 	/** Codex-style scheduled thread jobs created by /loop. */
 	loopJobs?: LoopJob[];
 	/** Recent subagent child histories, restored into /ps on resume. */
 	subagentRuns?: ActiveAgentRun[];
+	/** Per-session provider usage, including prompt-cache counts. */
+	usageHistory?: SessionUsageSnapshot[];
 	/** Current task checklist, restored on resume. */
 	/** Legacy sessions may omit task ids; resume normalization assigns them. */
 	tasks?: Array<Omit<SessionTask, 'id'> & {id?: string}>;
@@ -185,6 +200,7 @@ export interface CheckpointData {
 	createdAt: number;
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
+	graphContexts?: GraphContextSnapshot;
 }
 
 /** A4: save a named checkpoint snapshot of the current conversation. */
@@ -192,6 +208,7 @@ export function saveCheckpoint(
 	name: string,
 	messages: ChatMessage[],
 	context: ChatMessageLike[],
+	graphContexts?: GraphContextSnapshot,
 ): string {
 	const dir = checkpointsDir();
 	mkdirSync(dir, {recursive: true});
@@ -202,6 +219,7 @@ export function saveCheckpoint(
 		createdAt: Date.now(),
 		messages,
 		context,
+		graphContexts,
 	};
 	writeFileSync(
 		join(dir, `${safe}.json`),
@@ -260,6 +278,9 @@ export function forkSession(data: SessionData): SessionData {
 		updatedAt: Date.now(),
 		messages: structuredClone(data.messages),
 		context: structuredClone(data.context),
+		graphContexts: data.graphContexts
+			? structuredClone(data.graphContexts)
+			: undefined,
 		tasks: structuredClone(data.tasks ?? []),
 	};
 	saveSession(forked);
@@ -299,7 +320,7 @@ export function listSessions(): SessionMeta[] {
 	return (
 		readdirSync(dir)
 			.filter(file => file.endsWith('.json'))
-			.map(file => {
+			.map((file): SessionMeta | null => {
 				try {
 					const data = JSON.parse(
 						readFileSync(join(dir, file), 'utf8'),
@@ -318,6 +339,7 @@ export function listSessions(): SessionMeta[] {
 						return null;
 					const createdAt = toEpoch(data.createdAt);
 					const updatedAt = toEpoch(data.updatedAt) || createdAt;
+					const lastMessageAt = toEpoch(data.lastMessageAt) || updatedAt;
 					const cwd =
 						typeof data.cwd === 'string' && data.cwd.length > 0
 							? data.cwd
@@ -328,8 +350,10 @@ export function listSessions(): SessionMeta[] {
 						name: data.name ?? data.title ?? data.id,
 						createdAt,
 						updatedAt,
+						lastMessageAt,
 						firstMessage:
 							data.firstMessage ?? firstMessagePreview(data.messages ?? []),
+						lastMessage: lastMessagePreview(data.messages ?? []),
 						...(cwd ? {cwd} : {}),
 					};
 				} catch {
@@ -451,6 +475,8 @@ export function healResumedContext(
 		toolRun = [];
 	};
 	for (const message of messages) {
+		// Submitted built-ins are display-only, not provider turns or tool-run boundaries.
+		if (message.submittedCommand) continue;
 		if (message.role === 'tool') {
 			toolRun.push({
 				id: message.toolId,
@@ -492,16 +518,17 @@ function contextCoversTranscriptTail(
 	context: ChatMessageLike[],
 	messages: ChatMessage[],
 ): boolean {
-	if (context.length === 0) return messages.length === 0;
-	const last = context[context.length - 1]!;
+	const last = context[context.length - 1];
 	// Scan from the newest transcript row for the first message that maps to
 	// a provider-context row (error rows, info rows and reasoning-only
 	// assistant rows never reach the context).
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]!;
+		if (message.submittedCommand) continue;
 		if (message.kind === 'info' || message.kind === 'warning') continue;
 		if (message.error) continue;
 		if (message.role === 'assistant' && !message.content?.trim()) continue;
+		if (!last) return false;
 		if (message.role === 'tool') {
 			return last.role === 'tool' && last.tool_call_id === message.toolId;
 		}
@@ -521,6 +548,7 @@ interface NanocoderSessionFile {
 	messages?: Array<{
 		role: string;
 		content?: string;
+		submittedCommand?: boolean;
 		tool_call_id?: string;
 		/** Display-shape tool rows carry the full tool metadata directly. */
 		toolId?: string;
@@ -549,9 +577,16 @@ export function convertNanocoderSession(
 	const messages: ChatMessage[] = [];
 
 	for (const message of msgs) {
+		if (isTaskNotification(message.content)) continue;
 		if (message.role === 'user') {
 			const content = message.content ?? '';
-			messages.push({role: 'user', content});
+			messages.push({
+				role: 'user',
+				content,
+				...(message.submittedCommand !== undefined
+					? {submittedCommand: message.submittedCommand}
+					: {}),
+			});
 			continue;
 		}
 		if (message.role === 'assistant') {
@@ -647,6 +682,7 @@ export function convertNanocoderSession(
 			file.lastAccessedAt ?? file.createdAt ?? Date.now(),
 		).getTime(),
 		firstMessage: firstMessagePreview(messages),
+		lastMessage: lastMessagePreview(messages),
 		messages,
 		context,
 	};
@@ -679,6 +715,12 @@ export function resolveSession(ref: string): SessionData | null {
 
 export function firstMessagePreview(messages: ChatMessage[]): string {
 	const user = messages.find(message => message.role === 'user');
+	const text = user?.content.trim() ?? '(empty conversation)';
+	return text.length > 48 ? `${text.slice(0, 48)}…` : text;
+}
+
+export function lastMessagePreview(messages: ChatMessage[]): string {
+	const user = [...messages].reverse().find(message => message.role === 'user');
 	const text = user?.content.trim() ?? '(empty conversation)';
 	return text.length > 48 ? `${text.slice(0, 48)}…` : text;
 }

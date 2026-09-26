@@ -17,6 +17,16 @@ import {
 } from './app';
 import type {ChatMessageLike} from './client';
 
+test('display-only commands do not replace retained conversation turns', () => {
+	const history = [
+		{role: 'user' as const, content: 'old'},
+		{role: 'user' as const, content: 'retained'},
+		{role: 'assistant' as const, content: 'answer'},
+		{role: 'user' as const, content: '/status', submittedCommand: true},
+	];
+	expect(compactedDisplayMessages(history, 1)).toEqual(history.slice(1));
+});
+
 describe('collectCompactedUserMessages (codex build_compacted_history parity)', () => {
 	const user = (content: string): ChatMessageLike => ({
 		role: 'user',

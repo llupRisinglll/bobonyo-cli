@@ -35,6 +35,7 @@ export function settledBlockCacheKey(block: SettledBlock): string {
 	if (block.kind === 'tool') {
 		return [
 			'tool',
+			block.part.key ?? '',
 			block.status,
 			block.glyph,
 			block.brief ?? '',
@@ -43,7 +44,10 @@ export function settledBlockCacheKey(block: SettledBlock): string {
 			JSON.stringify(block.segments),
 		].join('\u0000');
 	}
-	return [block.kind, ...block.parts.map(part => part.text)].join('\u0000');
+	return [
+		block.kind,
+		...block.parts.flatMap(part => [part.key ?? '', part.text]),
+	].join('\u0000');
 }
 
 /**

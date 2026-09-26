@@ -30,6 +30,7 @@ export interface ArgumentSpec {
 export interface CustomCommand {
 	name: string;
 	description: string;
+	argumentHint?: string;
 	arguments: ArgumentSpec[];
 	body: string;
 	source: string;
@@ -108,6 +109,7 @@ export interface CustomTool {
 export interface Skill {
 	name: string;
 	description: string;
+	argumentHint?: string;
 	arguments: ArgumentSpec[];
 	subscribe?: string[];
 	body: string;
@@ -299,6 +301,10 @@ export function loadCustomCommands(): CustomCommand[] {
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
+			argumentHint:
+				typeof frontmatter['argument-hint'] === 'string'
+					? frontmatter['argument-hint']
+					: undefined,
 			arguments: argumentsSpec,
 			body,
 			source: file,
@@ -437,6 +443,57 @@ export function builtinCavemanSkill(): Skill | null {
 	}
 }
 
+function builtinSkills(): Skill[] {
+	const root = join(import.meta.dir, 'builtin');
+	try {
+		const files = readdirSync(root, {withFileTypes: true})
+			.filter(entry => entry.isDirectory())
+			.flatMap(entry => {
+				const direct = join(root, entry.name, 'SKILL.md');
+				if (existsSync(direct)) return [direct];
+				try {
+					return readdirSync(join(root, entry.name), {withFileTypes: true})
+						.filter(child => child.isDirectory())
+						.map(child => join(root, entry.name, child.name, 'SKILL.md'))
+						.filter(existsSync);
+				} catch {
+					return [];
+				}
+			});
+		return files.flatMap(file => {
+			try {
+				const {frontmatter, body} = parseCommandFile(
+					readFileSync(file, 'utf8'),
+				);
+				const name =
+					typeof frontmatter.name === 'string'
+						? frontmatter.name
+						: (file.split('/').at(-2) ?? 'skill');
+				return [
+					{
+						name,
+						description:
+							typeof frontmatter.description === 'string'
+								? frontmatter.description
+								: '',
+						arguments: parseArgumentSpecs(frontmatter.arguments),
+						argumentHint:
+							typeof frontmatter['argument-hint'] === 'string'
+								? frontmatter['argument-hint']
+								: undefined,
+						body,
+						source: file,
+					},
+				] satisfies Skill[];
+			} catch {
+				return [];
+			}
+		});
+	} catch {
+		return [];
+	}
+}
+
 export function loadSkills(): Skill[] {
 	const skills = new Map<string, Skill>();
 	// Bobonyo reads only Bobonyo-owned config folders. Users migrate a
@@ -446,6 +503,10 @@ export function loadSkills(): Skill[] {
 	if (builtinHerdr) skills.set(builtinHerdr.name.toLowerCase(), builtinHerdr);
 	const builtin = cavemanMode() ? builtinCavemanSkill() : null;
 	if (builtin) skills.set(builtin.name.toLowerCase(), builtin);
+	for (const skill of builtinSkills()) {
+		if (!skills.has(skill.name.toLowerCase()))
+			skills.set(skill.name.toLowerCase(), skill);
+	}
 	for (const file of findFiles('skills')) {
 		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
 		const name =
@@ -460,6 +521,10 @@ export function loadSkills(): Skill[] {
 				typeof frontmatter.description === 'string'
 					? frontmatter.description
 					: '',
+			argumentHint:
+				typeof frontmatter['argument-hint'] === 'string'
+					? frontmatter['argument-hint']
+					: undefined,
 			arguments: parseArgumentSpecs(frontmatter.arguments),
 			subscribe: Array.isArray(subscribe) ? subscribe.map(String) : undefined,
 			body,

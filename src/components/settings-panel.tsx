@@ -4,6 +4,7 @@ import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {
 	activeAgents,
+	activeAgentRuns,
 	activeEndpoint,
 	cavemanMode,
 	thinkingMode,
@@ -22,6 +23,7 @@ import {
 } from '../state';
 import {listCheckpoints} from '../session';
 import {loadSettings} from '../settings';
+import {autoApprovesTools, MODES} from '../modes';
 import {loadPreferences} from '../config';
 import {bgTasks} from '../bash';
 import {colors, themeName} from '../theme';
@@ -58,7 +60,7 @@ export const SETTING_OPTIONS: Record<string, string[]> = {
 	thinkingMode: ['hidden', 'show', 'line'],
 	cavemanMode: ['on', 'off'],
 	resumeCwd: ['session', 'current', 'ask'],
-	mode: ['yolo', 'normal', 'plan', 'auto-accept'],
+	mode: [...MODES],
 	autoCompactThreshold: Array.from(
 		{length: 10},
 		(_, index) => `${50 + index * 5}%`,
@@ -146,7 +148,10 @@ export function settingsRows(tab: number): SettingsRow[] {
 				{
 					key: 'sandbox',
 					label: 'Command sandbox',
-					value: loadSettings().sandbox?.mode ?? 'auto',
+					value:
+						mode() === 'yolo'
+							? 'off (yolo)'
+							: (loadSettings().sandbox?.mode ?? 'auto'),
 				},
 				{
 					key: 'sandboxNetwork',
@@ -189,7 +194,10 @@ export function settingsRows(tab: number): SettingsRow[] {
 					// discoverable names; active delegation count appended.
 					value:
 						'General · Explore' +
-						(activeAgents() > 0 ? ` · ${activeAgents()} active` : ''),
+						(activeAgentRuns().filter(run => run.status === 'running').length >
+						0
+							? ` · ${activeAgentRuns().filter(run => run.status === 'running').length} active`
+							: ''),
 				},
 				{
 					key: 'visionModel',
@@ -225,7 +233,7 @@ export function settingsRows(tab: number): SettingsRow[] {
 				{
 					key: 'toolApproval',
 					label: 'Tool approval',
-					value: mode() === 'yolo' ? 'off (yolo)' : 'on',
+					value: autoApprovesTools(mode()) ? 'off' : 'on',
 				},
 				{
 					key: 'session',

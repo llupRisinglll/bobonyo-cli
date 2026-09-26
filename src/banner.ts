@@ -15,6 +15,11 @@ export function hasConversation(messages: ChatMessage[]): boolean {
 	return messages.some(message => !message.kind);
 }
 
+/** Empty fresh sessions have no persisted identity yet. */
+export function hasPersistableConversation(messages: ChatMessage[]): boolean {
+	return hasConversation(messages);
+}
+
 export function buildBannerBox(options: {
 	titleShape: string;
 	model: string;

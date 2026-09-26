@@ -71,6 +71,28 @@ describe('stableSettledBlocks (no whole-history re-render on bash settle)', () =
 		expect(cache).toHaveLength(1);
 		expect([...cache.keys()][0]).toContain('new-width');
 	});
+
+	test('identical markdown with different keys keeps distinct identity', () => {
+		const cache = new Map<string, SettledBlock>();
+		const first = stableSettledBlocks(cache, [
+			{kind: 'reply', parts: [{text: 'same reply', key: 'reply-1'}]},
+			{kind: 'reply', parts: [{text: 'same reply', key: 'reply-2'}]},
+		]);
+		expect(first[0]).not.toBe(first[1]);
+		expect(first[0]!.kind === 'reply' && first[0]!.parts[0]?.key).toBe(
+			'reply-1',
+		);
+		expect(first[1]!.kind === 'reply' && first[1]!.parts[0]?.key).toBe(
+			'reply-2',
+		);
+
+		const second = stableSettledBlocks(cache, [
+			{kind: 'reply', parts: [{text: 'same reply', key: 'reply-1'}]},
+			{kind: 'reply', parts: [{text: 'same reply', key: 'reply-2'}]},
+		]);
+		expect(second[0]).toBe(first[0]);
+		expect(second[1]).toBe(first[1]);
+	});
 });
 
 describe('settledBlockCacheKey', () => {

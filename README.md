@@ -46,6 +46,26 @@ bobonyo treats every model as a first class citizen:
   OpenCode, Claude Code, or Codex — or write your own — without leaving the
   harness.
 
+## Execution modes
+
+The default mode auto-approves tools and keeps the configured command sandbox.
+It is named `default`, not `yolo`. The portable `auto` sandbox uses bubblewrap
+when available and falls back to host execution when unavailable; select
+`workspace-write` in Settings → Behavior → Command sandbox to require isolation.
+
+`bobonyo --yolo` (also `--mode yolo` or `/mode yolo`) disables the command
+sandbox and tool permission prompts. **This grants host access without asking
+for tool permissions.** Clarification questions, hooks, deletion safety checks,
+and commit/PR message guards remain enabled. `normal` prompts for mutation tools;
+`plan` restricts the tool surface; `auto-accept` remains a sandbox-preserving alias
+for automatic tool approval. Shift+Tab cycles only sandbox-preserving modes.
+
+Old settings with `mode: "yolo"` are read as `default` without changing their
+sandbox preferences. Newly saved settings carry `modeVersion: 2`, so explicitly
+selected yolo can be restored without escalating legacy saved settings. Yolo's
+sandbox override does not overwrite the saved sandbox preference; switching back
+to `default` restores that preference. `--help` lists the available flags.
+
 ## System prompt
 
 The harness is the part that stays: cache-friendly requests, tool-call

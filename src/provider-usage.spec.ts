@@ -198,6 +198,12 @@ describe('formatCacheRate (DeepSeek status-line cost driver)', () => {
 		).toBe('2/3 (33% miss)');
 	});
 
+	test('omits redundant total and zero miss label', () => {
+		expect(
+			formatCacheRate(usage({cacheHitTokens: 8_880_000, cacheMissTokens: 0})),
+		).toBe('8.88M');
+	});
+
 	test('undefined until cache fields are reported', () => {
 		expect(formatCacheRate(undefined)).toBeUndefined();
 		expect(formatCacheRate(usage())).toBeUndefined();

@@ -9,6 +9,7 @@
  */
 
 import {listProviders, loadPreferences} from './config';
+import type {NativeWebSearchAction} from './client';
 
 export interface WebSearchFallback {
 	baseUrl: string;
@@ -17,15 +18,43 @@ export interface WebSearchFallback {
 	providerId: string;
 }
 
+/** Human-readable detail from a Responses API native web-search action. */
+export function nativeWebSearchActionDetail(
+	action?: NativeWebSearchAction,
+): string {
+	if (!action) return '';
+	if (action.type === 'search') {
+		if (action.query?.trim()) return action.query.trim();
+		const queries = action.queries?.map(query => query.trim()).filter(Boolean);
+		if (!queries?.length) return '';
+		return queries.length > 1 ? `${queries[0]} ...` : queries[0]!;
+	}
+	if (action.type === 'open_page') return action.url?.trim() ?? '';
+	if (action.type === 'find_in_page') {
+		const pattern = action.pattern?.trim();
+		const url = action.url?.trim();
+		if (pattern && url) return `'${pattern}' in ${url}`;
+		if (pattern) return `'${pattern}'`;
+		return url ?? '';
+	}
+	return '';
+}
+
+/** Settled transcript row for provider-hosted native web search. */
+export function formatNativeWebSearchActivity(
+	action?: NativeWebSearchAction,
+): string {
+	const detail = nativeWebSearchActionDetail(action);
+	return `✦ Searched the web${detail ? ` for ${detail}` : ''}`;
+}
+
 /** Resolve the configured web-search fallback (null = inherit main model). */
 export function resolveWebSearchFallback(): WebSearchFallback | null {
 	const prefs = loadPreferences();
 	if (!prefs.webSearchModel) return null;
 	const providers = listProviders();
 	const provider =
-		providers.find(
-			candidate => candidate.id === prefs.webSearchProvider,
-		) ??
+		providers.find(candidate => candidate.id === prefs.webSearchProvider) ??
 		providers.find(candidate =>
 			candidate.models.includes(prefs.webSearchModel!),
 		);
@@ -72,10 +101,7 @@ function extractAnswer(data: NativeWebSearchResponse): string {
 	return parts.filter(Boolean).join('\n').trim();
 }
 
-function formatResults(
-	query: string,
-	data: NativeWebSearchResponse,
-): string {
+function formatResults(query: string, data: NativeWebSearchResponse): string {
 	const resultItems = (data.output ?? []).filter(
 		item => item.type === 'web_search_result',
 	);
@@ -157,8 +183,7 @@ export async function executeNativeWebSearch(
 		const hasSearchData =
 			(data.output ?? []).some(
 				item =>
-					item.type === 'web_search_result' ||
-					item.type === 'web_search_call',
+					item.type === 'web_search_result' || item.type === 'web_search_call',
 			) || Boolean(extractAnswer(data));
 		if (!hasSearchData) {
 			throw new Error(

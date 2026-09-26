@@ -18,6 +18,28 @@ import {colors, type Colors} from './theme';
 import {historyFillWidth} from './history-width';
 import {formatToolEntry} from './tool-display';
 
+test('skill activity colors skill name primary and description white', () => {
+	const chunks = tokenizeToolRow(
+		'✦ Skills triggered\n  └ impeccable — Polish the interface',
+		'done',
+		colors(),
+	);
+	const primary = themeRgb(colors().primary);
+	const text = themeRgb(colors().text);
+	expect(chunks.map(chunk => chunk.text).join('')).toContain(
+		'impeccable — Polish the interface',
+	);
+	expect(
+		chunks.some(chunk => chunk.text === 'impeccable' && rgb(chunk) === primary),
+	).toBe(true);
+	expect(
+		chunks.some(
+			chunk =>
+				chunk.text.includes('Polish the interface') && rgb(chunk) === text,
+		),
+	).toBe(true);
+});
+
 function themeRgb(hex: string): string {
 	const r = parseInt(hex.slice(1, 3), 16);
 	const g = parseInt(hex.slice(3, 5), 16);
@@ -564,6 +586,23 @@ describe('group header colors (compact tally)', () => {
 		);
 		expect(rgb(chunks.find(c => c.text === 'Search')!)).toBe(
 			themeRgb(colors().primary),
+		);
+		expect(rgb(chunks.find(c => c.text === ' src/a.ts')!)).toBe(
+			themeRgb(colors().text),
+		);
+		expect(rgb(chunks.find(c => c.text === ' needle')!)).toBe(
+			themeRgb(colors().text),
+		);
+	});
+
+	test('wrapped activity paths stay white on continuation rows', () => {
+		const chunks = tokenizeToolRow(
+			'Explored\n  └ Read .bobonyo/work\n  │   trees/very-long-path',
+			'done',
+			colors(),
+		);
+		expect(rgb(chunks.find(c => c.text === 'trees/very-long-path')!)).toBe(
+			themeRgb(colors().text),
 		);
 	});
 

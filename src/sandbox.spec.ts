@@ -4,6 +4,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildSandboxCommand, bubblewrapAvailable} from './sandbox';
 import {runBash, sandboxedCwd} from './bash';
+import {commandSandboxSettings, loadSettings} from './settings';
+import {cliMode} from './cli-mode';
 
 let root = '';
 let config = '';
@@ -24,6 +26,20 @@ afterEach(() => {
 });
 
 describe('sandbox command', () => {
+	test('--yolo bypasses sandbox construction even when bubblewrap is available', () => {
+		const settings = {...loadSettings(), mode: cliMode(['--yolo'])!};
+		const command = buildSandboxCommand(
+			'true',
+			root,
+			commandSandboxSettings(settings),
+			true,
+		);
+		expect(command).toEqual({
+			argv: ['bash', '-c', 'true'],
+			active: false,
+			backend: 'none',
+		});
+	});
 	test('workspace-write binds workspace but keeps host root read-only', () => {
 		const built = buildSandboxCommand(
 			'true',
@@ -33,8 +49,12 @@ describe('sandbox command', () => {
 		);
 		expect(built.active).toBe(true);
 		expect(built.argv.slice(0, 2)).toEqual(['bwrap', '--die-with-parent']);
-		expect(built.argv).toContain('--ro-bind');
+		expect(built.argv).toContain('--bind');
 		expect(built.argv).toContain(root);
+		expect(built.argv).not.toContain('--unshare-ipc');
+		expect(built.argv).toContain('--ro-bind');
+		expect(built.argv).toContain('/tmp');
+		expect(built.argv).toContain('/var/tmp');
 	});
 
 	test('network sandbox masks invalid system SSH snippets', () => {
@@ -52,6 +72,28 @@ describe('sandbox command', () => {
 		expect(built.argv[tmpfsIndex + 1]).toBe('/etc/ssh/ssh_config.d');
 	});
 
+	test('arbitrary command names do not change sandbox policy', () => {
+		const settings = {
+			mode: 'workspace-write' as const,
+			network: true,
+			writablePaths: [],
+		};
+		const commands = [
+			'code README.md',
+			'xdg-open README.md',
+			'gio open README.md',
+		];
+		const built = commands.map(command =>
+			buildSandboxCommand(command, root, settings, true),
+		);
+		for (const command of built) {
+			expect(command.active).toBe(true);
+			expect(command.backend).toBe('bubblewrap');
+			expect(command.argv).toContain('--unshare-pid');
+			expect(command.argv).not.toContain('--unshare-ipc');
+		}
+	});
+
 	test('read-only mode never adds writable binds', () => {
 		const built = buildSandboxCommand(
 			'true',
@@ -60,7 +102,13 @@ describe('sandbox command', () => {
 			true,
 		);
 		expect(built.argv).toContain('--unshare-net');
-		expect(built.argv).not.toContain('--bind');
+		const bindTargets = built.argv
+			.map((arg, index) =>
+				arg === '--bind' ? built.argv[index + 2] : undefined,
+			)
+			.filter(Boolean);
+		expect(bindTargets).toEqual(['/tmp', '/var/tmp']);
+		expect(bindTargets).not.toContain(root);
 	});
 
 	test('required mode refuses when backend is unavailable', () => {

@@ -74,13 +74,13 @@ export function buildSandboxCommand(
 	command: string,
 	cwd: string,
 	settings: SandboxSettings,
-	available = bubblewrapAvailable(),
+	available?: boolean,
 	workspaceRoot = projectRoot(cwd),
 ): SandboxCommand {
 	if (settings.mode === 'off') {
 		return {argv: ['bash', '-c', command], active: false, backend: 'none'};
 	}
-	if (!available) {
+	if (!(available ?? bubblewrapAvailable())) {
 		if (settings.mode === 'auto') {
 			return {
 				argv: ['bash', '-c', command],
@@ -114,7 +114,6 @@ export function buildSandboxCommand(
 		'--new-session',
 		'--unshare-pid',
 		'--unshare-uts',
-		'--unshare-ipc',
 		'--unshare-cgroup-try',
 		'--ro-bind',
 		'/',
@@ -124,9 +123,11 @@ export function buildSandboxCommand(
 		'/dev',
 		'--proc',
 		'/proc',
-		'--tmpfs',
+		'--bind',
 		'/tmp',
-		'--tmpfs',
+		'/tmp',
+		'--bind',
+		'/var/tmp',
 		'/var/tmp',
 	];
 	// Some hosts ship systemd-managed SSH snippets as symlinks owned by a

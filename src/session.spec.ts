@@ -20,6 +20,7 @@ import {
 	resolveSession,
 	saveCompactionTranscript,
 	saveSession,
+	lastMessagePreview,
 } from './session';
 import type {ChatMessage} from './state';
 import type {ChatMessageLike} from './client';
@@ -62,7 +63,97 @@ describe('saveCompactionTranscript', () => {
 	});
 });
 
+describe('session usage persistence', () => {
+	test('round-trips prompt-cache usage by session id', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-session-usage-'));
+		const previous = process.env.BOBONYO_DATA_DIR;
+		process.env.BOBONYO_DATA_DIR = dir;
+		try {
+			const usageHistory = [
+				{
+					provider: 'deepseek',
+					model: 'deepseek-chat',
+					ts: 123,
+					prompt_tokens: 1000,
+					promptCacheHitTokens: 800,
+					promptCacheMissTokens: 200,
+				},
+			];
+			saveSession({
+				id: 'sess-cache',
+				name: 'Cache session',
+				createdAt: 1,
+				updatedAt: 2,
+				firstMessage: 'hello',
+				messages: [{role: 'user', content: 'hello'}],
+				context: [{role: 'user', content: 'hello'}],
+				usageHistory,
+			});
+			expect(loadSession('sess-cache')?.usageHistory).toEqual(usageHistory);
+		} finally {
+			if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
+			else process.env.BOBONYO_DATA_DIR = previous;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+});
+
+describe('submitted command persistence', () => {
+	test('round-trips exact submitted commands without creating provider prompts', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bobonyo-session-commands-'));
+		const previous = process.env.BOBONYO_DATA_DIR;
+		process.env.BOBONYO_DATA_DIR = dir;
+		try {
+			const messages: ChatMessage[] = [
+				{role: 'user', content: '/help  commands', submittedCommand: true},
+			];
+			saveSession({
+				id: 'sess-commands',
+				name: 'Commands',
+				createdAt: 1,
+				updatedAt: 2,
+				firstMessage: '/help  commands',
+				messages,
+				context: [],
+			});
+			const loaded = loadSession('sess-commands');
+			expect(loaded?.messages).toEqual(messages);
+			expect(loaded?.context).toEqual([]);
+			expect(healResumedContext(loaded!.context, loaded!.messages)).toEqual([]);
+		} finally {
+			if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
+			else process.env.BOBONYO_DATA_DIR = previous;
+			rmSync(dir, {recursive: true, force: true});
+		}
+	});
+});
+
 describe('convertNanocoderSession', () => {
+	test('fallback conversion preserves submitted-command flags without replaying them', () => {
+		const session = convertNanocoderSession({
+			id: 'command-fallback',
+			messages: [
+				{role: 'user', content: '/help', submittedCommand: true},
+				{role: 'user', content: 'real prompt'},
+			],
+		});
+		expect(session?.messages).toEqual([
+			{role: 'user', content: '/help', submittedCommand: true},
+			{role: 'user', content: 'real prompt'},
+		]);
+		expect(session?.context).toEqual([{role: 'user', content: 'real prompt'}]);
+	});
+
+	test('resume preview uses latest user message', () => {
+		expect(
+			lastMessagePreview([
+				{role: 'user', content: 'first prompt'},
+				{role: 'assistant', content: 'answer'},
+				{role: 'user', content: 'latest prompt'},
+			]),
+		).toBe('latest prompt');
+	});
+
 	test('maps title/messages into bobonyo SessionData', () => {
 		const session = convertNanocoderSession({
 			id: 'nc-1',
@@ -251,6 +342,14 @@ describe('session cwd (resume folder filter)', () => {
 				subagentRuns: [
 					{
 						id: 'agent:explore:1',
+						tasksTitle: 'Inspect routing',
+						tasks: [
+							{
+								id: 'child-task',
+								title: 'Read tool routing',
+								status: 'completed',
+							},
+						],
 						name: 'explore',
 						description: 'inspect routing',
 						output: 'Read src/tools.ts',
@@ -267,6 +366,10 @@ describe('session cwd (resume folder filter)', () => {
 			const restored = resolveSession(id)?.subagentRuns?.[0];
 			expect(restored?.status).toBe('completed');
 			expect(restored?.history.at(-1)?.content).toBe('Found it.');
+			expect(restored?.tasksTitle).toBe('Inspect routing');
+			expect(restored?.tasks).toEqual([
+				{id: 'child-task', title: 'Read tool routing', status: 'completed'},
+			]);
 		} finally {
 			process.env.NANOCODER_DATA_DIR = prev;
 			rmSync(dir, {recursive: true, force: true});
@@ -342,6 +445,70 @@ describe('session cwd (resume folder filter)', () => {
 });
 
 describe('healResumedContext (pre-fix sessions: context lagging the transcript)', () => {
+	test('command-only transcripts keep an empty provider context untouched', () => {
+		const context: ChatMessageLike[] = [];
+		expect(
+			healResumedContext(context, [
+				{role: 'user', content: '/help', submittedCommand: true},
+				{role: 'user', content: '/status', submittedCommand: true},
+			]),
+		).toBe(context);
+	});
+
+	test('trailing commands do not rebuild a healthy capped provider context', () => {
+		const context: ChatMessageLike[] = [
+			{role: 'assistant', content: 'latest answer'},
+		];
+		expect(
+			healResumedContext(context, [
+				{role: 'user', content: '/help', submittedCommand: true},
+				{role: 'user', content: 'real prompt'},
+				{role: 'assistant', content: 'latest answer'},
+				{role: 'user', content: '/status', submittedCommand: true},
+			]),
+		).toBe(context);
+	});
+
+	test('repair skips submitted commands without splitting tool runs or dropping real slash prompts', () => {
+		const messages: ChatMessage[] = [
+			{role: 'user', content: '/help', submittedCommand: true},
+			{role: 'user', content: '/custom actual provider prompt'},
+			{
+				role: 'tool',
+				content: 'first tool',
+				toolId: 'one',
+				tool: {name: 'glob', detail: '', output: 'first result'},
+			},
+			{role: 'user', content: '/status', submittedCommand: true},
+			{
+				role: 'tool',
+				content: 'second tool',
+				toolId: 'two',
+				tool: {name: 'grep', detail: '', output: 'second result'},
+			},
+			{role: 'assistant', content: 'answer'},
+			{role: 'user', content: 'continue'},
+			{role: 'user', content: '/help', submittedCommand: true},
+		];
+		const healed = healResumedContext([], messages);
+		expect(healed).toEqual([
+			{role: 'user', content: '/custom actual provider prompt'},
+			{
+				role: 'assistant',
+				content: '',
+				tool_calls: [
+					{id: 'one', name: 'glob', arguments: '{}'},
+					{id: 'two', name: 'grep', arguments: '{}'},
+				],
+			},
+			{role: 'tool', content: 'first result', tool_call_id: 'one'},
+			{role: 'tool', content: 'second result', tool_call_id: 'two'},
+			{role: 'assistant', content: 'answer'},
+			{role: 'user', content: 'continue'},
+		]);
+		expect(healResumedContext([], messages, 2)).toEqual(healed.slice(-2));
+	});
+
 	const transcript: ChatMessage[] = [
 		{role: 'user', content: 'connect to the prod db'},
 		{role: 'assistant', content: '', reasoning: 'thinking about tools'},

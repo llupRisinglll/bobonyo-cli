@@ -14,21 +14,15 @@ import {
 	stripTerminalControl,
 	normalizeBashCommand,
 	isHostDesktopLaunchCommand,
+	sandboxFailureMessage,
 } from './bash';
 
-describe('host desktop launches', () => {
-	test('runs bare VS Code CLI commands outside Bubblewrap IPC isolation', () => {
-		expect(isHostDesktopLaunchCommand('code src/app.tsx')).toBe(true);
-		expect(isHostDesktopLaunchCommand('  code --reuse-window README.md')).toBe(
-			true,
-		);
-	});
-
-	test('keeps shell expressions sandboxed', () => {
-		expect(isHostDesktopLaunchCommand('code src/app.tsx && echo nope')).toBe(
-			false,
-		);
-		expect(isHostDesktopLaunchCommand('echo code src/app.tsx')).toBe(false);
+describe('sandbox failure guidance', () => {
+	test('explains how to disable sandboxing at user risk', () => {
+		const message = sandboxFailureMessage('sandbox required but unavailable');
+		expect(message).toContain('sandbox required but unavailable');
+		expect(message).toContain('/settings → Behavior → Command sandbox → off');
+		expect(message).toContain('at your own risk');
 	});
 });
 
@@ -372,5 +366,20 @@ describe('background task ownership', () => {
 		);
 		expect(result.task?.completion).toBeInstanceOf(Promise);
 		expect(result.task?.owner).toBe('goal');
+	});
+
+	test('only plain code launches bypass sandbox', () => {
+		expect(isHostDesktopLaunchCommand('code .')).toBe(true);
+		expect(isHostDesktopLaunchCommand('code --reuse-window src')).toBe(true);
+		expect(
+			isHostDesktopLaunchCommand(
+				"printf '# test' > /tmp/test.md && code /tmp/test.md",
+			),
+		).toBe(true);
+		expect(isHostDesktopLaunchCommand('tmp=$(mktemp) && code "$tmp"')).toBe(
+			true,
+		);
+		expect(isHostDesktopLaunchCommand('echo code .')).toBe(false);
+		expect(isHostDesktopLaunchCommand('printf ok\ncode .')).toBe(false);
 	});
 });

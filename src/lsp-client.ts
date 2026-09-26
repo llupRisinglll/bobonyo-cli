@@ -93,6 +93,7 @@ export class StdioLspClient {
 	};
 	private process: ReturnType<typeof Bun.spawn>;
 	private readerTask: Promise<void>;
+	private closed = false;
 
 	constructor(
 		private cwd: string,
@@ -112,6 +113,7 @@ export class StdioLspClient {
 	}
 
 	private async send(message: JsonRpcMessage): Promise<void> {
+		if (this.closed) throw new Error('LSP client is closed');
 		const body = JSON.stringify({jsonrpc: '2.0', ...message});
 		const bytes = new TextEncoder().encode(
 			`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
@@ -200,6 +202,7 @@ export class StdioLspClient {
 				}
 			}
 		} catch (error) {
+			this.closed = true;
 			const failure = error instanceof Error ? error : new Error(String(error));
 			for (const pending of this.pending.values()) pending.reject(failure);
 			this.pending.clear();
@@ -284,6 +287,8 @@ export class StdioLspClient {
 	}
 
 	async close(): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
 		try {
 			await this.request('shutdown', null, 2000);
 			await this.notify('exit', null);

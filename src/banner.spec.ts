@@ -1,5 +1,9 @@
 import {describe, expect, test} from 'bun:test';
-import {buildBannerBox, hasConversation} from './banner';
+import {
+	buildBannerBox,
+	hasConversation,
+	hasPersistableConversation,
+} from './banner';
 import type {ChatMessage} from './state';
 
 const BASE = {
@@ -20,6 +24,14 @@ function keyColumn(line: string, key: string): number {
 }
 
 describe('hasConversation', () => {
+	test('empty fresh session has no persistable identity', () => {
+		expect(hasPersistableConversation([])).toBe(false);
+		expect(hasPersistableConversation([info('startup')])).toBe(false);
+		expect(hasPersistableConversation([{role: 'user', content: 'hello'}])).toBe(
+			true,
+		);
+	});
+
 	const info = (content: string): ChatMessage => ({
 		role: 'assistant',
 		content,
@@ -41,9 +53,9 @@ describe('hasConversation', () => {
 
 	test('any real row hides the banner', () => {
 		expect(hasConversation([{role: 'user', content: 'hello'}])).toBe(true);
-		expect(
-			hasConversation([{role: 'assistant', content: 'a reply'}]),
-		).toBe(true);
+		expect(hasConversation([{role: 'assistant', content: 'a reply'}])).toBe(
+			true,
+		);
 		expect(
 			hasConversation([
 				info('Session renamed to "x".'),

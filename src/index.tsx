@@ -5,8 +5,10 @@ import '@opentui/solid/preload';
 import {appendFileSync, existsSync, mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createCliRenderer, parseKeypress} from '@opentui/core';
+import {CONSOLE_TITLE, handleConsoleInput} from './console-controls';
 import {render} from '@opentui/solid';
 import {App} from './app';
+import {cliMode, MODE_HELP} from './cli-mode';
 import {
 	KITTY_KEYBOARD_DISABLE,
 	KITTY_KEYBOARD_ENABLE,
@@ -34,6 +36,17 @@ const logKey = (kind: string, payload: unknown): void => {
 
 // `bun run dev --resume [last|N|id]`, hand the ref to App on mount.
 const cliArgs = process.argv.slice(2);
+if (cliArgs.includes('--help') || cliArgs.includes('-h')) {
+	console.log(MODE_HELP);
+	process.exit(0);
+}
+try {
+	const selectedMode = cliMode(cliArgs);
+	if (selectedMode) process.env.BOBONYO_MODE = selectedMode;
+} catch (error) {
+	console.error(error instanceof Error ? error.message : String(error));
+	process.exit(1);
+}
 const resumeIndex = cliArgs.indexOf('--resume');
 if (resumeIndex !== -1) {
 	const ref = cliArgs[resumeIndex + 1];
@@ -49,11 +62,6 @@ const providerIndex = cliArgs.indexOf('--provider');
 if (providerIndex !== -1) {
 	const ref = cliArgs[providerIndex + 1];
 	if (ref && !ref.startsWith('-')) process.env.NANOCODER_PROVIDER = ref;
-}
-const modeIndex = cliArgs.indexOf('--mode');
-if (modeIndex !== -1) {
-	const ref = cliArgs[modeIndex + 1];
-	if (ref && !ref.startsWith('-')) process.env.BOBONYO_MODE = ref;
 }
 const profileIndex = cliArgs.indexOf('--profile');
 if (profileIndex !== -1) {
@@ -112,6 +120,7 @@ if (!process.stdin.isTTY) {
 }
 
 const renderer = await createCliRenderer({
+	consoleOptions: {title: CONSOLE_TITLE},
 	externalOutputMode: 'passthrough',
 	targetFps: 60,
 	exitOnCtrlC: false,
@@ -158,6 +167,7 @@ if (supportsExtendedKeys()) {
 	process.stdout.write(MODIFY_OTHER_KEYS_ENABLE);
 }
 renderer.prependInputHandler((raw: string) => {
+	if (handleConsoleInput(raw, renderer.console)) return true;
 	const converted = kittyToXterm(raw);
 	if (converted === null) return false;
 	const key = parseKeypress(converted);

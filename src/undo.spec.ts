@@ -21,6 +21,19 @@ const ctxAssistant = (content: string): ChatMessageLike => ({
 });
 
 describe('undoExchange (opencode-style session revert)', () => {
+	test('submitted built-in commands are not provider exchanges', () => {
+		const display: ChatMessage[] = [
+			user('question'),
+			assistant('answer'),
+			{role: 'user', content: '/status', submittedCommand: true},
+			{role: 'user', content: '/undo', submittedCommand: true},
+		];
+		const ctx = [ctxUser('question'), ctxAssistant('answer')];
+		expect(undoExchange(display, ctx).undonePrompt).toBe('question');
+		expect(undoExchange(display, ctx).keptContext).toEqual([]);
+		expect(rewindExchangeAt(display, ctx, 1).undonePrompt).toBeNull();
+		expect(undoExchange(display.slice(2), []).undonePrompt).toBeNull();
+	});
 	test('nothing to undo on an empty or assistant-only transcript', () => {
 		expect(undoExchange([], []).undonePrompt).toBeNull();
 		expect(

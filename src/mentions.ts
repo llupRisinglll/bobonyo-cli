@@ -25,8 +25,8 @@ function withinWorkspace(path: string, cwd: string): boolean {
 /** Walk project for `@` mention candidates. Directories are selectable too. */
 export function listProjectFiles(
 	cwd = process.cwd(),
-	maxDepth = 3,
-	limit = 300,
+	maxDepth = Number.POSITIVE_INFINITY,
+	limit = 5000,
 ): string[] {
 	const paths: string[] = [];
 	const walk = (dir: string, depth: number): void => {
@@ -55,9 +55,37 @@ export function listProjectFiles(
 	return paths;
 }
 
+/** List candidates beneath the directory addressed by a partial mention. */
+export function listMentionPaths(
+	token: string,
+	cwd = process.cwd(),
+	maxDepth = Number.POSITIVE_INFINITY,
+	limit = 5000,
+): string[] {
+	const query = mentionSearchToken(token).replaceAll('\\', '/');
+	const slash = query.lastIndexOf('/');
+	const directory =
+		slash < 0
+			? query === '..' || query === '.'
+				? query
+				: '.'
+			: query.slice(0, slash) || '.';
+	const prefix =
+		slash < 0
+			? query === '..' || query === '.'
+				? ''
+				: query
+			: query.slice(slash + 1);
+	const base = resolve(cwd, directory);
+	return listProjectFiles(base, maxDepth, limit).filter(path => {
+		const relativePath = relative(base, path).replaceAll('\\', '/');
+		return relativePath.startsWith(prefix);
+	});
+}
+
 /** Relative suggestion label/insertion text, with `/` marking directories. */
 export function mentionPathText(path: string, cwd = process.cwd()): string {
-	const rel = withinWorkspace(path, cwd) ? relative(cwd, path) || '.' : path;
+	const rel = relative(cwd, path) || '.';
 	try {
 		return statSync(path).isDirectory() ? `${rel.replaceAll('\\', '/')}/` : rel;
 	} catch {
@@ -74,11 +102,7 @@ export function mentionToken(
 	if (at === -1) return null;
 	const before = input.slice(0, at);
 	const after = input.slice(at + 1, cursor);
-	if (
-		(before.length > 0 && !/\s/.test(before.at(-1)!)) ||
-		before.trimStart().startsWith('/')
-	)
-		return null;
+	if (before.length > 0 && !/\s/.test(before.at(-1)!)) return null;
 	if (
 		/\s/.test(after) &&
 		!(after.startsWith('"') && !after.slice(1).includes('"'))
@@ -108,7 +132,8 @@ export function insertMention(
 	if (at < 0) return input;
 	const suffix = /(#L\d+(?:-\d+)?)$/i.exec(token)?.[1] ?? '';
 	const inserted = `${mentionInsertionText(path)}${suffix}`;
-	return input.slice(0, at + 1) + inserted + ' ' + input.slice(cursor);
+	const separator = inserted.endsWith('/') ? '' : ' ';
+	return input.slice(0, at + 1) + inserted + separator + input.slice(cursor);
 }
 
 export interface MentionReference {

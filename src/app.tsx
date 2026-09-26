@@ -2,9 +2,18 @@
 import {existsSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {writeAgentTrajectory} from './agent-trajectory';
+import {createContextGoal} from './context-goal';
+import {recoverWorkingDirectory} from './cwd-recovery';
+import {GraphContextStore, type GraphContextLease} from './graph-context';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
-import {createMemo, createSignal, Show} from 'solid-js';
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	onCleanup,
+	Show,
+} from 'solid-js';
 import {
 	looksLikeToolCallText,
 	currentDateFragment,
@@ -42,6 +51,12 @@ import {
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
+import {formatNativeWebSearchActivity} from './web-search';
+import {
+	addPluginMarketplace,
+	installPlugin,
+	listPluginMarketplaces,
+} from './plugins';
 import {
 	appendMemory,
 	clearMemory,
@@ -94,20 +109,30 @@ import {
 	runBash,
 } from './bash';
 import {
+	backgroundWaitingMessage,
 	dequeuePendingWork,
+	elapsedSinceOldest,
 	enqueueTaskNotification,
+	invalidateGoalContinuations,
 	enqueueUserWork,
+	shouldReleaseDetachedAgentBatch,
+	shouldProcessDetachedCompletion,
+	isTaskNotification,
 	type DetachedCompletion,
 } from './background-notification';
+import {createDebouncedFlush} from './debounced-flush';
+import {deliverQueuedSteering, steeringSnapshot} from './queued-steering';
 import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
 import {
 	loadSettings,
 	resumeCwdDecision,
+	saveModeSettings,
 	saveSettings,
 	type Mode,
 	type ResumeCwdMode,
 	type ToolProfile,
 } from './settings';
+import {isMode, MODES, modeLabel} from './modes';
 import {estimateTokens} from './tokenize';
 import {
 	classifyIntent,
@@ -149,6 +174,7 @@ import {
 	bashModeIndicatorRows,
 	completionMessageRows,
 	completionPopupHeight,
+	isSubmitKey,
 	lineTickerVisible,
 	mentionPopupHeight,
 	InputBox,
@@ -166,9 +192,11 @@ import {
 import {CommandsModal} from './components/commands-modal';
 import {Status} from './components/status';
 import {StatusModal, type StatusRow} from './components/status-modal';
+import {UsageResetModal} from './components/usage-reset-modal';
 import {ModelModal, type ModelProvider} from './components/model-modal';
 import {effortLevelsForModel} from './components/model-modal';
 import {projectRoot} from './project-paths';
+import {initializeProjectContext} from './project-context';
 import {ConnectProviderModal} from './components/connect-provider-modal';
 import {BackgroundJobsModal} from './components/background-jobs-modal';
 import {ActivityIndicator} from './components/activity-indicator';
@@ -176,8 +204,19 @@ import {EffortModal} from './components/effort-modal';
 import {ResumeModal, type ResumeSession} from './components/resume-modal';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
+import {
+	InlineAgentRows,
+	inlineAgentLayout,
+	inlineAgentSelectionIndex,
+	runningAgentRows,
+} from './components/inline-agent-rows';
 import {buildStatusRows, providerStatusLabel} from './status-rows';
-import {consumeCodexReset, fetchCodexLimits} from './codex-limits';
+import {
+	consumeCodexReset,
+	fetchCodexLimits,
+	fetchCodexResetCredits,
+	type CodexResetCredit,
+} from './codex-limits';
 import {
 	analyzeImageWithFallback,
 	resolveVisionFallback,
@@ -202,7 +241,7 @@ import {
 	formatUsageCalendar,
 	recordProviderUsage,
 } from './provider-usage';
-import {buildBannerBox} from './banner';
+import {buildBannerBox, hasPersistableConversation} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
 import {QuestionModal} from './components/question-modal';
@@ -219,6 +258,11 @@ import {
 	formatGoal,
 	formatLoopJob,
 	goalContinuationPrompt,
+	normalizeGoal,
+	reviseGoal,
+	goalMatchesOwner,
+	goalOwnerFromGraphId,
+	type GoalOwner,
 	goalStatusFromResponse,
 	loopIntervalMs,
 	newLoopJob,
@@ -252,7 +296,11 @@ import {
 	splitPreToolText,
 	toolCallBrief,
 } from './pre-tool-brief';
-import {shouldPersistTaskCloseoutReply} from './task-closeout';
+import {
+	TASK_CLOSEOUT_PROMPT,
+	shouldNudgeTaskCloseout,
+	shouldPersistTaskCloseoutReply,
+} from './task-closeout';
 
 const VERSION = '0.1.0';
 import {CompletionPopup} from './components/completion-popup';
@@ -357,6 +405,7 @@ import {
 	setTasks,
 	setTurnElapsed,
 	setThinkingElapsed,
+	spinnerFrame,
 	setSpinnerFrame,
 	tasks,
 	streaming,
@@ -582,6 +631,7 @@ export function App() {
 	// Resume may switch process.cwd() to the saved session directory. Keep
 	// launch CWD so `/clear` returns to the directory outside the TUI.
 	const launchCwd = process.cwd();
+	initializeProjectContext(launchCwd);
 	// Sandbox boundary belongs to launch workspace, not mutable shell cwd.
 	// Recomputing it after `cd` into a nested checkout makes parent project
 	// files read-only inside bubblewrap.
@@ -598,6 +648,10 @@ export function App() {
 		setWorkspaceCwd(process.cwd());
 	};
 	const [statusRows, setStatusRows] = createSignal<StatusRow[]>([]);
+	const [usageResetCredits, setUsageResetCredits] = createSignal<
+		CodexResetCredit[]
+	>([]);
+	const [usageResetOpen, setUsageResetOpen] = createSignal(false);
 	const [settingsList, setSettingsList] = createSignal<{
 		title: string;
 		rows: SettingsListRow[];
@@ -608,6 +662,49 @@ export function App() {
 	// after every save so an already-mounted `/resume` modal refreshes when
 	// the resumed conversation receives a new message.
 	const [sessionListVersion, setSessionListVersion] = createSignal(0);
+	const [inlineAgentId, setInlineAgentId] = createSignal<string | null>(null);
+	const inlineAgentIndex = createMemo(() =>
+		inlineAgentSelectionIndex(runningAgentRows(), inlineAgentId()),
+	);
+	createEffect(() => {
+		if (input().length > 0) setInlineAgentId(null);
+	});
+	const [psInitialAgentId, setPsInitialAgentId] = createSignal<string | null>(
+		null,
+	);
+	const navigateInlineAgent = (direction: 'up' | 'down'): boolean => {
+		const agentCount = runningAgentRows().length;
+		if (agentCount === 0) return false;
+		const current = inlineAgentIndex();
+		const next =
+			direction === 'down'
+				? Math.min(current + 1, agentCount - 1)
+				: current <= 0
+					? -1
+					: current - 1;
+		setInlineAgentId(next < 0 ? null : (runningAgentRows()[next]?.id ?? null));
+		return true;
+	};
+	const selectInlineAgent = (): boolean => {
+		const agents = runningAgentRows();
+		const agent = agents.find(candidate => candidate.id === inlineAgentId());
+		if (!agent) return false;
+		setInlineAgentId(null);
+		// Open after this Enter dispatch. OpenTUI delivers one key to every
+		// mounted listener; mounting /ps synchronously lets that same Enter leak
+		// into the new modal.
+		queueMicrotask(() => {
+			setPsInitialTab('agents');
+			setPsInitialAgentId(agent.id);
+			setPsOpen(true);
+		});
+		return true;
+	};
+	const openInlineAgent = (agentId: string) => {
+		setPsInitialTab('agents');
+		setPsInitialAgentId(agentId);
+		setPsOpen(true);
+	};
 	/** Open the settings LIST modal (also opens the settings surface). */
 	const openSettingsList = (title: string, rows: SettingsListRow[]) => {
 		setSettingsList({title, rows});
@@ -636,6 +733,20 @@ export function App() {
 		() => setCompletionPopup(false),
 	);
 	let currentSession: SessionData | null = null;
+	let graphContexts = new GraphContextStore();
+	const [checklistOwner, setChecklistOwner] = createSignal<
+		{store: GraphContextStore; lease: GraphContextLease} | undefined
+	>();
+	// Tool execution can temporarily own another graph's checklist. Keep that
+	// state reactive without presenting it as the selected foreground work.
+	const selectedTasks = () => {
+		const execution = tasks();
+		const owner = checklistOwner();
+		return graphContexts.selectedChecklist(
+			execution,
+			owner?.store === graphContexts ? owner.lease : undefined,
+		);
+	};
 	let currentGoal: SessionGoal | undefined;
 	const [goalRevision, setGoalRevision] = createSignal(0);
 	const visibleGoal = () => {
@@ -643,7 +754,7 @@ export function App() {
 		return currentGoal;
 	};
 	const setCurrentGoal = (next: SessionGoal | undefined) => {
-		currentGoal = next;
+		currentGoal = next ? normalizeGoal(next) : undefined;
 		setGoalRevision(revision => revision + 1);
 	};
 	const [psInitialTab, setPsInitialTab] = createSignal<
@@ -654,12 +765,13 @@ export function App() {
 	let autonomousTurnRef = false;
 	let loopTurnRef = false;
 	let taskTurnRef = false;
-	let goalAccountingTurnRef = false;
 	let goalContinuationPending = false;
+	const backgroundGoalGraphs = new Map<string, string>();
 	let interruptedRef = false;
 	let foregroundTurnSeq = 0;
 	let foregroundTurnOwner = 0;
 	let queryActiveRef = false;
+	let queueEscapeHandler: (() => boolean) | null = null;
 	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
 	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
@@ -695,7 +807,11 @@ export function App() {
 	const mcpToolsRef: MCPTool[] = [];
 	// Animation ticker: advances the spinner/gear frame counter so the busy
 	// spinner, Working dots and gear glyph animate like nanocoder's.
-	setInterval(() => setSpinnerFrame(prev => prev + 1), 100);
+	const animationTicker = setInterval(
+		() => setSpinnerFrame(prev => prev + 1),
+		100,
+	);
+	onCleanup(() => clearInterval(animationTicker));
 	// DeepSeek balance/model refresh cadence (5 min, mirroring the balance
 	// TTL). The refresh itself reads the disk cache first, so this interval
 	// and the event-triggered refreshes share one request when fresh.
@@ -1007,17 +1123,28 @@ export function App() {
 	setTimeout(() => void startupInit(), 0);
 
 	const persist = () => {
-		if (!currentSession) return;
+		if (!currentSession || !hasPersistableConversation(messages())) return;
+		const owner = checklistOwner();
+		if (owner?.store === graphContexts) {
+			graphContexts.commitChecklist(owner.lease, tasks());
+		} else {
+			graphContexts.captureLatestChecklist(tasks());
+		}
 		currentSession = {
 			...currentSession,
 			cwd: workspaceCwd(),
-			updatedAt: Date.now(),
+			updatedAt: currentSession.lastMessageAt ?? Date.now(),
 			firstMessage: firstMessagePreview(messages()),
-			messages: messages().filter(message => message.kind !== 'info'),
+			messages: messages().filter(
+				message =>
+					message.kind !== 'info' && !isTaskNotification(message.content),
+			),
 			context: context(),
+			graphContexts: graphContexts.snapshot(),
+			usageHistory: usageHistory().slice(-100),
 			goal: currentGoal,
 			loopJobs: [...loopJobsRef],
-			tasks: tasks().map(task => ({...task})),
+			tasks: graphContexts.latestChecklist() ?? structuredClone(tasks()),
 			subagentRuns: activeAgentRuns().map(run => structuredClone(run)),
 			// Record the model this conversation is running on, so a later
 			// /resume can restore it instead of the most-recently used one.
@@ -1027,6 +1154,7 @@ export function App() {
 		saveSession(currentSession);
 		setSessionListVersion(version => version + 1);
 	};
+	const agentProgressPersistence = createDebouncedFlush(persist, 2000);
 
 	const exit = () => {
 		persist();
@@ -1040,16 +1168,17 @@ export function App() {
 			const box = buildBannerBox({
 				titleShape: 'none',
 				model: activeEndpoint().model,
-				permissions: mode() === 'yolo' ? 'YOLO mode' : `${mode()} mode`,
+				permissions: modeLabel(mode()),
 				cwd: process.cwd(),
 			});
 			const created = new Date(
 				currentSession?.createdAt ?? Date.now(),
 			).toISOString();
-			const goodbye =
-				`\n${box}\n` +
-				`  Session   ${sessionName()} - ${created}\n` +
-				`  Continue  bobonyo --resume ${sessionId()}\n`;
+			const goodbye = hasPersistableConversation(messages())
+				? `\n${box}\n` +
+					`  Session   ${sessionName()} - ${created}\n` +
+					`  Continue  bobonyo --resume ${sessionId()}\n`
+				: `\n${box}\n`;
 			process.stdout.write(goodbye);
 		} catch {
 			// best-effort goodbye
@@ -1091,6 +1220,7 @@ export function App() {
 	};
 
 	const startNewSession = (resumeRef?: string) => {
+		graphContexts = new GraphContextStore();
 		compactionFailureRef = {...INITIAL_COMPACTION_FAILURE_STATE};
 		autoCompactReentryFloorRef = 0;
 		resetFileUndoStack();
@@ -1132,7 +1262,13 @@ export function App() {
 				// capped to the bounded display window (older messages are
 				// trimmed with a marker) so the render stays light even when
 				// a pre-compaction session file survived.
-				setMessages(capDisplayMessages(resumed.messages));
+				setMessages(
+					capDisplayMessages(
+						resumed.messages.filter(
+							message => !isTaskNotification(message.content),
+						),
+					),
+				);
 				// Heal pre-fix sessions whose provider context lagged the
 				// transcript (interrupted turns never committed their user
 				// messages) — otherwise a resumed conversation looks empty
@@ -1140,8 +1276,15 @@ export function App() {
 				// The heal is tail-lag only and capped to the live message
 				// budget, so a healthy capped context is reused byte-for-byte
 				// and the provider's prefix cache survives the resume.
+				graphContexts = new GraphContextStore(resumed.graphContexts);
 				setContext(
-					healResumedContext(resumed.context, resumed.messages, maxMessages()),
+					resumed.graphContexts
+						? resumed.context
+						: healResumedContext(
+								resumed.context,
+								resumed.messages,
+								maxMessages(),
+							),
 				);
 				// CACHE HEAD PARITY: the system prompt's volatile block
 				// carries the working directory + that dir's AGENTS.md (it
@@ -1200,7 +1343,9 @@ export function App() {
 					message: `Resumed ${resumed.name}`,
 					sessionId: resumed.id,
 				});
-				setUsageHistory([]);
+				const restoredUsage = (resumed.usageHistory ?? []).slice(-100);
+				setUsageHistory(restoredUsage);
+				setLastUsage(restoredUsage.at(-1));
 				currentSession = {...resumed};
 				setCurrentGoal(resumed.goal);
 				loopJobsRef = [...(resumed.loopJobs ?? [])];
@@ -1324,14 +1469,8 @@ export function App() {
 			tasks: [],
 			subagentRuns: [],
 		};
-		setSessionId(id);
+		setSessionId('');
 		setSessionName('New conversation');
-		reportHerdrSession(id, process.cwd());
-		reportHerdrAgent('idle', {
-			message: 'Ready for input',
-			sessionId: id,
-		});
-		saveSession(currentSession);
 	};
 
 	// `--resume [last|N|id]` from the CLI (set by index.tsx).
@@ -1514,23 +1653,23 @@ export function App() {
 			event.preventDefault();
 			return;
 		}
+		if (inlineAgentIndex() >= 0 && isSubmitKey(event)) {
+			event.preventDefault();
+			selectInlineAgent();
+			return;
+		}
 		if (event.name === 'escape') {
-			// B20: Esc interrupts an in-flight turn (partial committed); when
-			// idle with an EMPTY input it asks for confirmation before
-			// quitting (modal-style). With text in the input, Esc
-			// dismisses/clears via the InputBox instead of quitting.
+			if (queueEscapeHandler?.()) {
+				event.preventDefault();
+				return;
+			}
+			// Esc interrupts an in-flight turn. When idle, InputBox owns Esc
+			// for clearing input or dismissing its local completion popup. It
+			// must never arm or confirm the Ctrl+C exit prompt.
 			if (running()) {
 				interruptedRef = true;
 				setCancelling(true);
 				abortRef?.abort();
-			} else if (input().length === 0 && exitConfirm()) {
-				exit();
-			} else if (input().length === 0) {
-				setExitConfirm(true);
-				// The confirmation EXPIRES after a few seconds, a stale
-				// "press again to exit" must never linger.
-				if (exitConfirmTimer) clearTimeout(exitConfirmTimer);
-				exitConfirmTimer = setTimeout(() => setExitConfirm(false), 6000);
 			}
 			return;
 		}
@@ -1560,28 +1699,47 @@ export function App() {
 		}
 	});
 
+	let promptPreparingRef = false;
 	const processQueue = () => {
-		if (queryActiveRef || busy() || pendingQueue().length === 0) return;
-		const {item: next, remaining} = dequeuePendingWork(pendingQueue());
+		if (
+			promptPreparingRef ||
+			queryActiveRef ||
+			busy() ||
+			pendingQueue().length === 0
+		)
+			return;
+		setPendingQueue(previous =>
+			invalidateGoalContinuations(previous, currentGoal),
+		);
+		const {item: next, remaining} = dequeuePendingWork(pendingQueue(), {
+			activeAgentRuns: activeAgentRuns(),
+			activeAgentIds: activeAgentRuns()
+				.filter(run => run.status === 'running')
+				.map(run => run.id),
+			currentWorkReady: !queryActiveRef && !promptPreparingRef && !busy(),
+		});
 		if (!next) return;
 		setPendingQueue(remaining);
 		autonomousTurnRef =
 			next.source === 'goal' ||
 			(next.source === 'task' &&
 				next.owner === 'goal' &&
+				goalMatchesOwner(currentGoal, next.goalOwner) &&
 				currentGoal?.status === 'active');
 		loopTurnRef = next.source === 'loop';
 		taskTurnRef = next.source === 'task';
-		if (next.source === 'task') {
+		if (next.source === 'task' || next.source === 'goal') {
 			// Completion events are agent steering, never synthetic user input.
 			// Bypass `submit` so they cannot enter transcript/history navigation.
 			void runTurn(next.value, next.value, next.attachments, undefined, {
 				autonomous: autonomousTurnRef,
-				task: true,
+				task: next.source === 'task',
+				graphId: next.graphId,
+				goalOwner: next.goalOwner,
 			});
 			return;
 		}
-		void submit(next.value, next.attachments);
+		void submit(next.value, next.attachments, next.command);
 	};
 	function queueDetachedCompletion(
 		kind: DetachedCompletion['kind'],
@@ -1589,25 +1747,161 @@ export function App() {
 		status: DetachedCompletion['status'],
 		output: string,
 		owner: DetachedCompletion['owner'],
+		graphId?: string,
 	): void {
-		if (owner === 'goal') {
+		const goalOwner = goalOwnerFromGraphId(graphId);
+		// Resumed agents keep their original graph even when another turn sends
+		// agent_message. The caller's current background category cannot reown it.
+		if (goalOwner) owner = 'goal';
+		if (owner === 'goal' && goalMatchesOwner(currentGoal, goalOwner)) {
 			refreshGoalProgress(
+				goalOwner,
 				`${kind} ${id} ${status}: ${output.replace(/\s+/g, ' ').slice(-600)}`,
 			);
 		}
+		backgroundGoalGraphs.delete(id);
 		setPendingQueue(previous =>
-			enqueueTaskNotification(previous, {kind, id, status, output, owner}),
+			enqueueTaskNotification(previous, {
+				kind,
+				id,
+				status,
+				output,
+				owner,
+				graphId,
+				goalOwner,
+			}),
 		);
 		persist();
-		queueMicrotask(processQueue);
+		const runningAgentCount = activeAgentRuns().filter(
+			agent => agent.status === 'running',
+		).length;
+		const graphRunningAgentCount = graphId
+			? activeAgentRuns().filter(
+					agent => agent.status === 'running' && agent.graphId === graphId,
+				).length
+			: runningAgentCount;
+		if (
+			shouldProcessDetachedCompletion(
+				kind,
+				runningAgentCount,
+				graphRunningAgentCount,
+			)
+		) {
+			queueMicrotask(processQueue);
+		}
 	}
 
 	function saveGoal(next: SessionGoal | undefined): void {
 		setCurrentGoal(next);
-		if (currentSession) currentSession.goal = next;
+		setPendingQueue(previous =>
+			invalidateGoalContinuations(previous, currentGoal),
+		);
+		if (currentSession) currentSession.goal = currentGoal;
 		persist();
 	}
 
+	let goalDraftController: AbortController | undefined;
+	async function goalFromContext(focus: string): Promise<void> {
+		if (queryActiveRef || promptPreparingRef || busy()) {
+			appendInfo('Finish the current foreground turn before using /goal:this.');
+			return;
+		}
+		if (!startupReadyRef) {
+			appendInfo('Still loading tools; retry /goal:this shortly.');
+			return;
+		}
+		const ownerSession = sessionId();
+		const ownerCwd = workspaceCwd();
+		const previousGoalGraph = currentGoal?.graphId;
+		const previousGoalStatus = currentGoal?.status;
+		const controller = new AbortController();
+		goalDraftController = controller;
+		const timer = setTimeout(() => controller.abort(), 120000);
+		promptPreparingRef = true;
+		abortRef = controller;
+		setBusy(true);
+		setRunning(true);
+		appendInfo(
+			'Turning established findings into an implementation and verification goal…',
+		);
+		let startGoal = false;
+		try {
+			const result = await createContextGoal({
+				history: microcompactToolResults(context(), activeEndpoint().model)
+					.messages,
+				focus,
+				cwd: ownerCwd,
+				request: async history => {
+					let output = '';
+					const response = await streamChat(
+						history,
+						{
+							onText: delta => {
+								output += delta;
+								if (output.length > 24000) controller.abort();
+							},
+							onReasoning: () => {},
+						},
+						controller.signal,
+						[],
+						undefined,
+						toolProfile(),
+						undefined,
+						undefined,
+						{disableCaveman: true},
+					);
+					return response.text;
+				},
+				isCurrent: () =>
+					!controller.signal.aborted &&
+					sessionId() === ownerSession &&
+					workspaceCwd() === ownerCwd &&
+					currentGoal?.graphId === previousGoalGraph &&
+					currentGoal?.status === previousGoalStatus,
+				save: goal => {
+					const oldGoal = currentGoal;
+					const oldQueue = pendingQueue();
+					const oldSession = currentSession
+						? {...currentSession}
+						: currentSession;
+					try {
+						if (!currentSession || !hasPersistableConversation(messages()))
+							throw new Error(
+								'No persisted conversation available for this goal.',
+							);
+						saveGoal(goal);
+					} catch (error) {
+						setCurrentGoal(oldGoal);
+						setPendingQueue(oldQueue);
+						currentSession = oldSession;
+						throw error;
+					}
+					appendInfo(`Generated goal:\n${goal.objective}`);
+				},
+				start: () => {
+					startGoal = true;
+				},
+			});
+			if ('question' in result)
+				appendInfo(
+					`Goal needs clarification: ${result.question}\nUse /goal:this <focus> to clarify.`,
+				);
+		} catch (error) {
+			appendError(
+				`Could not create goal: ${controller.signal.aborted ? 'generation cancelled or timed out; no goal started' : String(error)}`,
+			);
+		} finally {
+			clearTimeout(timer);
+			goalDraftController = undefined;
+			if (abortRef === controller) abortRef = null;
+			promptPreparingRef = false;
+			setRunning(false);
+			setBusy(false);
+			setCancelling(false);
+			if (startGoal) queueGoalContinuation({allowWhileTasksRun: true});
+			processQueue();
+		}
+	}
 	function goalCommand(args: string): void {
 		const input = args.trim();
 		if (!input) {
@@ -1621,12 +1915,19 @@ export function App() {
 				appendInfo('No goal is currently set. Usage: /goal <objective>');
 				return;
 			}
+			const editedGoalOwner = goalOwnerFromGraphId(currentGoal.graphId);
 			setPendingPrompt({
 				question: 'Edit goal objective',
 				resolve: objective => {
 					const text = objective.trim();
-					if (!text || !currentGoal) return;
-					saveGoal({...currentGoal, objective: text, updatedAt: Date.now()});
+					if (
+						!text ||
+						!currentGoal ||
+						!goalMatchesOwner(currentGoal, editedGoalOwner)
+					)
+						return;
+					saveGoal(reviseGoal(currentGoal, text));
+					queueGoalContinuation({allowWhileTasksRun: true});
 					showToast('Goal updated');
 				},
 			});
@@ -1865,26 +2166,49 @@ export function App() {
 		setPendingQueue(previous =>
 			previous.some(item => item.source === 'goal')
 				? previous
-				: [...previous, {value: prompt, source: 'goal'}],
+				: [
+						...previous,
+						{
+							value: prompt,
+							source: 'goal',
+							graphId: nextGoal.graphId,
+							goalOwner: goalOwnerFromGraphId(nextGoal.graphId),
+						},
+					],
 		);
 		goalContinuationPending = false;
 		queueMicrotask(processQueue);
 	}
-	function refreshGoalProgress(latestResult?: string): void {
-		if (!currentGoal) return;
+	function refreshGoalProgress(
+		owner: GoalOwner | undefined,
+		latestResult?: string,
+	): void {
+		if (!currentGoal || !goalMatchesOwner(currentGoal, owner)) return;
 		const activeWork = [
 			...bgTasks()
-				.filter(task => task.running && task.blocksCompletion !== false)
+				.filter(
+					task =>
+						task.running &&
+						task.blocksCompletion !== false &&
+						backgroundGoalGraphs.get(task.id) === owner!.graphId,
+				)
 				.map(task => `bash ${task.id}: ${task.command.slice(0, 180)}`),
 			...activeAgentRuns()
-				.filter(agent => agent.status === 'running')
+				.filter(
+					agent =>
+						agent.status === 'running' && agent.graphId === owner!.graphId,
+				)
 				.map(agent => `agent ${agent.id}: ${agent.description.slice(0, 180)}`),
 		].slice(-8);
-		const completedTasks = tasks()
+		const checklist =
+			checklistOwner()?.lease.graphId === owner!.graphId
+				? tasks()
+				: (graphContexts.snapshot().graphs[owner!.graphId]?.checklist ?? []);
+		const completedTasks = checklist
 			.filter(task => task.status === 'completed')
 			.slice(-8)
 			.map(task => task.title);
-		const pendingTasks = tasks()
+		const pendingTasks = checklist
 			.filter(
 				task => task.status === 'pending' || task.status === 'in_progress',
 			)
@@ -1917,10 +2241,10 @@ export function App() {
 		);
 		const count = runningJobs.length + runningAgents.length;
 		if (count === 0) return undefined;
-		const oldestStartedAt = Math.min(
+		const startedAt = [
 			...runningJobs.map(task => task.startedAt),
-			Date.now(),
-		);
+			...runningAgents.map(agent => agent.startedAt ?? Date.now()),
+		];
 		const kinds = [
 			runningJobs.length > 0
 				? `${runningJobs.length} background job${runningJobs.length === 1 ? '' : 's'}`
@@ -1931,8 +2255,24 @@ export function App() {
 		]
 			.filter(Boolean)
 			.join(' and ');
-		return `✦ Waiting for ${kinds} · running ${formatElapsedTime(oldestStartedAt)}. Chat remains available.`;
+		const elapsedSeconds = elapsedSinceOldest(startedAt);
+		const latestProgress = runningAgents
+			.map(agent => agent.lastProgressAt ?? agent.startedAt ?? Date.now())
+			.reduce((latest, value) => Math.max(latest, value), 0);
+		const quietSeconds = Math.max(
+			0,
+			Math.floor((Date.now() - latestProgress) / 1000),
+		);
+		return backgroundWaitingMessage(kinds, elapsedSeconds, quietSeconds);
 	}
+	createEffect(() => {
+		spinnerFrame();
+		if (busy()) return;
+		const current = completionMessage();
+		if (!current.startsWith('✦ Waiting for ')) return;
+		const updated = pendingBackgroundWorkMessage();
+		if (updated && updated !== current) setCompletionMessage(updated);
+	});
 
 	/** Model-facing question tool: input row resolves one explicit answer. */
 	const askUser = async (
@@ -2113,19 +2453,18 @@ export function App() {
 	};
 
 	const modeSwitch = (args: string) => {
-		const MODES: Mode[] = ['yolo', 'auto-accept', 'normal', 'plan'];
 		const name = args.trim();
 		if (!name) {
 			appendInfo(`Mode: ${mode()}\nAvailable: ${MODES.join(', ')}`);
 			return;
 		}
-		if (!MODES.includes(name as Mode)) {
+		if (!isMode(name)) {
 			appendInfo(`Unknown mode '${name}'. Available: ${MODES.join(', ')}`);
 			return;
 		}
 		setMode(name as Mode);
-		saveSettings({...loadSettings(), mode: name as Mode});
-		showToast(`Mode: ${name}`);
+		saveModeSettings(name);
+		showToast(modeLabel(name));
 	};
 
 	const tuneSwitch = (args: string) => {
@@ -2216,12 +2555,12 @@ export function App() {
 		switch (key) {
 			case 'mode': {
 				const next = value as Mode;
-				if (!['yolo', 'auto-accept', 'normal', 'plan'].includes(next)) {
+				if (!isMode(next)) {
 					appendInfo(`Invalid mode '${value}'.`);
 					return;
 				}
 				setMode(next);
-				saveSettings({...settings, mode: next});
+				saveModeSettings(next);
 				return;
 			}
 			case 'profile': {
@@ -2607,22 +2946,11 @@ export function App() {
 		showToast(`Provider '${id}' deleted`);
 	};
 
-	const submit = async (
+	const prepareUserPrompt = async (
 		value: string,
 		attachments?: Record<string, string>,
-		command?: {
-			kind: 'command' | 'skill';
-			name: string;
-			original?: string;
-			body: string;
-		},
 	) => {
 		const trimmed = value.trim();
-		if (!trimmed) return;
-		if (attachments && Object.keys(attachments).length > 0) {
-			attachments = persistImageAttachments(trimmed, attachments, sessionId());
-		}
-
 		// Vision fallback (Settings → Capabilities → Vision model): when the
 		// prompt carries `[Image #N]` attachments and a vision model is
 		// configured, analyze each image through THAT model and hand the
@@ -2675,6 +3003,114 @@ export function App() {
 			}
 		}
 
+		const promptHook = await runHooks({event: 'UserPromptSubmit', prompt});
+		if (promptHook.denied) {
+			appendWarning(promptHook.denied);
+			return undefined;
+		}
+		if (typeof promptHook.updatedInput?.prompt === 'string') {
+			prompt = promptHook.updatedInput.prompt;
+		}
+		if (promptHook.additionalContext.length > 0) {
+			prompt += `\n\n${promptHook.additionalContext.join('\n')}`;
+		}
+
+		return prompt;
+	};
+	const repairWorkspaceCwd = (): string | undefined => {
+		const recovered = recoverWorkingDirectory(workspaceCwd(), workspaceRoot);
+		if (recovered) {
+			updateWorkspaceCwd(recovered);
+			appendInfo(
+				`Working directory disappeared. Automatically returned to launch workspace: ${recovered}.`,
+			);
+		}
+		return recovered;
+	};
+	const submit = async (
+		value: string,
+		attachments?: Record<string, string>,
+		command?: import('./background-notification').PendingWorkItem['command'],
+	) => {
+		if (goalDraftController && /^[!/]/.test(value.trim())) {
+			appendInfo(
+				'Goal drafting is in progress. Press Esc to cancel before running another command. Ordinary messages can still queue.',
+			);
+			return;
+		}
+		const explicitQueue = /^\/queue\s+/i.test(value.trim());
+		if (explicitQueue) value = value.trim().replace(/^\/queue\s+/i, '');
+		const delivery = explicitQueue ? 'after-current' : 'steer';
+		if (
+			!explicitQueue &&
+			currentGoal?.status === 'active' &&
+			!/^[!/]/.test(value.trim())
+		) {
+			appendInfo(
+				'Routing message into active goal; goal continuation remains enabled. Use /goal pause to stop it.',
+			);
+		}
+		if (!queryActiveRef && !busy()) {
+			try {
+				repairWorkspaceCwd();
+			} catch (error) {
+				appendInfo(String(error));
+				return;
+			}
+		}
+		const ordinary = !/^[!/]/.test(value.trim());
+		if (!value.trim()) return;
+		if (!ordinary) return submitPrepared(value, attachments, command);
+		if (!startupReadyRef) {
+			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
+			return;
+		}
+		const snapshot = attachments
+			? persistImageAttachments(value.trim(), {...attachments}, sessionId())
+			: undefined;
+		if (
+			promptPreparingRef ||
+			queryActiveRef ||
+			(busy() && foregroundTurnOwner !== 0) ||
+			(delivery === 'after-current' &&
+				activeAgentRuns().some(run => run.status === 'running'))
+		) {
+			setPendingQueue(previous =>
+				enqueueUserWork(previous, {
+					value,
+					delivery,
+					attachments: snapshot,
+					...(command ? {command: {...command}} : {}),
+				}),
+			);
+			setInput('');
+			return;
+		}
+		promptPreparingRef = true;
+		try {
+			await submitPrepared(value, snapshot, command);
+		} finally {
+			promptPreparingRef = false;
+			processQueue();
+		}
+	};
+	const submitPrepared = async (
+		value: string,
+		attachments?: Record<string, string>,
+		command?: {
+			kind: 'command' | 'skill';
+			name: string;
+			original?: string;
+			body: string;
+		},
+	) => {
+		const trimmed = value.trim();
+		if (!trimmed) return;
+		if (attachments && Object.keys(attachments).length > 0) {
+			attachments = persistImageAttachments(trimmed, attachments, sessionId());
+		}
+
+		let prompt = trimmed;
 		// `!command` → user-invoked bash (Executed Bash), never sent to the LLM.
 		if (prompt.startsWith('!')) {
 			setInput('');
@@ -2708,21 +3144,25 @@ export function App() {
 		// `/command` → slash-command pipeline (display-only output).
 		if (prompt.startsWith('/')) {
 			setInput('');
-			// `/goal` is a user command, not the generated continuation prompt.
-			// Keep the command in arrow history so ↑ recalls what the user typed.
-			if (/^\/goal(?:\s|$)/i.test(prompt)) {
-				setPromptHistory(prev =>
-					prev[prev.length - 1] === prompt
-						? prev
-						: [...prev.slice(-99), prompt],
-				);
-				setHistoryIndex(-1);
-			}
 			runCommand(prompt, {
+				onBuiltinCommand: () => {
+					appendMessage({role: 'user', content: value, submittedCommand: true});
+					setPromptHistory(prev =>
+						prev[prev.length - 1] === value
+							? prev
+							: [...prev.slice(-99), value],
+					);
+					setHistoryIndex(-1);
+					if (currentSession) currentSession.lastMessageAt = Date.now();
+					persist();
+				},
 				exit,
 				clear,
 				compact,
 				goal: goalCommand,
+				goalFromContext: focus => {
+					void goalFromContext(focus);
+				},
 				loop: loopCommand,
 				fork,
 				herdrFork,
@@ -2795,23 +3235,52 @@ export function App() {
 				remember,
 				forget,
 				preferences,
+				plugin: args => {
+					const [subcommand, ...rest] = args
+						.trim()
+						.split(/\s+/)
+						.filter(Boolean);
+					if (subcommand === 'marketplace' && rest[0] === 'add' && rest[1]) {
+						try {
+							const marketplace = addPluginMarketplace(rest[1]);
+							appendInfo(
+								`Added plugin marketplace ${marketplace.repository}. Install with /plugin install <skill>@${marketplace.name}.`,
+							);
+						} catch (error) {
+							appendInfo(
+								`Plugin marketplace error: ${error instanceof Error ? error.message : String(error)}`,
+							);
+						}
+						return;
+					}
+					if (subcommand === 'install' && rest[0]) {
+						void installPlugin(rest[0])
+							.then(installed =>
+								appendInfo(`Installed plugin skills: ${installed.join(', ')}.`),
+							)
+							.catch(error =>
+								appendInfo(
+									`Plugin install error: ${error instanceof Error ? error.message : String(error)}`,
+								),
+							);
+						return;
+					}
+					const marketplaces = listPluginMarketplaces();
+					appendInfo(
+						'Usage: /plugin marketplace add <owner/repo> | /plugin install <skill>@<marketplace>' +
+							(marketplaces.length
+								? `\nMarketplaces: ${marketplaces.map(item => item.name).join(', ')}`
+								: ''),
+					);
+				},
 			});
 			return;
 		}
 
-		const promptHook = await runHooks({event: 'UserPromptSubmit', prompt});
-		if (promptHook.denied) {
-			appendWarning(promptHook.denied);
-			return;
-		}
-		if (typeof promptHook.updatedInput?.prompt === 'string') {
-			prompt = promptHook.updatedInput.prompt;
-		}
-		if (promptHook.additionalContext.length > 0) {
-			prompt += `\n\n${promptHook.additionalContext.join('\n')}`;
-		}
-
-		// Chat while busy → queued (submitted when the turn settles).
+		const prepared = await prepareUserPrompt(value, attachments);
+		if (prepared === undefined) return;
+		prompt = prepared;
+		// Ordinary busy submissions are snapshotted before asynchronous preparation.
 		// CACHE HEAD GATE: never fire the first LLM request while lazy
 		// MCP/custom-tool loading is still registering tools (the catalog is
 		// the cache head; a mid-session tool arrival would change the prefix
@@ -2820,25 +3289,6 @@ export function App() {
 			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
 			return;
 		}
-		if (queryActiveRef || (busy() && foregroundTurnOwner !== 0)) {
-			// Queue protection: terminal key repeats can deliver the same
-			// Enter twice before Solid paints the cleared input. Never enqueue
-			// an identical prompt/attachment set twice in one burst.
-			setPendingQueue(prev => {
-				const previous = prev[prev.length - 1];
-				const sameAttachments =
-					JSON.stringify(previous?.attachments ?? {}) ===
-					JSON.stringify(attachments ?? {});
-				if (previous?.value === value && sameAttachments) return prev;
-				return enqueueUserWork(prev, {value, attachments});
-			});
-			// The queued message renders as a persistent block above the
-			// input (parity: nanocoder's queuedBlock), NOT a transcript row
-			// that scrolls away.
-			setInput('');
-			return;
-		}
-
 		// The transcript shows the ORIGINAL user text (for a triggered
 		// command that is the typed `/command args`, NOT the injected body);
 		// the provider sees the prompt with vision-description blocks
@@ -2857,779 +3307,849 @@ export function App() {
 			original?: string;
 			body: string;
 		},
-		turnOverride?: {autonomous?: boolean; loop?: boolean; task?: boolean},
+		turnOverride?: {
+			autonomous?: boolean;
+			loop?: boolean;
+			task?: boolean;
+			graphId?: string;
+			goalOwner?: GoalOwner;
+		},
 	) => {
 		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
+		const activeGoalOwner =
+			currentGoal?.status === 'active'
+				? goalOwnerFromGraphId(currentGoal.graphId)
+				: undefined;
+		const goalOwner = turnOverride?.goalOwner ?? activeGoalOwner;
+		const workGraphId =
+			turnOverride?.graphId ??
+			goalOwner?.graphId ??
+			`session:${sessionId()}:work:${crypto.randomUUID()}`;
 		foregroundTurnOwner = turnId;
 		const autonomousTurn = turnOverride?.autonomous ?? autonomousTurnRef;
+		const turnGoal = autonomousTurn
+			? goalMatchesOwner(currentGoal, goalOwner)
+				? currentGoal
+				: undefined
+			: turnOverride?.task
+				? undefined
+				: currentGoal;
+		const recordTurnUsage = (usage: Record<string, unknown> | undefined) =>
+			recordUsage(usage, goalOwner);
 		const loopTurn = turnOverride?.loop ?? loopTurnRef;
 		const taskTurn = turnOverride?.task ?? taskTurnRef;
 		const systemTurn = autonomousTurn || loopTurn || taskTurn;
-		goalAccountingTurnRef = autonomousTurn;
-		autonomousTurnRef = false;
-		loopTurnRef = false;
-		taskTurnRef = false;
-		// /undo file parity (openclaude rewind): every REAL LLM turn starts a
-		// file-undo exchange — the file tools snapshot their targets during
-		// the turn, and /undo restores them with the transcript. Slash
-		// commands and `!bash` never reach here, so they can't push dummy
-		// exchanges that would swallow the previous exchange's file undo.
-		if (!systemTurn) beginFileUndoExchange(value);
-		// Codex pre-sampling behavior: compact prior history, then continue
-		// this same submitted prompt automatically against the summary.
-		if (shouldAutoCompactHistory(context())) {
-			await tryAutoCompactHistory(context());
-		}
-		// Snapshot for `/retry` BEFORE the user message lands.
-		if (!systemTurn) {
-			setRetrySnapshot({
-				messages: [...messages()],
-				context: [...context()],
-				prompt: value,
-			});
-		}
-		if (!systemTurn) {
-			setPromptHistory(prev =>
-				prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
+		const turnContextStore = graphContexts;
+		let contextLease: GraphContextLease;
+		try {
+			contextLease = turnContextStore.begin(
+				taskTurn ? turnOverride?.graphId : workGraphId,
+				context(),
+				taskTurn,
+				tasks(),
 			);
-		}
-		setHistoryIndex(-1);
-
-		// B22: the transcript shows the original; the provider sees scrubbed
-		// text (placeholders are rehydrated in replies).
-		if (!systemTurn) {
-			appendMessage({
-				role: 'user',
-				content: value,
-				...(attachments && Object.keys(attachments).length > 0
-					? {attachments}
-					: {}),
-				...(command ? {command} : {}),
-			});
-		}
-		// Persist user message BEFORE provider/tool work. A long or interrupted
-		// turn must still appear in `/resume`; waiting for finally means a
-		// process exit or crash loses the latest prompt for several minutes.
-		persist();
-		const nativeImagePaths = supportsNativeImageInput(activeEndpoint())
-			? Object.entries(attachments ?? {})
-					.filter(([index]) => providerValue.includes(`[Image #${index}]`))
-					.map(([, path]) => path)
-			: [];
-		const sourceContext = imageSourceContext(value, attachments ?? {});
-		const mentionContext = buildMentionContext(value, workspaceCwd());
-		const goalLedger =
-			currentGoal && !systemTurn
-				? `\n\n<active_goal_state>\n${formatGoal(currentGoal)}\n</active_goal_state>`
-				: '';
-		const userMsg = {
-			role: 'user' as const,
-			content:
-				scrubberRef.scrub(providerValue) +
-				sourceContext +
-				mentionContext +
-				goalLedger,
-			...(nativeImagePaths.length > 0 ? {images: nativeImagePaths} : {}),
-		};
-		// CACHE HEAD PARITY (codex): the current DATE rides the request
-		// TAIL, not the system head. The dated message is what the provider
-		// sees AND what the context persists, so a day change or a next-day
-		// resume keeps the byte-stable head warm; the display transcript
-		// keeps the clean user text.
-		const datedUserMsg = {
-			...userMsg,
-			content: `${userMsg.content}${currentDateFragment()}`,
-		};
-		if (!taskTurn) setInput('');
-		setBusy(true);
-		setStreaming('');
-		setCompletionMessage('');
-		setCompletionTone('default');
-		// A new turn starts: stop the COMPLETED popup (armed or visible).
-		completionPopupController.cancel();
-		setReasoning('');
-		setRunning(true);
-		setTurnElapsed(0);
-		thinkingStartedAt = 0;
-		setThinkingElapsed(0);
-		const turnTimer = setInterval(() => {
-			setTurnElapsed(prev => prev + 1);
-			setThinkingElapsed(
-				thinkingStartedAt > 0
-					? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000))
-					: 0,
-			);
-		}, 1000);
-		const controller = new AbortController();
-		abortRef = controller;
-		const startedAt = Date.now();
-		let completionFailed = false;
-		let completionInterrupted = false;
-		let detachedWorkStarted = false;
-		const releaseForegroundForDetachedWork = (): void => {
-			if (detachedWorkStarted || foregroundTurnOwner !== turnId) return;
-			detachedWorkStarted = true;
+		} catch (error) {
+			queryActiveRef = false;
 			foregroundTurnOwner = 0;
-			// Background work must not own the foreground prompt. Release these
-			// signals immediately at handoff, rather than waiting for the model
-			// loop's finally block after it notices the flag.
-			setBusy(false);
-			setRunning(false);
-			setStreaming('');
-			setReasoning('');
-			setThinkingActive(false);
-		};
-		let completionSummary = value.replace(/\s+/g, ' ').trim().slice(0, 180);
-		reportHerdrAgent('working', {
-			message: completionSummary || 'Working',
-			sessionId: sessionId(),
-		});
-
-		let history: ChatMessageLike[] = [...context(), datedUserMsg];
-		// F4: subscribe blocks auto-trigger, a custom command whose
-		// `subscribe:` keywords match the prompt injects its body.
-		for (const command of loadCustomCommands()) {
-			if (
-				command.subscribe?.some(keyword =>
-					value.toLowerCase().includes(keyword.toLowerCase()),
-				)
-			) {
-				history = [...history, {role: 'user', content: command.body.trim()}];
-				appendMessage({
-					role: 'user',
-					content: `${value} (auto-triggered /${command.name})`,
-					command: {
-						kind: 'command',
-						name: command.name,
-						original: `${value} (auto-triggered /${command.name})`,
-						body: command.body.trim(),
-					},
+			autonomousTurnRef = false;
+			loopTurnRef = false;
+			taskTurnRef = false;
+			appendError(error instanceof Error ? error.message : String(error));
+			queueMicrotask(processQueue);
+			return;
+		}
+		const turnChecklistOwner = {store: turnContextStore, lease: contextLease};
+		setChecklistOwner(turnChecklistOwner);
+		try {
+			setTasks(structuredClone(contextLease.checklist));
+			const commitTurnContext = (next: ChatMessageLike[]): void => {
+				if (graphContexts !== turnContextStore) return;
+				if (turnContextStore.commit(contextLease, next)) setContext(next);
+			};
+			const compactTurnContext = async (next: ChatMessageLike[]) =>
+				tryAutoCompactHistory(next, commitTurnContext, taskTurn);
+			let initialContext = contextLease.history;
+			autonomousTurnRef = false;
+			loopTurnRef = false;
+			taskTurnRef = false;
+			// /undo file parity (openclaude rewind): every REAL LLM turn starts a
+			// file-undo exchange — the file tools snapshot their targets during
+			// the turn, and /undo restores them with the transcript. Slash
+			// commands and `!bash` never reach here, so they can't push dummy
+			// exchanges that would swallow the previous exchange's file undo.
+			if (!systemTurn) beginFileUndoExchange(value);
+			// Codex pre-sampling behavior: compact prior history, then continue
+			// this same submitted prompt automatically against the summary.
+			if (shouldAutoCompactHistory(initialContext)) {
+				initialContext = await compactTurnContext(initialContext);
+			}
+			// Snapshot for `/retry` BEFORE the user message lands.
+			if (!systemTurn) {
+				setRetrySnapshot({
+					messages: [...messages()],
+					context: [...context()],
+					prompt: value,
 				});
-				appendInfo(
-					`Auto-triggered custom command /${command.name} (subscribe).`,
+			}
+			if (!systemTurn) {
+				setPromptHistory(prev =>
+					prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
 				);
 			}
-		}
-		// F6: skill `subscribe:` keywords auto-trigger the same way.
-		for (const skill of loadSkills()) {
-			if (
-				skill.subscribe?.some(keyword =>
-					value.toLowerCase().includes(keyword.toLowerCase()),
-				)
-			) {
-				history = [...history, {role: 'user', content: skill.body.trim()}];
+			setHistoryIndex(-1);
+
+			// B22: the transcript shows the original; the provider sees scrubbed
+			// text (placeholders are rehydrated in replies).
+			if (!systemTurn) {
+				if (currentSession && !sessionId()) {
+					setSessionId(currentSession.id);
+					reportHerdrSession(currentSession.id, process.cwd());
+					reportHerdrAgent('idle', {
+						message: 'Ready for input',
+						sessionId: currentSession.id,
+					});
+				}
 				appendMessage({
 					role: 'user',
-					content: `${value} (auto-triggered skill:${skill.name})`,
-					command: {
-						kind: 'skill',
-						name: skill.name,
-						original: `${value} (auto-triggered skill:${skill.name})`,
-						body: skill.body.trim(),
-					},
+					content: value,
+					...(attachments && Object.keys(attachments).length > 0
+						? {attachments}
+						: {}),
+					...(command ? {command} : {}),
 				});
-				appendInfo(`Auto-triggered skill ${skill.name} (subscribe).`);
+				if (currentSession) currentSession.lastMessageAt = Date.now();
 			}
-		}
-		history = capMessages(history, maxMessages());
-		let emptyTurnCount = 0;
-		let repeatedToolState: RepeatedToolState = INITIAL_REPEATED_TOOL_STATE;
-		let malformedRetryCount = 0;
-		let taskCloseoutNudgeCount = 0;
-		let lastTaskCloseoutDraft = '';
-		let taskToolRanAfterCloseoutDraft = false;
-		let toolBriefActive = false;
-		let reactiveCompactRetries = 0;
-		setDiagnosticsCount(0);
-		let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
-		if (watchdogMsRef > 0) {
-			watchdogTimer = setTimeout(() => {
-				watchdogRef = true;
-				setCancelling(true);
-				abortRef?.abort();
-			}, watchdogMsRef);
-		}
-		try {
-			// B15: preflight steering evaluation before the first request.
-			const turnFacts = () => ({
-				intent: classifyIntent(value),
-				model: activeEndpoint().model,
-				budgetTurns: 0,
-				totalBudget: TOOL_LOOP_BUDGET,
-				backgroundTasksRunning: activeBgCount() > 0,
-			});
-			const steering = evaluateSteering(value, steeringRef, turnFacts());
-			if (steering) {
-				const {rule, intent} = steering;
-				const facts = {...turnFacts(), intent};
-				if (rule.action === 'block') {
-					appendInfo(formatInnerDaemonRow(rule.id, 'block', facts));
-					appendInfo(rule.message ?? `Blocked by steering rule ${rule.id}.`);
-					return;
-				}
-				if (rule.action === 'stop') {
-					appendInfo(formatInnerDaemonRow(rule.id, 'stop', facts));
-					appendInfo(
-						`InnerDaemon stopped the loop: ${rule.message ?? rule.id}`,
-					);
-					return;
-				}
-				if (rule.action === 'inject' && rule.inject) {
-					appendInfo(formatInnerDaemonRow(rule.id, 'inject', facts));
-					history = [...history, {role: 'user', content: rule.inject}];
-				} else if (rule.action === 'noop') {
-					appendNoopRow(formatInnerDaemonRow(rule.id, 'noop', facts));
-				}
-			}
-			// No round cap: the loop runs until the model answers with text,
-			// a safety guard trips (empty turn / repeated tool signature /
-			// malformed retries), or an error is thrown. `round` still
-			// counts tool turns for the steering audit fact.
-			turnLoop: for (let round = 0; ; round++) {
-				// Settled `⚙ Thought (Ns)` reports the THINKING phase length
-				// (since reasoning first streamed), not the whole turn.
-				const thoughtDuration = (): number =>
-					thinkingSeconds(
-						thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
-						Date.now(),
-					);
-				let result: Awaited<ReturnType<typeof streamChat>>;
-				const beginThinkingPhase = () => {
-					if (thinkingActive()) return;
-					setThinkingActive(true);
-					thinkingStartedAt = Date.now();
-				};
-				try {
-					result = await streamChat(
-						history,
-						{
-							onText: delta => {
-								// Reply text streaming ⇒ the thinking phase is over.
-								if (delta) setThinkingActive(false);
-								setStreaming(prev => prev + delta);
-							},
-							onReasoning: delta => {
-								if (delta) beginThinkingPhase();
-								setReasoning(prev => prev + delta);
-							},
-							onReasoningStart: beginThinkingPhase,
-						},
-						controller.signal,
-						toolCatalogForModel(activeEndpoint().model),
-						streamGuardRef,
-						toolProfile(),
-						// The primary provider failed and a FALLBACK answered —
-						// surface it, or the user thinks the active model lost
-						// its memory (it was never the one that replied).
-						fallback => {
-							setCompletionTone('default');
-							setCompletionMessage(
-								`⚠ ${fallback.id} answered · ${fallback.model} (primary failed)`,
-							);
-							if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
-							resumeNoticeTimer = setTimeout(() => {
-								setCompletionMessage('');
-								setCompletionTone('default');
-							}, 8000);
-						},
-					);
-				} catch (error) {
-					if (isCompactOverflowError(error) && reactiveCompactRetries < 2) {
-						reactiveCompactRetries += 1;
-						setStreaming('');
-						setReasoning('');
-						setThinkingActive(false);
-						try {
-							history = await compactHistory(history);
-						} catch (compactionError) {
-							appendWarning(
-								`Reactive compaction failed: ${compactionError instanceof Error ? compactionError.message : String(compactionError)}`,
-							);
-							throw error;
-						}
-						round -= 1;
-						continue;
-					}
-					throw error;
-				}
-				// The round's stream ended — if the model only reasoned and
-				// called tools, the tool phase is WORKING, not thinking.
+			// Persist user message BEFORE provider/tool work. A long or interrupted
+			// turn must still appear in `/resume`; waiting for finally means a
+			// process exit or crash loses the latest prompt for several minutes.
+			persist();
+			const nativeImagePaths = supportsNativeImageInput(activeEndpoint())
+				? Object.entries(attachments ?? {})
+						.filter(([index]) => providerValue.includes(`[Image #${index}]`))
+						.map(([, path]) => path)
+				: [];
+			const sourceContext = imageSourceContext(value, attachments ?? {});
+			const mentionContext = buildMentionContext(value, workspaceCwd());
+			const goalLedger =
+				turnGoal && !systemTurn
+					? `\n\n<active_goal_state>\n${formatGoal(turnGoal)}\n</active_goal_state>`
+					: '';
+			const userMsg = {
+				role: 'user' as const,
+				content:
+					scrubberRef.scrub(providerValue) +
+					sourceContext +
+					mentionContext +
+					goalLedger,
+				...(nativeImagePaths.length > 0 ? {images: nativeImagePaths} : {}),
+			};
+			// CACHE HEAD PARITY (codex): the current DATE rides the request
+			// TAIL, not the system head. The dated message is what the provider
+			// sees AND what the context persists, so a day change or a next-day
+			// resume keeps the byte-stable head warm; the display transcript
+			// keeps the clean user text.
+			const datedUserMsg = {
+				...userMsg,
+				content: `${userMsg.content}${currentDateFragment()}`,
+			};
+			if (!taskTurn) setInput('');
+			setBusy(true);
+			setStreaming('');
+			setCompletionMessage('');
+			setCompletionTone('default');
+			// A new turn starts: stop the COMPLETED popup (armed or visible).
+			completionPopupController.cancel();
+			setReasoning('');
+			setRunning(true);
+			setTurnElapsed(0);
+			thinkingStartedAt = 0;
+			setThinkingElapsed(0);
+			const turnTimer = setInterval(() => {
+				setTurnElapsed(prev => prev + 1);
+				setThinkingElapsed(
+					thinkingStartedAt > 0
+						? Math.max(0, Math.floor((Date.now() - thinkingStartedAt) / 1000))
+						: 0,
+				);
+			}, 1000);
+			const controller = new AbortController();
+			abortRef = controller;
+			const startedAt = Date.now();
+			let completionFailed = false;
+			let completionInterrupted = false;
+			let detachedWorkStarted = false;
+			const releaseForegroundForDetachedWork = (): void => {
+				if (detachedWorkStarted || foregroundTurnOwner !== turnId) return;
+				detachedWorkStarted = true;
+				foregroundTurnOwner = 0;
+				// Background work must not own the foreground prompt. Release these
+				// signals immediately at handoff, rather than waiting for the model
+				// loop's finally block after it notices the flag.
+				setBusy(false);
+				setRunning(false);
+				setStreaming('');
+				setReasoning('');
 				setThinkingActive(false);
+				setThinkingElapsed(0);
+				thinkingStartedAt = 0;
+			};
+			let completionSummary = value.replace(/\s+/g, ' ').trim().slice(0, 180);
+			reportHerdrAgent('working', {
+				message: completionSummary || 'Working',
+				sessionId: sessionId(),
+			});
 
-				// Tool-call recovery (parity: nanocoder's self-correction
-				// loop): when the model emitted tool-call-SHAPED text but no
-				// executable call, first try the layered text parser (XML /
-				// Llama tags / JSON). If it recovers calls, execute them as a
-				// normal tool turn; if the markup is MALFORMED, feed the
-				// parse error back to the model and retry (capped).
-				if (
-					result.toolCalls.length === 0 &&
-					result.text.trim() &&
-					looksLikeToolCallText(result.text)
-				) {
-					const parsed = parseToolCalls(result.text);
-					if (parsed.success && parsed.toolCalls.length > 0) {
-						result = {
-							...result,
-							toolCalls: parsed.toolCalls.map(call => ({
-								id: call.id,
-								name: call.name,
-								rawArguments: call.arguments,
-								arguments: parseArguments(call.arguments),
-							})),
-							text: parsed.cleanText,
-						};
-					} else if (!parsed.success) {
-						if (malformedRetryCount >= MAX_MALFORMED_RETRIES) {
-							appendError(
-								`Model produced malformed tool calls ${MAX_MALFORMED_RETRIES + 1} times in a row and cannot self-correct. Try rephrasing the request or switching models.`,
-							);
-							break;
-						}
-						malformedRetryCount += 1;
-						appendInfo(
-							`Malformed tool call, asking the model to correct itself (${malformedRetryCount}/${MAX_MALFORMED_RETRIES + 1}).`,
-						);
-						appendAssistantMessage(result.text, {
-							reasoning: result.reasoning.trim() || undefined,
-							durationSec: thoughtDuration(),
-						});
+			let history: ChatMessageLike[] = [...initialContext, datedUserMsg];
+			const appendSubscriptions = (value: string): void => {
+				// F4: subscribe blocks auto-trigger, a custom command whose
+				// `subscribe:` keywords match the prompt injects its body.
+				for (const command of loadCustomCommands()) {
+					if (
+						command.subscribe?.some(keyword =>
+							value.toLowerCase().includes(keyword.toLowerCase()),
+						)
+					) {
 						history = [
 							...history,
-							{role: 'assistant', content: result.text},
+							{role: 'user', content: command.body.trim()},
+						];
+						appendMessage({
+							role: 'user',
+							content: `${value} (auto-triggered /${command.name})`,
+							command: {
+								kind: 'command',
+								name: command.name,
+								original: `${value} (auto-triggered /${command.name})`,
+								body: command.body.trim(),
+							},
+						});
+						appendInfo(
+							`Auto-triggered custom command /${command.name} (subscribe).`,
+						);
+					}
+				}
+				// F6: skill `subscribe:` keywords auto-trigger the same way.
+				for (const skill of loadSkills()) {
+					if (
+						skill.subscribe?.some(keyword =>
+							value.toLowerCase().includes(keyword.toLowerCase()),
+						)
+					) {
+						history = [...history, {role: 'user', content: skill.body.trim()}];
+						appendMessage({
+							role: 'user',
+							content: `${value} (auto-triggered skill:${skill.name})`,
+							command: {
+								kind: 'skill',
+								name: skill.name,
+								original: `${value} (auto-triggered skill:${skill.name})`,
+								body: skill.body.trim(),
+							},
+						});
+						appendInfo(`Auto-triggered skill ${skill.name} (subscribe).`);
+					}
+				}
+			};
+			if (!taskTurn) appendSubscriptions(value);
+			history = capMessages(history, maxMessages());
+			commitTurnContext(history);
+			persist();
+			let emptyTurnCount = 0;
+			let repeatedToolState: RepeatedToolState = INITIAL_REPEATED_TOOL_STATE;
+			let malformedRetryCount = 0;
+			let taskCloseoutNudgeCount = 0;
+			let lastTaskCloseoutDraft = '';
+			let taskToolRanAfterCloseoutDraft = false;
+			let toolBriefActive = false;
+			let reactiveCompactRetries = 0;
+			setDiagnosticsCount(0);
+			let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+			if (watchdogMsRef > 0) {
+				watchdogTimer = setTimeout(() => {
+					watchdogRef = true;
+					setCancelling(true);
+					abortRef?.abort();
+				}, watchdogMsRef);
+			}
+			const deliverPendingPrompts = async (): Promise<void> => {
+				await deliverQueuedSteering(
+					pendingQueue(),
+					async item => {
+						if (controller.signal.aborted || detachedWorkStarted) return false;
+						const prompt = await prepareUserPrompt(
+							item.value,
+							item.attachments,
+						);
+						if (controller.signal.aborted || detachedWorkStarted) return false;
+						if (prompt === undefined) return true;
+						const images = supportsNativeImageInput(activeEndpoint())
+							? Object.entries(item.attachments ?? {})
+									.filter(([index]) => prompt.includes(`[Image #${index}]`))
+									.map(([, path]) => path)
+							: [];
+						history = [
+							...history,
 							{
 								role: 'user',
 								content:
-									`Your previous response contained a malformed tool call. ${parsed.error ?? ''}\n\n` +
-									`${parsed.examples ?? ''}\n\nPlease try again using the correct format.`,
+									scrubberRef.scrub(prompt) +
+									imageSourceContext(item.value, item.attachments ?? {}) +
+									buildMentionContext(item.value, workspaceCwd()) +
+									(turnGoal
+										? `\n\n<active_goal_state>\n${formatGoal(turnGoal)}\n</active_goal_state>`
+										: '') +
+									currentDateFragment(),
+								...(images.length ? {images} : {}),
 							},
 						];
-						continue;
+						appendMessage({
+							role: 'user',
+							content: item.value,
+							...(item.attachments ? {attachments: item.attachments} : {}),
+						});
+						setPromptHistory(previous =>
+							previous[previous.length - 1] === item.value
+								? previous
+								: [...previous.slice(-99), item.value],
+						);
+						setHistoryIndex(-1);
+						if (currentSession) currentSession.lastMessageAt = Date.now();
+						appendSubscriptions(item.value);
+						// New user direction is not another failed attempt at the old task.
+						emptyTurnCount = 0;
+						malformedRetryCount = 0;
+						repeatedToolState = INITIAL_REPEATED_TOOL_STATE;
+						taskCloseoutNudgeCount = 0;
+						commitTurnContext(history);
+						return true;
+					},
+					item => {
+						setPendingQueue(previous =>
+							previous.filter(candidate => candidate !== item),
+						);
+						persist();
+					},
+				);
+			};
+			try {
+				// B15: preflight steering evaluation before the first request.
+				const turnFacts = () => ({
+					intent: classifyIntent(value),
+					model: activeEndpoint().model,
+					budgetTurns: 0,
+					totalBudget: TOOL_LOOP_BUDGET,
+					backgroundTasksRunning: activeBgCount() > 0,
+				});
+				const steering = evaluateSteering(value, steeringRef, turnFacts());
+				if (steering) {
+					const {rule, intent} = steering;
+					const facts = {...turnFacts(), intent};
+					if (rule.action === 'block') {
+						appendInfo(formatInnerDaemonRow(rule.id, 'block', facts));
+						appendInfo(rule.message ?? `Blocked by steering rule ${rule.id}.`);
+						return;
+					}
+					if (rule.action === 'stop') {
+						appendInfo(formatInnerDaemonRow(rule.id, 'stop', facts));
+						appendInfo(
+							`InnerDaemon stopped the loop: ${rule.message ?? rule.id}`,
+						);
+						return;
+					}
+					if (rule.action === 'inject' && rule.inject) {
+						appendInfo(formatInnerDaemonRow(rule.id, 'inject', facts));
+						history = [...history, {role: 'user', content: rule.inject}];
+					} else if (rule.action === 'noop') {
+						appendNoopRow(formatInnerDaemonRow(rule.id, 'noop', facts));
 					}
 				}
-
-				if (result.toolCalls.length === 0) {
-					if (result.text.trim()) {
-						const unfinishedTasks = tasks().filter(
-							task =>
-								task.status === 'pending' || task.status === 'in_progress',
+				// No round cap: the loop runs until the model answers with text,
+				// a safety guard trips (empty turn / repeated tool signature /
+				// malformed retries), or an error is thrown. `round` still
+				// counts tool turns for the steering audit fact.
+				turnLoop: for (let round = 0; ; round++) {
+					const recovered = repairWorkspaceCwd();
+					if (recovered) {
+						history = [
+							...history,
+							{
+								role: 'user',
+								content: `Working directory recovery: the previous worktree directory disappeared. Current working directory is now ${recovered}. Re-evaluate relative paths before executing commands. Do not replay failed commands automatically.`,
+							},
+						];
+					}
+					// The previous complete tool batch is in history; never drain inside callLoop.
+					if (!taskTurn) await deliverPendingPrompts();
+					controller.signal.throwIfAborted();
+					// Settled `⚙ Thought (Ns)` reports the THINKING phase length
+					// (since reasoning first streamed), not the whole turn.
+					const thoughtDuration = (): number =>
+						thinkingSeconds(
+							thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
+							Date.now(),
 						);
-						if (unfinishedTasks.length > 0 && taskCloseoutNudgeCount < 2) {
-							taskCloseoutNudgeCount += 1;
-							// This text already rendered as the normal live Markdown reply. Persist
-							// it before clearing streaming for the checklist closeout round; otherwise
-							// calling write_tasks makes the visible response disappear.
-							const visibleDraft = scrubberRef.rehydrate(result.text);
-							if (visibleDraft !== lastTaskCloseoutDraft) {
-								appendAssistantMessage(visibleDraft, {
-									reasoning: result.reasoning.trim() || undefined,
-									durationSec: thoughtDuration(),
-								});
-								lastTaskCloseoutDraft = visibleDraft;
-								taskToolRanAfterCloseoutDraft = false;
+					let result: Awaited<ReturnType<typeof streamChat>>;
+					const beginThinkingPhase = () => {
+						if (thinkingActive()) return;
+						setThinkingActive(true);
+						thinkingStartedAt = Date.now();
+					};
+					try {
+						result = await streamChat(
+							history,
+							{
+								onText: delta => {
+									// Reply text streaming ⇒ the thinking phase is over.
+									if (delta) setThinkingActive(false);
+									setStreaming(prev => prev + delta);
+								},
+								onReasoning: delta => {
+									if (delta) beginThinkingPhase();
+									setReasoning(prev => prev + delta);
+								},
+								onReasoningStart: beginThinkingPhase,
+								onWebSearch: action =>
+									appendInfo(formatNativeWebSearchActivity(action)),
+							},
+							controller.signal,
+							toolCatalogForModel(activeEndpoint().model),
+							streamGuardRef,
+							toolProfile(),
+							// The primary provider failed and a FALLBACK answered —
+							// surface it, or the user thinks the active model lost
+							// its memory (it was never the one that replied).
+							fallback => {
+								setCompletionTone('default');
+								setCompletionMessage(
+									`⚠ ${fallback.id} answered · ${fallback.model} (primary failed)`,
+								);
+								if (resumeNoticeTimer) clearTimeout(resumeNoticeTimer);
+								resumeNoticeTimer = setTimeout(() => {
+									setCompletionMessage('');
+									setCompletionTone('default');
+								}, 8000);
+							},
+						);
+					} catch (error) {
+						if (isCompactOverflowError(error) && reactiveCompactRetries < 2) {
+							reactiveCompactRetries += 1;
+							setStreaming('');
+							setReasoning('');
+							setThinkingActive(false);
+							try {
+								history = await compactHistory(
+									history,
+									'',
+									commitTurnContext,
+									taskTurn,
+								);
+							} catch (compactionError) {
+								appendWarning(
+									`Reactive compaction failed: ${compactionError instanceof Error ? compactionError.message : String(compactionError)}`,
+								);
+								throw error;
 							}
+							round -= 1;
+							continue;
+						}
+						throw error;
+					}
+					// The round's stream ended — if the model only reasoned and
+					// called tools, the tool phase is WORKING, not thinking.
+					setThinkingActive(false);
+
+					// Tool-call recovery (parity: nanocoder's self-correction
+					// loop): when the model emitted tool-call-SHAPED text but no
+					// executable call, first try the layered text parser (XML /
+					// Llama tags / JSON). If it recovers calls, execute them as a
+					// normal tool turn; if the markup is MALFORMED, feed the
+					// parse error back to the model and retry (capped).
+					if (
+						result.toolCalls.length === 0 &&
+						result.text.trim() &&
+						looksLikeToolCallText(result.text)
+					) {
+						const parsed = parseToolCalls(result.text);
+						if (parsed.success && parsed.toolCalls.length > 0) {
+							result = {
+								...result,
+								toolCalls: parsed.toolCalls.map(call => ({
+									id: call.id,
+									name: call.name,
+									rawArguments: call.arguments,
+									arguments: parseArguments(call.arguments),
+								})),
+								text: parsed.cleanText,
+							};
+						} else if (!parsed.success) {
+							if (malformedRetryCount >= MAX_MALFORMED_RETRIES) {
+								appendError(
+									`Model produced malformed tool calls ${MAX_MALFORMED_RETRIES + 1} times in a row and cannot self-correct. Try rephrasing the request or switching models.`,
+								);
+								break;
+							}
+							malformedRetryCount += 1;
+							appendInfo(
+								`Malformed tool call, asking the model to correct itself (${malformedRetryCount}/${MAX_MALFORMED_RETRIES + 1}).`,
+							);
+							appendAssistantMessage(result.text, {
+								reasoning: result.reasoning.trim() || undefined,
+								durationSec: thoughtDuration(),
+							});
 							history = [
 								...history,
 								{role: 'assistant', content: result.text},
 								{
 									role: 'user',
 									content:
-										'You still have unfinished checklist items. Before giving the final response, call write_tasks with the full list and mark each genuinely finished item completed. Keep blocked or incomplete work in_progress/pending. Do not merely describe the update in prose.',
+										`Your previous response contained a malformed tool call. ${parsed.error ?? ''}\n\n` +
+										`${parsed.examples ?? ''}\n\nPlease try again using the correct format.`,
 								},
 							];
-							setStreaming('');
-							setReasoning('');
-							recordUsage(result.usage);
 							continue;
 						}
-						// Never fabricate checklist completion. If the model ignored two
-						// explicit closeout nudges, preserve exact task state and withhold
-						// the completion signal instead of lying to the next iteration.
-						const remainingUnfinishedTasks = unfinishedTasks;
-						completionSummary =
-							result.text.replace(/\s+/g, ' ').trim().slice(0, 180) ||
-							completionSummary;
-						if (currentGoal && autonomousTurn) {
-							const status = goalStatusFromResponse(
-								result.text,
-								currentGoal.status,
-								currentGoal.completionPromise,
+					}
+
+					if (result.toolCalls.length === 0) {
+						if (steeringSnapshot(pendingQueue()).length > 0) {
+							if (result.text.trim() || result.reasoning.trim()) {
+								appendAssistantMessage(scrubberRef.rehydrate(result.text), {
+									reasoning: result.reasoning.trim() || undefined,
+									durationSec: thoughtDuration(),
+								});
+							}
+							history = [...history, {role: 'assistant', content: result.text}];
+							setStreaming('');
+							setReasoning('');
+							recordTurnUsage(result.usage);
+							continue;
+						}
+
+						if (result.text.trim()) {
+							const unfinishedTasks = tasks().filter(
+								task =>
+									task.status === 'pending' || task.status === 'in_progress',
 							);
-							if (status !== currentGoal.status) {
-								saveGoal({...currentGoal, status, updatedAt: Date.now()});
-								if (status === 'complete' || status === 'blocked') {
-									setPendingQueue(previous =>
-										previous.filter(item => item.source !== 'goal'),
-									);
-									cancelRunningBackgroundTasks('goal');
+							if (
+								shouldNudgeTaskCloseout(
+									unfinishedTasks.length,
+									taskCloseoutNudgeCount,
+									taskToolRanAfterCloseoutDraft,
+								)
+							) {
+								taskCloseoutNudgeCount += 1;
+								// This text already rendered as the normal live Markdown reply. Persist
+								// it before clearing streaming for the checklist closeout round; otherwise
+								// calling write_tasks makes the visible response disappear.
+								const visibleDraft = scrubberRef.rehydrate(result.text);
+								if (visibleDraft !== lastTaskCloseoutDraft) {
+									appendAssistantMessage(visibleDraft, {
+										reasoning: result.reasoning.trim() || undefined,
+										durationSec: thoughtDuration(),
+									});
+									lastTaskCloseoutDraft = visibleDraft;
+									taskToolRanAfterCloseoutDraft = false;
+								}
+								history = [
+									...history,
+									{role: 'assistant', content: result.text},
+									{
+										role: 'user',
+										content: TASK_CLOSEOUT_PROMPT,
+									},
+								];
+								setStreaming('');
+								setReasoning('');
+								recordTurnUsage(result.usage);
+								continue;
+							}
+							// Never fabricate checklist completion. If the model ignored two
+							// explicit closeout nudges, preserve exact task state and withhold
+							// the completion signal instead of lying to the next iteration.
+							const remainingUnfinishedTasks = unfinishedTasks;
+							completionSummary =
+								result.text.replace(/\s+/g, ' ').trim().slice(0, 180) ||
+								completionSummary;
+							if (currentGoal && goalMatchesOwner(currentGoal, goalOwner)) {
+								const status = goalStatusFromResponse(
+									result.text,
+									currentGoal.status,
+									currentGoal.completionPromise,
+								);
+								if (status !== currentGoal.status) {
+									saveGoal({...currentGoal, status, updatedAt: Date.now()});
+									if (status === 'complete' || status === 'blocked') {
+										setPendingQueue(previous =>
+											previous.filter(item => item.source !== 'goal'),
+										);
+										cancelRunningBackgroundTasks('goal');
+									}
 								}
 							}
+							const visibleReply = scrubberRef.rehydrate(result.text);
+							if (autonomousTurn) refreshGoalProgress(goalOwner, visibleReply);
+							if (
+								shouldPersistTaskCloseoutReply(
+									visibleReply,
+									lastTaskCloseoutDraft,
+									taskToolRanAfterCloseoutDraft,
+								)
+							) {
+								appendAssistantMessage(visibleReply, {
+									reasoning: result.reasoning.trim() || undefined,
+									durationSec: thoughtDuration(),
+								});
+							}
+							const completionUsage = usageSignal(result.usage);
+							const cacheLabel = formatCacheHitLabel(cacheStats(result.usage));
+							// Static completion line ABOVE the input (diamond glyph,
+							// secondary), not a transcript row. Expires after a
+							// few seconds like the exit confirmation.
+							if (remainingUnfinishedTasks.length === 0) {
+								const waitingMessage = pendingBackgroundWorkMessage();
+								if (waitingMessage) {
+									setCompletionMessage(waitingMessage);
+									completionPopupController.cancel();
+								} else {
+									setCompletionMessage(
+										`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+											(completionUsage?.total_tokens
+												? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
+												: '') +
+											(cacheLabel ? ` · ${cacheLabel}` : ''),
+									);
+									// COMPLETED attention modal: a finished task arms the
+									// idle window (shows only after a full idle period).
+									completionPopupController.arm();
+								}
+							}
+							capturePRs(result.text);
+							// Keep the LOCAL history (what the provider saw) in
+							// sync, the post-loop owner-scoped commit below is
+							// the source of truth for this graph's saved context,
+							// so a resumed conversation re-sends the EXACT same
+							// prefix and keeps the provider's prompt cache.
+							history = [...history, {role: 'assistant', content: result.text}];
+							commitTurnContext(history);
+							refreshContextPercent();
+							recordTurnUsage(result.usage);
+							break;
 						}
-						const visibleReply = scrubberRef.rehydrate(result.text);
-						if (autonomousTurn) refreshGoalProgress(visibleReply);
-						if (
-							shouldPersistTaskCloseoutReply(
-								visibleReply,
-								lastTaskCloseoutDraft,
-								taskToolRanAfterCloseoutDraft,
-							)
-						) {
-							appendAssistantMessage(visibleReply, {
-								reasoning: result.reasoning.trim() || undefined,
+
+						// Empty turn (reasoning-only or fully silent): nudge once per
+						// attempt, matching nanocoder's empty-response retry flow.
+						if (emptyTurnCount >= MAX_EMPTY_TURNS) {
+							appendError(
+								`Model produced no output after ${MAX_EMPTY_TURNS + 1} attempts. ` +
+									'The model may be exhausting its token budget on reasoning, or the request may have been refused. ' +
+									'Try rephrasing, lowering reasoning effort, or switching models.',
+							);
+							break;
+						}
+						emptyTurnCount += 1;
+						const nudge = result.reasoning.trim()
+							? 'You produced reasoning but no final response. Please provide your answer based on your reasoning above.'
+							: 'Please continue with the task.';
+						if (result.reasoning.trim()) {
+							appendAssistantMessage('', {
+								reasoning: result.reasoning.trim(),
 								durationSec: thoughtDuration(),
 							});
 						}
-						const completionUsage = usageSignal(result.usage);
-						const cacheLabel = formatCacheHitLabel(cacheStats(result.usage));
-						// Static completion line ABOVE the input (diamond glyph,
-						// secondary), not a transcript row. Expires after a
-						// few seconds like the exit confirmation.
-						if (remainingUnfinishedTasks.length === 0) {
-							const waitingMessage = pendingBackgroundWorkMessage();
-							if (waitingMessage) {
-								setCompletionMessage(waitingMessage);
-								completionPopupController.cancel();
-							} else {
-								setCompletionMessage(
-									`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-										(completionUsage?.total_tokens
-											? ` · ${formatTokens(completionUsage.total_tokens)} tokens`
-											: '') +
-										(cacheLabel ? ` · ${cacheLabel}` : ''),
-								);
-								// COMPLETED attention modal: a finished task arms the
-								// idle window (shows only after a full idle period).
-								completionPopupController.arm();
-							}
-						}
-						capturePRs(result.text);
-						// Keep the LOCAL history (what the provider saw) in
-						// sync, the post-loop `setContext(history)` below is
-						// the single source of truth for the saved session,
-						// so a resumed conversation re-sends the EXACT same
-						// prefix and keeps the provider's prompt cache.
-						history = [...history, {role: 'assistant', content: result.text}];
-						setContext(history);
-						refreshContextPercent();
-						recordUsage(result.usage);
-						break;
+						appendInfo(
+							`Empty response, retry ${emptyTurnCount}/${MAX_EMPTY_TURNS + 1}: "${nudge}"`,
+						);
+						history = [...history, {role: 'user', content: nudge}];
+						continue;
 					}
 
-					// Empty turn (reasoning-only or fully silent): nudge once per
-					// attempt, matching nanocoder's empty-response retry flow.
-					if (emptyTurnCount >= MAX_EMPTY_TURNS) {
+					// B14: repeated identical EFFECTFUL tool signature across turns →
+					// loop guard. Checklist bookkeeping (`write_tasks`) is excluded:
+					// models legitimately repeat it while advancing and closing tasks.
+					// Other tools remain guarded, including skill loading.
+					const repeated = evaluateRepeatedToolCalls(
+						result.toolCalls,
+						repeatedToolState,
+					);
+					repeatedToolState = repeated.state;
+					if (repeated.stop) {
 						appendError(
-							`Model produced no output after ${MAX_EMPTY_TURNS + 1} attempts. ` +
-								'The model may be exhausting its token budget on reasoning, or the request may have been refused. ' +
-								'Try rephrasing, lowering reasoning effort, or switching models.',
+							`Repeated tool call detected (${repeated.state.count}× identical calls), stopping the loop.`,
 						);
 						break;
 					}
-					emptyTurnCount += 1;
-					const nudge = result.reasoning.trim()
-						? 'You produced reasoning but no final response. Please provide your answer based on your reasoning above.'
-						: 'Please continue with the task.';
+
+					// Tool turn: execute every call, render each row, feed the
+					// results back so the model can reply.
+					const toolMessages: ChatMessageLike[] = [];
+					// Settled Thought block for a reasoning+tools turn (parity:
+					// /mock:thoughtrun keeps `⚙ Thought (Ns)` above the tally).
 					if (result.reasoning.trim()) {
 						appendAssistantMessage('', {
 							reasoning: result.reasoning.trim(),
 							durationSec: thoughtDuration(),
 						});
 					}
-					appendInfo(
-						`Empty response, retry ${emptyTurnCount}/${MAX_EMPTY_TURNS + 1}: "${nudge}"`,
+					// Pre-tool BRIEF (parity: claude code / openclaude render the
+					// model's "I'll check X" narration BEFORE the tool box). It is
+					// attached to the FIRST tool message of the batch and renders
+					// once as part of the tool entry — never repeated per tool.
+					const preToolText = splitPreToolText(
+						scrubberRef.rehydrate(result.text),
 					);
-					history = [...history, {role: 'user', content: nudge}];
-					continue;
-				}
-
-				// B14: repeated identical EFFECTFUL tool signature across turns →
-				// loop guard. Checklist bookkeeping (`write_tasks`) is excluded:
-				// models legitimately repeat it while advancing and closing tasks.
-				// Other tools remain guarded, including skill loading.
-				const repeated = evaluateRepeatedToolCalls(
-					result.toolCalls,
-					repeatedToolState,
-				);
-				repeatedToolState = repeated.state;
-				if (repeated.stop) {
-					appendError(
-						`Repeated tool call detected (${repeated.state.count}× identical calls), stopping the loop.`,
-					);
-					break;
-				}
-
-				// Tool turn: execute every call, render each row, feed the
-				// results back so the model can reply.
-				const toolMessages: ChatMessageLike[] = [];
-				// Settled Thought block for a reasoning+tools turn (parity:
-				// /mock:thoughtrun keeps `⚙ Thought (Ns)` above the tally).
-				if (result.reasoning.trim()) {
-					appendAssistantMessage('', {
-						reasoning: result.reasoning.trim(),
-						durationSec: thoughtDuration(),
-					});
-				}
-				// Pre-tool BRIEF (parity: claude code / openclaude render the
-				// model's "I'll check X" narration BEFORE the tool box). It is
-				// attached to the FIRST tool message of the batch and renders
-				// once as part of the tool entry — never repeated per tool.
-				const preToolText = splitPreToolText(
-					scrubberRef.rehydrate(result.text),
-				);
-				const briefText = result.text.trim()
-					? oneSentencePreToolBrief(preToolText.brief)
-					: '';
-				const priorRoundBriefed = toolBriefActive;
-				if (briefText) toolBriefActive = true;
-				// Text became pre-tool brief. Remove live-reply copy immediately;
-				// otherwise same narration paints above tool and again below it
-				// until next streaming throttle tick.
-				setStreaming('');
-				// Keep prose after the compact pre-tool sentence as a normal
-				// assistant message. Previously every result.text attached to a
-				// tool call was collapsed into one brief, silently dropping
-				// substantive sentences between tool rounds.
-				if (preToolText.remainder) {
-					appendAssistantMessage(preToolText.remainder, {
-						reasoning: result.reasoning.trim() || undefined,
-						durationSec: thoughtDuration(),
-					});
-				}
-				const toolResults: Array<{
-					tool_call_id: string;
-					content: string;
-					displayArgs?: Record<string, unknown>;
-				}> = [];
-				// B8: single-tool profiles truncate to one call per turn.
-				const selectedCalls = isSingleToolProfile(
-					toolProfile(),
-					activeEndpoint().model,
-				)
-					? result.toolCalls.slice(0, 1)
-					: result.toolCalls;
-				// Normalize BEFORE rendering and provider-history persistence. Doing
-				// this only inside executeTool still shows redundant `cd <cwd> &&`
-				// in the visible call and teaches the model to repeat it.
-				const calls: MockToolCall[] = selectedCalls.map(call => {
-					if (resolveToolName(call.name) !== 'execute_bash') return call;
-					const command = call.arguments.command;
-					if (typeof command !== 'string') return call;
-					const normalized = normalizeBashCommand(command, workspaceCwd());
-					if (normalized === command) return call;
-					const args = {...call.arguments, command: normalized};
-					return {...call, arguments: args, rawArguments: JSON.stringify(args)};
-				});
-				if (calls.some(call => resolveToolName(call.name) === 'write_tasks')) {
-					taskToolRanAfterCloseoutDraft = true;
-				}
-				let declined = false;
-				// B17: read-only batches run in PARALLEL (results keep order);
-				// mutation tools always run sequentially.
-				const allReadOnly = calls.every(call => {
-					const availability = toolAvailability(
-						call.name,
+					const briefText = result.text.trim()
+						? oneSentencePreToolBrief(preToolText.brief)
+						: '';
+					const priorRoundBriefed = toolBriefActive;
+					if (briefText) toolBriefActive = true;
+					// Text became pre-tool brief. Remove live-reply copy immediately;
+					// otherwise same narration paints above tool and again below it
+					// until next streaming throttle tick.
+					setStreaming('');
+					// Keep prose after the compact pre-tool sentence as a normal
+					// assistant message. Previously every result.text attached to a
+					// tool call was collapsed into one brief, silently dropping
+					// substantive sentences between tool rounds.
+					if (preToolText.remainder) {
+						appendAssistantMessage(preToolText.remainder, {
+							reasoning: result.reasoning.trim() || undefined,
+							durationSec: thoughtDuration(),
+						});
+					}
+					const toolResults: Array<{
+						tool_call_id: string;
+						content: string;
+						displayArgs?: Record<string, unknown>;
+					}> = [];
+					// B8: single-tool profiles truncate to one call per turn.
+					const selectedCalls = isSingleToolProfile(
 						toolProfile(),
-						mode(),
 						activeEndpoint().model,
-					);
-					return (
-						availability.available &&
-						isReadOnlyTool(call.name) &&
-						isParallelSafeTool(call.name) &&
-						!evaluateToolConstraint(call.name, steeringRef, {
-							intent: classifyIntent(value),
-							model: activeEndpoint().model,
-							budgetTurns: round,
-							totalBudget: TOOL_LOOP_BUDGET,
-							backgroundTasksRunning: activeBgCount() > 0,
-						})
-					);
-				});
-				// B9/C6: pre-append every running row for the read-only
-				// PARALLEL batch so the compact tally streams LIVE instead of
-				// appearing only after the whole batch settles.
-				const batchStartedAt = Date.now();
-				if (allReadOnly) {
-					for (const [callIndex, call] of calls.entries()) {
-						const detail = toolDisplayDetail(call);
-						appendMessage({
-							role: 'tool',
-							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
-							running: true,
-							toolId: call.id,
-							// First message carries the brief TEXT; every
-							// message marks the batch so later boxes share
-							// the single glyph and indent to the brief column.
-							brief: toolCallBrief(briefText, callIndex, priorRoundBriefed),
-							tool: {name: call.name, detail, output: '', args: call.arguments},
-						});
-					}
-				}
-				const parallelResults = allReadOnly
-					? await Promise.all(
-							calls.map(call =>
-								executeTool(call, {
-									sessionId: sessionId(),
-									onProgress: content =>
-										setLiveOutputs(prev => ({
-											...prev,
-											[call.id]: content,
-										})),
-									signal: controller.signal,
-									cwd: workspaceCwd(),
-									workspaceRoot,
-									onCwdChange: updateWorkspaceCwd,
-									askUser,
-									onStateChange: persist,
-									onDetachedWork: releaseForegroundForDetachedWork,
-									onDetachedComplete: queueDetachedCompletion,
-									backgroundOwner: autonomousTurn
-										? 'goal'
-										: loopTurn
-											? 'loop'
-											: 'user',
-								}),
-							),
-						)
-					: null;
-				callLoop: for (const [index, call] of calls.entries()) {
-					// Render the row BEFORE execution so bash output streams live
-					// into the transcript tail (parity: streaming tool rows).
-					const detail = toolDisplayDetail(call);
-					const callStartedAt = allReadOnly ? batchStartedAt : Date.now();
-					// B9/C6: the read-only PARALLEL batch pre-appends every
-					// running row BEFORE execution so the compact tally streams
-					// live (the rows above already exist for that path).
-					if (!allReadOnly) {
-						appendMessage({
-							role: 'tool',
-							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
-							running: true,
-							toolId: call.id,
-							brief: toolCallBrief(briefText, index, priorRoundBriefed),
-							tool: {name: call.name, detail, output: '', args: call.arguments},
-						});
-					}
-					if (declined) {
-						const declinedContent = 'Declined by user.';
-						toolResults.push({tool_call_id: call.id, content: declinedContent});
-						toolMessages.push({
-							role: 'tool',
-							content: declinedContent,
-							tool_call_id: call.id,
-						});
-						setMessages(prev =>
-							prev.map(message =>
-								message.toolId === call.id
-									? {
-											...message,
-											running: false,
-											tool: {...message.tool!, output: declinedContent},
-										}
-									: message,
-							),
+					)
+						? result.toolCalls.slice(0, 1)
+						: result.toolCalls;
+					// Normalize BEFORE rendering and provider-history persistence. Doing
+					// this only inside executeTool still shows redundant `cd <cwd> &&`
+					// in the visible call and teaches the model to repeat it.
+					const calls: MockToolCall[] = selectedCalls.map(call => {
+						if (resolveToolName(call.name) !== 'execute_bash') return call;
+						const command = call.arguments.command;
+						if (typeof command !== 'string') return call;
+						const normalized = normalizeBashCommand(command, workspaceCwd());
+						if (normalized === command) return call;
+						const args = {...call.arguments, command: normalized};
+						return {
+							...call,
+							arguments: args,
+							rawArguments: JSON.stringify(args),
+						};
+					});
+					let declined = false;
+					// B17: read-only batches run in PARALLEL (results keep order);
+					// mutation tools always run sequentially.
+					const allReadOnly = calls.every(call => {
+						const availability = toolAvailability(
+							call.name,
+							toolProfile(),
+							mode(),
+							activeEndpoint().model,
 						);
-						continue;
-					}
-					// B15: steering tool-call constraints block before dispatch.
-					const toolConstraint = evaluateToolConstraint(
-						call.name,
-						steeringRef,
-						{
-							intent: classifyIntent(value),
-							model: activeEndpoint().model,
-							budgetTurns: round,
-							totalBudget: TOOL_LOOP_BUDGET,
-							backgroundTasksRunning: activeBgCount() > 0,
-						},
-					);
-					if (toolConstraint) {
-						const reason =
-							`Blocked by steering rule ${toolConstraint.rule.id}: ` +
-							`${toolConstraint.rule.message ?? 'constraint'}`;
-						appendInfo(
-							formatInnerDaemonRow(toolConstraint.rule.id, 'block', {
-								intent: toolConstraint.intent,
+						return (
+							availability.available &&
+							isReadOnlyTool(call.name) &&
+							isParallelSafeTool(call.name) &&
+							!evaluateToolConstraint(call.name, steeringRef, {
+								intent: classifyIntent(value),
 								model: activeEndpoint().model,
 								budgetTurns: round,
 								totalBudget: TOOL_LOOP_BUDGET,
 								backgroundTasksRunning: activeBgCount() > 0,
-							}),
+							})
 						);
-						toolResults.push({tool_call_id: call.id, content: reason});
-						toolMessages.push({
-							role: 'tool',
-							content: reason,
-							tool_call_id: call.id,
-						});
-						setMessages(prev =>
-							prev.map(message =>
-								message.toolId === call.id
-									? {
-											...message,
-											running: false,
-											tool: {...message.tool!, output: reason},
-										}
-									: message,
-							),
-						);
-						continue;
+					});
+					// B9/C6: pre-append every running row for the read-only
+					// PARALLEL batch so the compact tally streams LIVE instead of
+					// appearing only after the whole batch settles.
+					const batchStartedAt = Date.now();
+					if (allReadOnly) {
+						for (const [callIndex, call] of calls.entries()) {
+							const detail = toolDisplayDetail(call);
+							appendMessage({
+								role: 'tool',
+								content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
+								running: true,
+								toolId: call.id,
+								// First message carries the brief TEXT; every
+								// message marks the batch so later boxes share
+								// the single glyph and indent to the brief column.
+								brief: toolCallBrief(briefText, callIndex, priorRoundBriefed),
+								tool: {
+									name: call.name,
+									detail,
+									output: '',
+									args: call.arguments,
+								},
+							});
+						}
 					}
-					// D7/D3: profile/plan availability.
-					const availability = toolAvailability(
-						call.name,
-						toolProfile(),
-						mode(),
-						activeEndpoint().model,
-					);
-					if (!availability.available) {
-						const reason = `Tool ${displayToolName(call.name)} ${availability.reason}.`;
-						toolResults.push({tool_call_id: call.id, content: reason});
-						toolMessages.push({
-							role: 'tool',
-							content: reason,
-							tool_call_id: call.id,
-						});
-						setMessages(prev =>
-							prev.map(message =>
-								message.toolId === call.id
-									? {
-											...message,
-											running: false,
-											tool: {...message.tool!, output: reason},
-										}
-									: message,
-							),
-						);
-						continue;
-					}
-					// B16: approval gating.
-					const preprocessedArgs = !isReadOnlyTool(call.name)
-						? await preprocessToolInput(call)
-						: undefined;
-					const approvalCall = preprocessedArgs
-						? {...call, arguments: preprocessedArgs}
-						: call;
-					if (
-						requiresCallApproval(
-							approvalCall,
-							mode(),
-							activeEndpoint().alwaysAllow ?? [],
-							workspaceCwd(),
-							workspaceRoot,
-						)
-					) {
-						const approved = await approvalGate(
-							displayToolName(call.name),
-							detail,
-						);
-						reportHerdrAgent('working', {
-							message: completionSummary || 'Working',
-							sessionId: sessionId(),
-						});
-						if (!approved) {
-							declined = true; // decline cancels the REST
+					const parallelResults = allReadOnly
+						? await Promise.all(
+								calls.map(call =>
+									executeTool(call, {
+										sessionId: sessionId(),
+										workGraphId,
+										onProgress: content =>
+											setLiveOutputs(prev => ({
+												...prev,
+												[call.id]: content,
+											})),
+										signal: controller.signal,
+										cwd: workspaceCwd(),
+										workspaceRoot,
+										onCwdChange: updateWorkspaceCwd,
+										askUser,
+										onStateChange: agentProgressPersistence.flush,
+										onAgentProgress: agentProgressPersistence.schedule,
+										onDetachedWork: (kind, id) => {
+											if (kind === 'bash' && goalOwner)
+												backgroundGoalGraphs.set(id, workGraphId);
+											releaseForegroundForDetachedWork();
+										},
+										onDetachedComplete: queueDetachedCompletion,
+										backgroundOwner: autonomousTurn
+											? 'goal'
+											: loopTurn
+												? 'loop'
+												: 'user',
+									}),
+								),
+							)
+						: null;
+					callLoop: for (const [index, call] of calls.entries()) {
+						// Render the row BEFORE execution so bash output streams live
+						// into the transcript tail (parity: streaming tool rows).
+						const detail = toolDisplayDetail(call);
+						const callStartedAt = allReadOnly ? batchStartedAt : Date.now();
+						// B9/C6: the read-only PARALLEL batch pre-appends every
+						// running row BEFORE execution so the compact tally streams
+						// live (the rows above already exist for that path).
+						if (!allReadOnly) {
+							appendMessage({
+								role: 'tool',
+								content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
+								running: true,
+								toolId: call.id,
+								brief: toolCallBrief(briefText, index, priorRoundBriefed),
+								tool: {
+									name: call.name,
+									detail,
+									output: '',
+									args: call.arguments,
+								},
+							});
+						}
+						if (declined) {
 							const declinedContent = 'Declined by user.';
 							toolResults.push({
 								tool_call_id: call.id,
@@ -3653,364 +4173,549 @@ export function App() {
 							);
 							continue;
 						}
-					}
-					const toolResult =
-						parallelResults?.[index] ??
-						(await executeTool(call, {
-							sessionId: sessionId(),
-							onProgress: content =>
-								setLiveOutputs(prev => ({...prev, [call.id]: content})),
-							signal: controller.signal,
-							cwd: workspaceCwd(),
-							workspaceRoot,
-							askUser,
-							onStateChange: persist,
-							onDetachedWork: releaseForegroundForDetachedWork,
-							onDetachedComplete: queueDetachedCompletion,
-							backgroundOwner: autonomousTurn
-								? 'goal'
-								: loopTurn
-									? 'loop'
-									: 'user',
-							...(preprocessedArgs ? {preprocessedArgs} : {}),
-							onCwdChange: next => {
-								updateWorkspaceCwd(next);
-								persist();
-							},
-						}));
-					if (call.arguments._malformed) {
-						// B7: malformed arguments → corrective nudge so the model
-						// retries with valid JSON (self-correction loop).
-						appendInfo(
-							`Auto-recovered malformed tool call: ${call.name}, retrying with valid arguments.`,
-						);
-						toolMessages.push({
-							role: 'user',
-							content:
-								`Your tool call to ${call.name} had invalid JSON arguments ` +
-								`(${call.rawArguments}). Please retry with valid JSON.`,
-						});
-					}
-					toolResults.push(toolResult);
-					toolMessages.push({
-						role: 'tool',
-						content: toolResult.content,
-						tool_call_id: toolResult.tool_call_id,
-					});
-					// Fast tools settle before the next paint: an MCP stdio
-					// round trip can be ~1ms while the renderer frames at
-					// ~16ms, so without a floor the row appears already
-					// green with output and the grey running glyph is never
-					// seen. Hold the RUNNING state until the floor elapses
-					// (parity: the startup loader's MIN_LOAD_MS floor).
-					const executedAt = Date.now();
-					const runningRemaining = toolRunningRemainingMs(
-						callStartedAt,
-						executedAt,
-					);
-					if (runningRemaining > 0) {
-						await new Promise(resolve => setTimeout(resolve, runningRemaining));
-					}
-					setMessages(prev =>
-						prev.map(message =>
-							message.toolId === call.id
-								? {
-										...message,
-										running: false,
-										tool: {
-											...message.tool!,
-											output: toolResult.content,
-											args: toolResult.displayArgs ?? message.tool!.args,
-										},
-										toolStats: {
-											durationSec: Math.max(
-												0,
-												(executedAt - callStartedAt) / 1000,
-											),
-											toolCalls: calls.length,
-										},
-									}
-								: message,
-						),
-					);
-					setLiveOutputs(prev => {
-						const next = {...prev};
-						delete next[call.id];
-						return next;
-					});
-					if (detachedWorkStarted) {
-						// Completion notification resumes work with exact output. End this
-						// turn now instead of polling or holding foreground ownership.
-						break callLoop;
-					}
-				}
-
-				// Detached work ends the current turn immediately. A model batch can
-				// contain more calls after that detached call, but those calls were
-				// never executed and therefore have no tool result. Persisting the
-				// original full declaration creates an invalid provider history:
-				// `tool_calls` contains orphaned calls, which breaks resume with
-				// "No tool output found". Keep only declarations with results.
-				const completedCallCount = toolMessages.filter(
-					message => message.role === 'tool',
-				).length;
-				const completedCalls = calls.slice(0, completedCallCount);
-				const assistantToolMsg: ChatMessageLike = {
-					role: 'assistant',
-					content: result.text,
-					tool_calls: completedCalls.map((call: MockToolCall) => ({
-						id: call.id,
-						name: call.name,
-						arguments: call.rawArguments,
-					})),
-				};
-				history = [...history, assistantToolMsg, ...toolMessages];
-				refreshContextPercent();
-				if (detachedWorkStarted) {
-					// Finally clears busy while detached process keeps running.
-					break turnLoop;
-				}
-				// Codex true mid-turn continuation: compact after tool output,
-				// replace local history, then sample again in this SAME loop.
-				if (shouldAutoCompactHistory(history)) {
-					history = await tryAutoCompactHistory(history);
-				}
-				// B4: cap the provider context to the newest N messages.
-				history = capMessages(history, maxMessages());
-				// B21: auto-diagnostics after a tool turn, run the LSP
-				// diagnostics tool and inject the summary before recursion.
-				// ONLY when there are FINDINGS: a clean "no issues" pass must
-				// not spam the chat with a useless row or waste provider
-				// tokens (parity: the original only surfaces findings).
-				try {
-					const diagnostics = await executeTool(
-						{
-							id: 'call_diag',
-							name: 'lsp_get_diagnostics',
-							arguments: {},
-							rawArguments: '{}',
-						},
-						{},
-					);
-					const issues = /(\d+)\s+(?:issue|error|problem)s?/i.exec(
-						diagnostics.content,
-					);
-					const count = issues ? Number(issues[1]) : 0;
-					setDiagnosticsCount(count);
-					if (count > 0) {
-						appendInfo(firstLine(diagnostics.content, 120));
-						history = [
-							...history,
+						// B15: steering tool-call constraints block before dispatch.
+						const toolConstraint = evaluateToolConstraint(
+							call.name,
+							steeringRef,
 							{
-								role: 'user',
-								content: `<diagnostics-summary>\n${diagnostics.content}\n</diagnostics-summary>`,
+								intent: classifyIntent(value),
+								model: activeEndpoint().model,
+								budgetTurns: round,
+								totalBudget: TOOL_LOOP_BUDGET,
+								backgroundTasksRunning: activeBgCount() > 0,
 							},
-						];
-					}
-				} catch {
-					// diagnostics are best-effort; never block the loop
-				}
-				setStreaming('');
-				setReasoning('');
-				thinkingStartedAt = 0;
-				recordUsage(result.usage);
-			}
-			// Session-management parity: the persisted context MUST mirror
-			// the final provider history (including every tool round). The
-			// old code only synced after a TEXT turn, so sessions that ended
-			// on a tool turn saved a SHORTER context, resuming them sent a
-			// different prefix and missed the LLM cache on the first turn.
-			setContext(history);
-			refreshContextPercent();
-			// Compaction check AFTER the whole turn (tool rounds included) —
-			// the text branch checks it too, but a tool-heavy turn grows the
-			// history past the message cap without ever hitting a text turn.
-			// Completion line also shows after TOOL-only turns (the loop can
-			// end on tools with no final text round, the text branch above
-			// already set it; this covers the other path).
-			if (!completionMessage()) {
-				const waitingMessage = pendingBackgroundWorkMessage();
-				if (waitingMessage) {
-					setCompletionMessage(waitingMessage);
-					completionPopupController.cancel();
-				} else {
-					setCompletionMessage(
-						`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
-							(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
-					);
-					// COMPLETED attention modal (tool-only turn path): arm the
-					// idle window exactly like the text-turn completion.
-					completionPopupController.arm();
-				}
-			}
-		} catch (error) {
-			if (error instanceof Error && error.name === 'AbortError') {
-				completionInterrupted = true;
-				// ESC interrupt: commit the partial stream AND the turn's
-				// history to the provider context (B20). `/clear` aborts
-				// without the flag and leaves the wiped state.
-				if (watchdogRef) {
-					// B5: the within-turn watchdog aborted, surface the
-					// InnerDaemon audit row and commit the partial.
-					watchdogRef = false;
-					const partial = streaming();
-					if (partial.trim()) {
-						appendAssistantMessage(partial);
-					}
-					setContext(interruptedContext(history, partial));
-					appendInfo('Interrupted by watchdog.');
-					appendInfo(
-						formatInnerDaemonRow('watchdog', 'timeout', {
-							intent: classifyIntent(value),
-							model: activeEndpoint().model,
-							budgetTurns: 0,
-							totalBudget: TOOL_LOOP_BUDGET,
-							backgroundTasksRunning: activeBgCount() > 0,
-						}),
-					);
-				} else if (interruptedRef) {
-					interruptedRef = false;
-					const partial = streaming();
-					const partialReasoning = reasoning();
-					if (partial.trim() || partialReasoning.trim()) {
-						appendAssistantMessage(partial, {
-							reasoning: partialReasoning.trim() || undefined,
-							durationSec: thinkingSeconds(
-								thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
-								Date.now(),
-							),
+						);
+						if (toolConstraint) {
+							const reason =
+								`Blocked by steering rule ${toolConstraint.rule.id}: ` +
+								`${toolConstraint.rule.message ?? 'constraint'}`;
+							appendInfo(
+								formatInnerDaemonRow(toolConstraint.rule.id, 'block', {
+									intent: toolConstraint.intent,
+									model: activeEndpoint().model,
+									budgetTurns: round,
+									totalBudget: TOOL_LOOP_BUDGET,
+									backgroundTasksRunning: activeBgCount() > 0,
+								}),
+							);
+							toolResults.push({tool_call_id: call.id, content: reason});
+							toolMessages.push({
+								role: 'tool',
+								content: reason,
+								tool_call_id: call.id,
+							});
+							setMessages(prev =>
+								prev.map(message =>
+									message.toolId === call.id
+										? {
+												...message,
+												running: false,
+												tool: {...message.tool!, output: reason},
+											}
+										: message,
+								),
+							);
+							continue;
+						}
+						// D7/D3: profile/plan availability.
+						const availability = toolAvailability(
+							call.name,
+							toolProfile(),
+							mode(),
+							activeEndpoint().model,
+						);
+						if (!availability.available) {
+							const reason = `Tool ${displayToolName(call.name)} ${availability.reason}.`;
+							toolResults.push({tool_call_id: call.id, content: reason});
+							toolMessages.push({
+								role: 'tool',
+								content: reason,
+								tool_call_id: call.id,
+							});
+							setMessages(prev =>
+								prev.map(message =>
+									message.toolId === call.id
+										? {
+												...message,
+												running: false,
+												tool: {...message.tool!, output: reason},
+											}
+										: message,
+								),
+							);
+							continue;
+						}
+						// B16: approval gating.
+						const preprocessedArgs = !isReadOnlyTool(call.name)
+							? await preprocessToolInput(call)
+							: undefined;
+						const approvalCall = preprocessedArgs
+							? {...call, arguments: preprocessedArgs}
+							: call;
+						if (
+							requiresCallApproval(
+								approvalCall,
+								mode(),
+								activeEndpoint().alwaysAllow ?? [],
+								workspaceCwd(),
+								workspaceRoot,
+							)
+						) {
+							const approved = await approvalGate(
+								displayToolName(call.name),
+								detail,
+							);
+							reportHerdrAgent('working', {
+								message: completionSummary || 'Working',
+								sessionId: sessionId(),
+							});
+							if (!approved) {
+								declined = true; // decline cancels the REST
+								const declinedContent = 'Declined by user.';
+								toolResults.push({
+									tool_call_id: call.id,
+									content: declinedContent,
+								});
+								toolMessages.push({
+									role: 'tool',
+									content: declinedContent,
+									tool_call_id: call.id,
+								});
+								setMessages(prev =>
+									prev.map(message =>
+										message.toolId === call.id
+											? {
+													...message,
+													running: false,
+													tool: {...message.tool!, output: declinedContent},
+												}
+											: message,
+									),
+								);
+								continue;
+							}
+						}
+						const toolResult =
+							parallelResults?.[index] ??
+							(await executeTool(call, {
+								sessionId: sessionId(),
+								workGraphId,
+								onProgress: content =>
+									setLiveOutputs(prev => ({...prev, [call.id]: content})),
+								signal: controller.signal,
+								cwd: workspaceCwd(),
+								workspaceRoot,
+								askUser,
+								onStateChange: agentProgressPersistence.flush,
+								onAgentProgress: agentProgressPersistence.schedule,
+								onDetachedWork: (kind, id) => {
+									if (kind === 'bash' && goalOwner)
+										backgroundGoalGraphs.set(id, workGraphId);
+									releaseForegroundForDetachedWork();
+								},
+								onDetachedComplete: queueDetachedCompletion,
+								backgroundOwner: autonomousTurn
+									? 'goal'
+									: loopTurn
+										? 'loop'
+										: 'user',
+								...(preprocessedArgs ? {preprocessedArgs} : {}),
+								onCwdChange: next => {
+									updateWorkspaceCwd(next);
+									persist();
+								},
+							}));
+						if (call.arguments._malformed) {
+							// B7: malformed arguments → corrective nudge so the model
+							// retries with valid JSON (self-correction loop).
+							appendInfo(
+								`Auto-recovered malformed tool call: ${call.name}, retrying with valid arguments.`,
+							);
+							toolMessages.push({
+								role: 'user',
+								content:
+									`Your tool call to ${call.name} had invalid JSON arguments ` +
+									`(${call.rawArguments}). Please retry with valid JSON.`,
+							});
+						}
+						toolResults.push(toolResult);
+						if (
+							['write_tasks', 'task_update', 'task_create'].includes(
+								resolveToolName(call.name),
+							) &&
+							!toolResult.content.startsWith('Error:')
+						) {
+							taskToolRanAfterCloseoutDraft = true;
+						}
+						toolMessages.push({
+							role: 'tool',
+							content: toolResult.content,
+							tool_call_id: toolResult.tool_call_id,
 						});
-						refreshContextPercent();
+						// Fast tools settle before the next paint: an MCP stdio
+						// round trip can be ~1ms while the renderer frames at
+						// ~16ms, so without a floor the row appears already
+						// green with output and the grey running glyph is never
+						// seen. Hold the RUNNING state until the floor elapses
+						// (parity: the startup loader's MIN_LOAD_MS floor).
+						const executedAt = Date.now();
+						const runningRemaining = toolRunningRemainingMs(
+							callStartedAt,
+							executedAt,
+						);
+						if (runningRemaining > 0) {
+							await new Promise(resolve =>
+								setTimeout(resolve, runningRemaining),
+							);
+						}
+						setMessages(prev =>
+							prev.map(message =>
+								message.toolId === call.id
+									? {
+											...message,
+											running: false,
+											tool: {
+												...message.tool!,
+												output: toolResult.content,
+												args: toolResult.displayArgs ?? message.tool!.args,
+											},
+											toolStats: {
+												durationSec: Math.max(
+													0,
+													(executedAt - callStartedAt) / 1000,
+												),
+												toolCalls: calls.length,
+											},
+										}
+									: message,
+							),
+						);
+						setLiveOutputs(prev => {
+							const next = {...prev};
+							delete next[call.id];
+							return next;
+						});
+						if (detachedWorkStarted) {
+							// Completion notification resumes work with exact output. End this
+							// turn now instead of polling or holding foreground ownership.
+							break callLoop;
+						}
 					}
-					// Mid-tool-loop or reasoning-only interrupts stream no
-					// text — the USER MESSAGE still belongs in context, or
-					// the next request loses the turn entirely.
-					setContext(interruptedContext(history, partial));
-					appendError('Interrupted by user.');
+
+					// Detached work ends the current turn immediately. A model batch can
+					// contain more calls after that detached call, but those calls were
+					// never executed and therefore have no tool result. Persisting the
+					// original full declaration creates an invalid provider history:
+					// `tool_calls` contains orphaned calls, which breaks resume with
+					// "No tool output found". Keep only declarations with results.
+					const completedCallCount = toolMessages.filter(
+						message => message.role === 'tool',
+					).length;
+					const completedCalls = calls.slice(0, completedCallCount);
+					const assistantToolMsg: ChatMessageLike = {
+						role: 'assistant',
+						content: result.text,
+						tool_calls: completedCalls.map((call: MockToolCall) => ({
+							id: call.id,
+							name: call.name,
+							arguments: call.rawArguments,
+						})),
+					};
+					history = [...history, assistantToolMsg, ...toolMessages];
+					commitTurnContext(history);
+					persist();
+					refreshContextPercent();
+					if (shouldReleaseDetachedAgentBatch(completedCalls, toolResults)) {
+						releaseForegroundForDetachedWork();
+					}
+					if (detachedWorkStarted) {
+						// Finally clears busy while detached process keeps running.
+						break turnLoop;
+					}
+					// Codex true mid-turn continuation: compact after tool output,
+					// replace local history, then sample again in this SAME loop.
+					if (shouldAutoCompactHistory(history)) {
+						history = await compactTurnContext(history);
+					}
+					// B4: cap the provider context to the newest N messages.
+					history = capMessages(history, maxMessages());
+					// B21: auto-diagnostics after a tool turn, run the LSP
+					// diagnostics tool and inject the summary before recursion.
+					// ONLY when there are FINDINGS: a clean "no issues" pass must
+					// not spam the chat with a useless row or waste provider
+					// tokens (parity: the original only surfaces findings).
+					try {
+						const diagnostics = await executeTool(
+							{
+								id: 'call_diag',
+								name: 'lsp_get_diagnostics',
+								arguments: {},
+								rawArguments: '{}',
+							},
+							{},
+						);
+						const issues = /(\d+)\s+(?:issue|error|problem)s?/i.exec(
+							diagnostics.content,
+						);
+						const count = issues ? Number(issues[1]) : 0;
+						setDiagnosticsCount(count);
+						if (count > 0) {
+							appendInfo(firstLine(diagnostics.content, 120));
+							history = [
+								...history,
+								{
+									role: 'user',
+									content: `<diagnostics-summary>\n${diagnostics.content}\n</diagnostics-summary>`,
+								},
+							];
+						}
+					} catch {
+						// diagnostics are best-effort; never block the loop
+					}
+					setStreaming('');
+					setReasoning('');
+					thinkingStartedAt = 0;
+					recordTurnUsage(result.usage);
 				}
-				return;
+				// Session-management parity: the persisted context MUST mirror
+				// the final provider history (including every tool round). The
+				// old code only synced after a TEXT turn, so sessions that ended
+				// on a tool turn saved a SHORTER context, resuming them sent a
+				// different prefix and missed the LLM cache on the first turn.
+				commitTurnContext(history);
+				refreshContextPercent();
+				// Compaction check AFTER the whole turn (tool rounds included) —
+				// the text branch checks it too, but a tool-heavy turn grows the
+				// history past the message cap without ever hitting a text turn.
+				// Completion line also shows after TOOL-only turns (the loop can
+				// end on tools with no final text round, the text branch above
+				// already set it; this covers the other path).
+				if (!completionMessage()) {
+					const waitingMessage = pendingBackgroundWorkMessage();
+					if (waitingMessage) {
+						setCompletionMessage(waitingMessage);
+						completionPopupController.cancel();
+					} else {
+						setCompletionMessage(
+							`✦ Worked for a ${getRandomAdjective()} ${formatElapsedTime(startedAt)}.` +
+								(formatCacheHitLabel(cacheStats(lastUsage())) ?? ''),
+						);
+						// COMPLETED attention modal (tool-only turn path): arm the
+						// idle window exactly like the text-turn completion.
+						completionPopupController.arm();
+					}
+				}
+			} catch (error) {
+				if (error instanceof Error && error.name === 'AbortError') {
+					completionInterrupted = true;
+					// ESC interrupt: commit the partial stream AND the turn's
+					// history to the provider context (B20). `/clear` aborts
+					// without the flag and leaves the wiped state.
+					if (watchdogRef) {
+						// B5: the within-turn watchdog aborted, surface the
+						// InnerDaemon audit row and commit the partial.
+						watchdogRef = false;
+						const partial = streaming();
+						if (partial.trim()) {
+							appendAssistantMessage(partial);
+						}
+						commitTurnContext(interruptedContext(history, partial));
+						appendInfo('Interrupted by watchdog.');
+						appendInfo(
+							formatInnerDaemonRow('watchdog', 'timeout', {
+								intent: classifyIntent(value),
+								model: activeEndpoint().model,
+								budgetTurns: 0,
+								totalBudget: TOOL_LOOP_BUDGET,
+								backgroundTasksRunning: activeBgCount() > 0,
+							}),
+						);
+					} else if (interruptedRef) {
+						interruptedRef = false;
+						const partial = streaming();
+						const partialReasoning = reasoning();
+						if (partial.trim() || partialReasoning.trim()) {
+							appendAssistantMessage(partial, {
+								reasoning: partialReasoning.trim() || undefined,
+								durationSec: thinkingSeconds(
+									thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
+									Date.now(),
+								),
+							});
+							refreshContextPercent();
+						}
+						// Mid-tool-loop or reasoning-only interrupts stream no
+						// text — the USER MESSAGE still belongs in context, or
+						// the next request loses the turn entirely.
+						commitTurnContext(interruptedContext(history, partial));
+						appendError('Interrupted by user.');
+					}
+					return;
+				}
+				completionFailed = true;
+				completionSummary =
+					(error instanceof Error ? error.message : String(error))
+						.replace(/\s+/g, ' ')
+						.trim()
+						.slice(0, 180) || 'Task failed';
+				// Provider failures are resumable interruptions too. Commit the
+				// current turn, including its latest user prompt, before the next
+				// prompt arrives; otherwise continuation runs against the previous
+				// completed turn and silently skips this one.
+				const partial = streaming();
+				const partialReasoning = reasoning();
+				if (partial.trim() || partialReasoning.trim()) {
+					appendAssistantMessage(partial, {
+						reasoning: partialReasoning.trim() || undefined,
+						durationSec: thinkingSeconds(
+							thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
+							Date.now(),
+						),
+					});
+				}
+				commitTurnContext(interruptedContext(history, partial));
+				appendError(error instanceof Error ? error.message : String(error));
+			} finally {
+				queryActiveRef = false;
+				clearInterval(turnTimer);
+				if (watchdogTimer) clearTimeout(watchdogTimer);
+				// SETTLE ANY STILL-RUNNING TOOL ROWS. A turn can end with a tool
+				// message still `running:true` — Esc interrupt / watchdog /
+				// provider error mid-tool (runBash keeps streaming output into
+				// liveOutputs after the turn dies). Left alone it becomes a
+				// GHOST: invisible while idle (the settled memo skips running
+				// rows, the live region is empty), then it RESURFACES in the
+				// live region during the NEXT turn — stacked next to the new
+				// turn's identical command, the "same bash printed twice while
+				// running" the user saw. Settle them with whatever output
+				// streamed so the transcript is honest and no ghost survives.
+				setMessages(prev => settleRunningToolRows(prev, liveOutputs()));
+				// CLEAR the live-output cache: liveOutputs persists tool output
+				// across turns (the pump writes to it, liveToolRows reads it).
+				// Settling consumed it into the transcript; clearing it prevents
+				// STALE output from bleeding into the NEXT turn's identical tool
+				// (a brief live-region window where the new message reads the old
+				// tool's output from liveOutputs = the "same bash printed twice
+				// while running" the user saw). Done after the settle so the
+				// settled row's output is captured first.
+				setLiveOutputs({});
+				if (foregroundTurnOwner === turnId) {
+					setCancelling(false);
+					setRunning(false);
+					setBusy(false);
+					setStreaming('');
+					setReasoning('');
+					setThinkingActive(false);
+					thinkingStartedAt = 0;
+					setThinkingElapsed(0);
+				}
+				void runHooks({event: 'Stop', data: {interrupted: interruptedRef}});
+				if (currentGoal && goalMatchesOwner(currentGoal, goalOwner)) {
+					let nextGoal: SessionGoal = {
+						...currentGoal,
+						timeUsedSeconds:
+							currentGoal.timeUsedSeconds +
+							Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+						updatedAt: Date.now(),
+					};
+					if (
+						nextGoal.status === 'active' &&
+						nextGoal.maxIterations &&
+						(nextGoal.iteration ?? 0) >= nextGoal.maxIterations
+					) {
+						nextGoal = {...nextGoal, status: 'iteration-limited'};
+					}
+					setCurrentGoal(nextGoal);
+				}
+				persist();
+				const terminalGoalState = goalMatchesOwner(currentGoal, goalOwner)
+					? currentGoal?.status
+					: undefined;
+				const completionBlocked = terminalGoalState === 'blocked';
+				const goalWillContinue = currentGoal?.status === 'active';
+				const afterTurnWillContinue =
+					!loopTurn &&
+					loopJobsRef.some(job => job.cronExpression === '@after-turn');
+				const queuedWillContinue = pendingQueue().length > 0;
+				const willContinue =
+					!completionFailed &&
+					!completionInterrupted &&
+					!interruptedRef &&
+					(goalWillContinue || afterTurnWillContinue || queuedWillContinue);
+				reportHerdrAgent(
+					completionBlocked ? 'blocked' : willContinue ? 'working' : 'idle',
+					{
+						message: completionBlocked
+							? 'Goal needs input'
+							: completionFailed
+								? 'Task failed'
+								: completionInterrupted
+									? 'Task interrupted'
+									: willContinue
+										? 'Continuing queued work'
+										: 'Task complete',
+						sessionId: sessionId(),
+					},
+				);
+				const waitingForBackgroundWork = Boolean(
+					pendingBackgroundWorkMessage(),
+				);
+				const shouldNotify =
+					!waitingForBackgroundWork &&
+					shouldNotifyTurnComplete({
+						interrupted: completionInterrupted || interruptedRef,
+					});
+				if (shouldNotify) {
+					notifyTaskComplete({
+						title: completionFailed
+							? 'BoboNyo task failed'
+							: terminalGoalState === 'blocked'
+								? 'BoboNyo needs input'
+								: terminalGoalState === 'budget-limited'
+									? 'BoboNyo goal paused'
+									: willContinue
+										? 'BoboNyo step finished'
+										: 'BoboNyo finished',
+						body: completionSummary || 'Task complete',
+					});
+				}
+				if (!completionFailed && !completionInterrupted && !interruptedRef) {
+					if (!loopTurn) fireAfterTurnJobs();
+					if (
+						currentGoal?.status === 'active' &&
+						goalMatchesOwner(currentGoal, goalOwner) &&
+						(autonomousTurn || taskTurn || !systemTurn)
+					)
+						queueGoalContinuation();
+				}
+				// A detached task may complete while this turn still holds
+				// queryActiveRef. Its first queue attempt correctly waits; retry after
+				// cleanup releases the gate so the completion cannot strand the turn.
+				queueMicrotask(processQueue);
 			}
-			completionFailed = true;
-			completionSummary =
-				(error instanceof Error ? error.message : String(error))
-					.replace(/\s+/g, ' ')
-					.trim()
-					.slice(0, 180) || 'Task failed';
-			appendError(error instanceof Error ? error.message : String(error));
 		} finally {
-			queryActiveRef = false;
-			clearInterval(turnTimer);
-			if (watchdogTimer) clearTimeout(watchdogTimer);
-			// SETTLE ANY STILL-RUNNING TOOL ROWS. A turn can end with a tool
-			// message still `running:true` — Esc interrupt / watchdog /
-			// provider error mid-tool (runBash keeps streaming output into
-			// liveOutputs after the turn dies). Left alone it becomes a
-			// GHOST: invisible while idle (the settled memo skips running
-			// rows, the live region is empty), then it RESURFACES in the
-			// live region during the NEXT turn — stacked next to the new
-			// turn's identical command, the "same bash printed twice while
-			// running" the user saw. Settle them with whatever output
-			// streamed so the transcript is honest and no ghost survives.
-			setMessages(prev => settleRunningToolRows(prev, liveOutputs()));
-			// CLEAR the live-output cache: liveOutputs persists tool output
-			// across turns (the pump writes to it, liveToolRows reads it).
-			// Settling consumed it into the transcript; clearing it prevents
-			// STALE output from bleeding into the NEXT turn's identical tool
-			// (a brief live-region window where the new message reads the old
-			// tool's output from liveOutputs = the "same bash printed twice
-			// while running" the user saw). Done after the settle so the
-			// settled row's output is captured first.
-			setLiveOutputs({});
-			if (foregroundTurnOwner === turnId) {
-				setCancelling(false);
-				setRunning(false);
-				setBusy(false);
-				setStreaming('');
-				setReasoning('');
-				setThinkingActive(false);
-				thinkingStartedAt = 0;
-				setThinkingElapsed(0);
-			}
-			void runHooks({event: 'Stop', data: {interrupted: interruptedRef}});
-			if (currentGoal && autonomousTurn) {
-				let nextGoal: SessionGoal = {
-					...currentGoal,
-					timeUsedSeconds:
-						currentGoal.timeUsedSeconds +
-						Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
-					updatedAt: Date.now(),
-				};
-				if (
-					nextGoal.status === 'active' &&
-					nextGoal.maxIterations &&
-					(nextGoal.iteration ?? 0) >= nextGoal.maxIterations
-				) {
-					nextGoal = {...nextGoal, status: 'iteration-limited'};
+			// Include setup/compaction failures, not just model-loop exits.
+			// A replaced session or newer turn invalidates this signal owner.
+			if (checklistOwner() === turnChecklistOwner) {
+				if (graphContexts === turnContextStore) {
+					turnContextStore.commitChecklist(contextLease, tasks());
+					setTasks(turnContextStore.latestChecklist() ?? []);
 				}
-				setCurrentGoal(nextGoal);
+				setChecklistOwner(undefined);
+				persist();
 			}
-			persist();
-			goalAccountingTurnRef = false;
-			const terminalGoalState =
-				autonomousTurn && currentGoal ? currentGoal.status : undefined;
-			const completionBlocked = terminalGoalState === 'blocked';
-			const goalWillContinue = currentGoal?.status === 'active';
-			const afterTurnWillContinue =
-				!loopTurn &&
-				loopJobsRef.some(job => job.cronExpression === '@after-turn');
-			const queuedWillContinue = pendingQueue().length > 0;
-			const willContinue =
-				!completionFailed &&
-				!completionInterrupted &&
-				!interruptedRef &&
-				(goalWillContinue || afterTurnWillContinue || queuedWillContinue);
-			reportHerdrAgent(
-				completionBlocked ? 'blocked' : willContinue ? 'working' : 'idle',
-				{
-					message: completionBlocked
-						? 'Goal needs input'
-						: completionFailed
-							? 'Task failed'
-							: completionInterrupted
-								? 'Task interrupted'
-								: willContinue
-									? 'Continuing queued work'
-									: 'Task complete',
-					sessionId: sessionId(),
-				},
-			);
-			const waitingForBackgroundWork = Boolean(pendingBackgroundWorkMessage());
-			const shouldNotify =
-				!waitingForBackgroundWork &&
-				shouldNotifyTurnComplete({
-					interrupted: completionInterrupted || interruptedRef,
-				});
-			if (shouldNotify) {
-				notifyTaskComplete({
-					title: completionFailed
-						? 'BoboNyo task failed'
-						: terminalGoalState === 'blocked'
-							? 'BoboNyo needs input'
-							: terminalGoalState === 'budget-limited'
-								? 'BoboNyo goal paused'
-								: willContinue
-									? 'BoboNyo step finished'
-									: 'BoboNyo finished',
-					body: completionSummary || 'Task complete',
-				});
+			if (foregroundTurnOwner === turnId) {
+				queryActiveRef = false;
+				foregroundTurnOwner = 0;
+				queueMicrotask(processQueue);
 			}
-			if (!completionFailed && !completionInterrupted && !interruptedRef) {
-				if (!loopTurn) fireAfterTurnJobs();
-				if (currentGoal?.status === 'active') queueGoalContinuation();
-			}
-			// A detached task may complete while this turn still holds
-			// queryActiveRef. Its first queue attempt correctly waits; retry after
-			// cleanup releases the gate so the completion cannot strand the turn.
-			queueMicrotask(processQueue);
 		}
 	};
 
-	const recordUsage = (usage: Record<string, unknown> | undefined) => {
+	const recordUsage = (
+		usage: Record<string, unknown> | undefined,
+		owner?: GoalOwner,
+	) => {
 		const snapshot = usageSignal(usage);
 		if (!snapshot) return;
 		setLastUsage(snapshot);
@@ -4029,7 +4734,7 @@ export function App() {
 		// survives restarts, unlike the session-scoped history above.
 		const updated = recordProviderUsage(activeEndpoint().baseUrl, snapshot);
 		if (updated) setProviderUsage(updated);
-		if (currentGoal && goalAccountingTurnRef) {
+		if (currentGoal && goalMatchesOwner(currentGoal, owner)) {
 			const next: SessionGoal = {
 				...currentGoal,
 				tokensUsed: currentGoal.tokensUsed + (snapshot.total_tokens ?? 0),
@@ -4131,6 +4836,8 @@ export function App() {
 	const compactHistory = async (
 		ctx: ChatMessageLike[],
 		instructions = '',
+		commitScopedContext?: (history: ChatMessageLike[]) => void,
+		backgroundContext = false,
 	): Promise<ChatMessageLike[]> => {
 		setCompacting(true);
 		try {
@@ -4160,15 +4867,15 @@ export function App() {
 				cwd: workspaceCwd(),
 				workspaceRoot,
 				transcriptPath,
-				tasks: tasks(),
-				...(currentGoal ? {goal: currentGoal} : {}),
-				loopJobs: loopJobsRef,
-				queuedPrompts: pendingQueue().map(item => ({
+				tasks: backgroundContext ? [] : tasks(),
+				...(currentGoal && !backgroundContext ? {goal: currentGoal} : {}),
+				loopJobs: backgroundContext ? [] : loopJobsRef,
+				queuedPrompts: (backgroundContext ? [] : pendingQueue()).map(item => ({
 					value: item.value,
 					...(item.source ? {source: item.source} : {}),
 				})),
-				agents: activeAgentRuns(),
-				messages: messages(),
+				agents: backgroundContext ? [] : activeAgentRuns(),
+				messages: backgroundContext ? [] : messages(),
 				context: ctx,
 				availableSkills: loadSkills().map(skill => ({
 					name: skill.name,
@@ -4216,12 +4923,19 @@ export function App() {
 				postCompactTokens,
 				postCompactLimit,
 			);
-			setContext(compacted);
-			setMessages(
-				compactedDisplayMessages(messages(), installedPreservedTurns),
-			);
-			setRetrySnapshot(null);
-			resetFileUndoStack();
+			if (commitScopedContext) {
+				commitScopedContext(compacted);
+			} else {
+				graphContexts.reviseLatest(compacted);
+				setContext(compacted);
+			}
+			if (!backgroundContext) {
+				setMessages(
+					compactedDisplayMessages(messages(), installedPreservedTurns),
+				);
+				setRetrySnapshot(null);
+				resetFileUndoStack();
+			}
 			appendInfo(
 				`Context compacted via LLM summary (${reduction}% reduction, ` +
 					`${summary.split('\n').length} line summary, ${postCompactTokens} estimated tokens).`,
@@ -4246,9 +4960,16 @@ export function App() {
 	};
 	const tryAutoCompactHistory = async (
 		ctx: ChatMessageLike[],
+		commitScopedContext?: (history: ChatMessageLike[]) => void,
+		backgroundContext = false,
 	): Promise<ChatMessageLike[]> => {
 		try {
-			return await compactHistory(ctx);
+			return await compactHistory(
+				ctx,
+				'',
+				commitScopedContext,
+				backgroundContext,
+			);
 		} catch (error) {
 			appendWarning(
 				`Auto-compaction failed; continuing current turn: ${error instanceof Error ? error.message : String(error)}`,
@@ -4269,6 +4990,10 @@ export function App() {
 		}
 		try {
 			await compactHistory(ctx, instructions);
+			if (currentGoal?.status === 'active') {
+				appendInfo('Compaction preserved active goal; resuming goal work.');
+				queueMicrotask(() => queueGoalContinuation());
+			}
 		} catch (error) {
 			appendError(
 				`Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -4287,6 +5012,7 @@ export function App() {
 			return;
 		}
 		setMessages(snapshot.messages);
+		graphContexts = new GraphContextStore();
 		setContext(snapshot.context);
 		setInput('');
 		void submit(snapshot.prompt);
@@ -4308,6 +5034,7 @@ export function App() {
 		// Undo starts a new exchange: stop the COMPLETED popup.
 		completionPopupController.cancel();
 		setMessages(keptMessages);
+		graphContexts = new GraphContextStore();
 		setContext(keptContext);
 		// `/undo` is conversation-only. `/rewind` is the explicit destructive
 		// filesystem option, so ordinary undo never changes files.
@@ -4340,6 +5067,7 @@ export function App() {
 		}
 		completionPopupController.cancel();
 		setMessages(result.keptMessages);
+		graphContexts = new GraphContextStore();
 		setContext(result.keptContext);
 		let restored = 0;
 		if (restoreFiles) restored = rewindFileExchangeAt(userIndex).length;
@@ -4367,7 +5095,12 @@ export function App() {
 		}
 		const candidates = messages()
 			.map((message, index) => ({message, index}))
-			.filter(({message}) => message.role === 'user' && !message.error);
+			.filter(
+				({message}) =>
+					message.role === 'user' &&
+					!message.error &&
+					!message.submittedCommand,
+			);
 		if (candidates.length === 0) {
 			appendInfo('Nothing to rewind yet.');
 			return;
@@ -4420,6 +5153,7 @@ export function App() {
 		}
 		const forked = forkSession(currentSession);
 		currentSession = forked;
+		graphContexts = new GraphContextStore(forked.graphContexts);
 		setSessionId(forked.id);
 		setSessionName(forked.name);
 		setCompletionTone('success');
@@ -4449,6 +5183,7 @@ export function App() {
 			const forked = forkSession(currentSession);
 			const pane = forkInHerdrPane(
 				forked.id,
+				mode(),
 				normalizedSplit as HerdrSplit,
 				process.cwd(),
 			);
@@ -4515,6 +5250,7 @@ export function App() {
 				name.trim(),
 				messages().filter(message => message.kind !== 'info'),
 				context(),
+				graphContexts.snapshot(),
 			);
 			appendInfo(`Checkpoint "${saved}" saved (${sessionId()}).`);
 			return;
@@ -4552,6 +5288,7 @@ export function App() {
 			return;
 		}
 		setMessages(data.messages);
+		graphContexts = new GraphContextStore(data.graphContexts);
 		setContext(data.context);
 		persist();
 		appendInfo(
@@ -4587,7 +5324,7 @@ export function App() {
 			})),
 		);
 	const tasksList = () => {
-		const current = tasks();
+		const current = selectedTasks();
 		openSettingsList(
 			'Tasks',
 			current.length === 0
@@ -4737,6 +5474,13 @@ export function App() {
 		);
 
 	const usage = () => {
+		const endpoint = activeEndpoint();
+		if (endpoint.codexAccount) {
+			void fetchCodexResetCredits(endpoint.baseUrl).then(credits => {
+				setUsageResetCredits(credits);
+				if (credits.length > 0) setUsageResetOpen(true);
+			});
+		}
 		const history = usageHistory();
 		const monthly = currentMonthUsage(activeEndpoint().baseUrl);
 		const details =
@@ -5228,6 +5972,28 @@ export function App() {
 	const visiblePendingQueueCount = createMemo(
 		() => pendingQueue().filter(item => !item.source).length,
 	);
+	// Reserve the actual composer before assigning the bounded agent footer.
+	const composerRows = createMemo(
+		() =>
+			inputBoxRows() +
+			1 +
+			(statusLineEnabled() ? 1 : 0) +
+			(running() ? 1 : 0) +
+			(lineTickerVisible(thinkingMode(), busy(), thinkingActive()) ? 1 : 0) +
+			bashModeIndicatorRows(input()) +
+			startupLoading().length +
+			completionMessageRows(completionMessage(), completionTone()) +
+			(exitConfirm() ? 1 : 0) +
+			(visiblePendingQueueCount() > 0 ? visiblePendingQueueCount() + 1 : 0) +
+			completionPopupHeight(input(), terminalDimensions().width) +
+			mentionPopupHeight(input()),
+	);
+	const agentLayout = createMemo(() =>
+		inlineAgentLayout(
+			runningAgentRows().length,
+			terminalHeight() - composerRows(),
+		),
+	);
 	// Reactive: the App body runs once, so a plain const would freeze the
 	// height at mount and a growing history/panel would push the input box
 	// and status line off the visible pane. The memo re-derives on every
@@ -5239,27 +6005,12 @@ export function App() {
 	// position) and the history scrolls.
 	const historyHeight = createMemo(() =>
 		Math.max(
-			4,
+			0,
 			Math.min(
 				historyContentHeight(),
 				// The input box and status line stay visible even while a
 				// modal is open (the modal overlays ONLY the history region).
-				terminalHeight() -
-					inputBoxRows() -
-					2 -
-					(running() ? 1 : 0) -
-					(lineTickerVisible(thinkingMode(), busy(), thinkingActive())
-						? 1
-						: 0) -
-					bashModeIndicatorRows(input()) -
-					startupLoading().length -
-					completionMessageRows(completionMessage(), completionTone()) -
-					(exitConfirm() ? 1 : 0) -
-					(visiblePendingQueueCount() > 0
-						? visiblePendingQueueCount() + 1
-						: 0) -
-					completionPopupHeight(input(), terminalDimensions().width) -
-					mentionPopupHeight(input()),
+				terminalHeight() - composerRows() - agentLayout().height,
 			),
 		),
 	);
@@ -5293,17 +6044,31 @@ export function App() {
 			{/* The input box and status line stay visible while a modal is
 			    open, the modal only overlays the history region above. */}
 			<InputBox
+				onQueueEscapeHandler={handler => {
+					queueEscapeHandler = handler;
+				}}
 				onSubmit={(value, attachments) => void submit(value, attachments)}
+				agentNavigationIndex={inlineAgentIndex()}
+				onAgentNavigate={navigateInlineAgent}
 			/>
-			{/* Terminal-like layout: this spacer absorbs the empty rows below
-			    the input while the conversation is short, so the status line
-			    stays pinned at the bottom; it shrinks to zero once the
-			    history fills the cap and the input reaches the bottom. */}
-			<box flexGrow={1} />
 			{/* Status Line setting (on/off) toggles the footer. */}
 			<Show when={statusLineEnabled()}>
 				<Status cwd={workspaceCwd()} />
 			</Show>
+			<Show when={agentLayout().gapHeight > 0}>
+				<box height={agentLayout().gapHeight} flexShrink={0}>
+					<text> </text>
+				</box>
+			</Show>
+			<InlineAgentRows
+				layout={agentLayout()}
+				selectedIndex={inlineAgentIndex()}
+				onSelect={index =>
+					setInlineAgentId(runningAgentRows()[index]?.id ?? null)
+				}
+				onOpen={openInlineAgent}
+				onNavigate={navigateInlineAgent}
+			/>
 			{/* Settings open as an modal-style MODAL: the chat stays visible
 			    behind a translucent backdrop and a card container on top. */}
 			<Show when={settingsOpen()}>
@@ -5358,6 +6123,18 @@ export function App() {
 			    visible below). */}
 			<Show when={statusOpen()}>
 				<StatusModal rows={statusRows()} onClose={() => setStatusOpen(false)} />
+			</Show>
+			<Show when={usageResetOpen()}>
+				<UsageResetModal
+					credits={usageResetCredits()}
+					onSelect={credit => {
+						setUsageResetOpen(false);
+						void consumeCodexReset(activeEndpoint().baseUrl, credit.id).then(
+							appendInfo,
+						);
+					}}
+					onClose={() => setUsageResetOpen(false)}
+				/>
 			</Show>
 			{/* `/model` opens as a MODAL (parity: nanocoder's model selector). */}
 			<Show when={modelOpen()}>
@@ -5443,7 +6220,11 @@ export function App() {
 				<BackgroundJobsModal
 					goal={visibleGoal()}
 					initialTab={psInitialTab()}
-					onClose={() => setPsOpen(false)}
+					initialAgentId={psInitialAgentId() ?? undefined}
+					onClose={() => {
+						setPsOpen(false);
+						setPsInitialAgentId(null);
+					}}
 				/>
 			</Show>
 			{/* `/resume` opens as a MODAL (parity: the reference session picker). */}
@@ -5467,6 +6248,7 @@ export function App() {
 						createdAt: session.createdAt,
 						updatedAt: session.updatedAt,
 						firstMessage: session.firstMessage,
+						lastMessage: session.lastMessage,
 						cwd: session.cwd,
 						provider: session.provider,
 						model: session.model,
@@ -5583,14 +6365,14 @@ export function App() {
 			<Show
 				when={
 					(activeBgCount() > 0 ||
-						activeAgents() > 0 ||
+						runningAgentRows().length > 0 ||
 						visibleGoal()?.status === 'active') &&
 					!anyModalOpen()
 				}
 			>
 				<ActivityIndicator
 					backgroundCount={activeBgCount()}
-					agentCount={activeAgents()}
+					agentCount={runningAgentRows().length}
 					goalActive={visibleGoal()?.status === 'active'}
 					onOpen={() => {
 						setPsInitialTab(
@@ -5782,7 +6564,11 @@ export function undoExchange(
 } {
 	let lastUser = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i]?.role === 'user' && !messages[i]!.error) {
+		if (
+			messages[i]?.role === 'user' &&
+			!messages[i]!.error &&
+			!messages[i]!.submittedCommand
+		) {
 			lastUser = i;
 			break;
 		}
@@ -5824,7 +6610,10 @@ export function rewindExchangeAt(
 } {
 	const users = messages
 		.map((message, index) => ({message, index}))
-		.filter(({message}) => message.role === 'user' && !message.error);
+		.filter(
+			({message}) =>
+				message.role === 'user' && !message.error && !message.submittedCommand,
+		);
 	const target = users[userIndex];
 	if (!target)
 		return {keptMessages: messages, keptContext: context, undonePrompt: null};
@@ -6012,7 +6801,12 @@ export function compactedDisplayMessages(
 	let seen = 0;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i]!;
-		if (message.role !== 'user' || message.kind === 'info') continue;
+		if (
+			message.role !== 'user' ||
+			message.kind === 'info' ||
+			message.submittedCommand
+		)
+			continue;
 		seen += 1;
 		if (seen === userPromptCount) return messages.slice(i);
 	}

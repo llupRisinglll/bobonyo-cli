@@ -7,6 +7,8 @@ import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
+	/** User-submitted built-in command: visible/persisted, never provider context. */
+	submittedCommand?: boolean;
 	/**
 	 * REAL attachment paths (image/text) that produced the `[Image #N]` /
 	 * `[Text #N]` tokens in this user message. The history tokenizer only
@@ -118,17 +120,18 @@ export const [pendingQueue, setPendingQueue] = createSignal<PendingWorkItem[]>(
 	[],
 );
 /** Per-turn usage snapshots for `/usage`. */
+export interface SessionUsageSnapshot {
+	provider: string;
+	model: string;
+	ts: number;
+	prompt_tokens?: number;
+	completion_tokens?: number;
+	total_tokens?: number;
+	promptCacheHitTokens?: number;
+	promptCacheMissTokens?: number;
+}
 export const [usageHistory, setUsageHistory] = createSignal<
-	Array<{
-		provider: string;
-		model: string;
-		ts: number;
-		prompt_tokens?: number;
-		completion_tokens?: number;
-		total_tokens?: number;
-		promptCacheHitTokens?: number;
-		promptCacheMissTokens?: number;
-	}>
+	SessionUsageSnapshot[]
 >([]);
 /**
  * DeepSeek live balance for the status line (`Cred: $n`). Refreshed on app
@@ -191,8 +194,18 @@ export const [activeAgents, setActiveAgents] = createSignal(0);
 /** Live delegated-agent rows, including review lenses. */
 export interface ActiveAgentRun {
 	id: string;
+	/** Agent-local checklist; absent in legacy sessions until first update. */
+	tasks?: SessionTask[];
+	/** Model-supplied heading for the agent-local checklist. */
+	tasksTitle?: string;
+	/** Parent work graph; unrelated turns must not share completion barriers. */
+	graphId?: string;
+	/** Monotonic attempt identity; prevents old callbacks corrupting follow-ups. */
+	generation?: number;
 	name: string;
 	description: string;
+	/** Short unique label used by compact agent lists. */
+	displayLabel?: string;
 	/** Live compact tail shown under the running agent row. */
 	output: string;
 	/** Human-readable sidechain events for compact live tails. */
@@ -204,10 +217,22 @@ export interface ActiveAgentRun {
 	status: 'running' | 'completed' | 'incomplete' | 'error' | 'cancelled';
 	/** False until parent observes a background agent's settled result. */
 	retrieved?: boolean;
+	/** Epoch milliseconds when run started. */
+	startedAt?: number;
+	/** Provider-reported tokens used so far. */
+	tokensUsed?: number;
+	/** Epoch milliseconds of most recent provider/tool progress. */
+	lastProgressAt?: number;
+	/** Epoch milliseconds when agent reached a terminal state. */
+	finishedAt?: number;
 }
 export const [activeAgentRuns, setActiveAgentRuns] = createSignal<
 	ActiveAgentRun[]
 >([]);
+/** Shared UI projection: badge, navigation, and inline rows use the same runs. */
+export const runningAgentRows = createMemo(() =>
+	activeAgentRuns().filter(agent => agent.status === 'running'),
+);
 /** C12: seconds since the current turn started (Working indicator). */
 export const [turnElapsed, setTurnElapsed] = createSignal(0);
 /**
@@ -353,7 +378,7 @@ export const [activeEndpoint, setActiveEndpoint] = createSignal<ActiveEndpoint>(
 	},
 );
 /** Runtime settings (approval mode, tool profile, message cap). */
-export const [mode, setMode] = createSignal<Mode>('yolo');
+export const [mode, setMode] = createSignal<Mode>('default');
 export const [toolProfile, setToolProfile] = createSignal<ToolProfile>('full');
 export const [maxMessages, setMaxMessages] = createSignal(1000);
 /**

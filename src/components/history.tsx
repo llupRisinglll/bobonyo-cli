@@ -12,6 +12,7 @@ import {
 	createMarkdownCodeBlockRenderer,
 } from '@opentui/core';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
+import {modeLabel} from '../modes';
 import {
 	createEffect,
 	createMemo,
@@ -28,6 +29,7 @@ import {
 	gearGlyph,
 	hoverRow,
 	thinkingMode,
+	thinkingActive,
 	liveOutputs as globalLiveOutputs,
 	messages as globalMessages,
 	mode,
@@ -66,7 +68,9 @@ import {
 	rowLanguage,
 } from '../tool-display';
 import {
+	isAgentControlTool,
 	liveRowSegments,
+	shouldRenderAgentInHistory,
 	shouldRenderRunningToolMessage,
 	shouldRenderSettledAgentMessage,
 	type LiveRowSegments,
@@ -180,7 +184,7 @@ type RenderToken = {type: string; text?: string; lang?: string};
  */
 function buildWelcomeBanner(titleShape: string): string {
 	const model = activeEndpoint().model;
-	const permissions = mode() === 'yolo' ? 'YOLO mode' : `${mode()} mode`;
+	const permissions = modeLabel(mode());
 	return (
 		'```banner\n' +
 		buildBannerBox({
@@ -248,6 +252,32 @@ export function History(props: HistoryProps) {
 	const reasoning = props.reasoning ?? globalReasoning;
 	const liveOutputs = props.liveOutputs ?? globalLiveOutputs;
 	const activeAgentRuns = props.activeAgentRuns ?? globalActiveAgentRuns;
+	const runningAgentsForHistory = createMemo(
+		() =>
+			activeAgentRuns()
+				.filter(run => run.status === 'running')
+				.map(run => ({
+					id: run.id,
+					name: run.name,
+					description: run.description,
+				})),
+		undefined,
+		{
+			equals: (previous, next) =>
+				previous.length === next.length &&
+				previous.every(
+					(run, index) =>
+						run.id === next[index]?.id &&
+						run.name === next[index]?.name &&
+						run.description === next[index]?.description,
+				),
+		},
+	);
+	const finishedAgentsForHistory = createMemo(() =>
+		activeAgentRuns().filter(
+			run => run.status !== 'running' && run.finishedAt !== undefined,
+		),
+	);
 	// Details belong to this mounted transcript only. Rebuilding the settled
 	// view clears stale session/compaction entries instead of retaining full
 	// tool output and reasoning in a process-global map forever.
@@ -606,24 +636,35 @@ export function History(props: HistoryProps) {
 		const all = messages();
 		// Keep latest task snapshot expanded per user turn. Earlier task
 		// updates in same turn collapse; older turns retain their final list.
-		const latestTaskMessages = new Set<ChatMessage>();
-		let taskSeenInTurn = false;
-		for (let index = all.length - 1; index >= 0; index--) {
-			const candidate = all[index]!;
-			if (candidate.role === 'user') {
-				taskSeenInTurn = false;
-				continue;
-			}
-			if (candidate.role !== 'tool' || candidate.tool?.name !== 'write_tasks')
-				continue;
-			if (!taskSeenInTurn && !candidate.running)
-				latestTaskMessages.add(candidate);
-			taskSeenInTurn = true;
-		}
+		const latestTaskMessages = latestSettledTaskMessages(all);
 		const seenToolIds = new Set<string>();
-		const runningAgents = activeAgentRuns().filter(
-			run => run.status === 'running',
-		);
+		const runningAgents = runningAgentsForHistory();
+		const finishedAgents = finishedAgentsForHistory();
+		if (finishedAgents.length > 0) {
+			const waiting = runningAgents.length;
+			const waitText =
+				waiting > 0
+					? `waiting for ${waiting} more agents`
+					: 'all agents finished';
+			const rows = finishedAgents.map((run, index) => {
+				const output = `${run.output}\n${run.transcript.join('\n')}`;
+				const hasFindings =
+					/\b(?:error|failed|failure|incomplete|review_findings)\b/i.test(
+						output,
+					);
+				const result =
+					run.status === 'completed'
+						? hasFindings
+							? 'result has findings'
+							: 'result passed'
+						: `result ${run.status}`;
+				return `  ${index === finishedAgents.length - 1 ? '└' : '├'} ${run.name} - ${result} ${waitText}`;
+			});
+			pushBlock(
+				fence('agentrow', 'done', ['✦ Agent Finished', ...rows].join('\n')),
+				'agent-finished-summary',
+			);
+		}
 		// Welcome block (parity: nanocoder shows a welcome message on an
 		// empty conversation instead of a blank transcript). SYSTEM logs
 		// (e.g. `Session renamed to "x"`) carry a `kind` and must NOT hide
@@ -651,14 +692,14 @@ export function History(props: HistoryProps) {
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
 			} else if (message.role === 'tool') {
-				if (message.tool && isTaskProgressTool(message.tool.name)) {
-					if (
-						message.tool.name === 'write_tasks' &&
-						!message.running &&
-						!latestTaskMessages.has(message) &&
-						!message.brief?.trim()
-					)
-						continue;
+				// Delegated-agent lifecycle belongs in the inline navigator and `/ps`.
+				// The acknowledgement and live tool row are duplicate noise in chat.
+				if (message.tool && isAgentControlTool(message.tool.name)) continue;
+				if (
+					message.tool &&
+					message.tool.name !== 'write_tasks' &&
+					isTaskProgressTool(message.tool.name)
+				) {
 					const status: RowStatus = message.running ? 'running' : 'done';
 					pushBlock(
 						fence(
@@ -667,6 +708,8 @@ export function History(props: HistoryProps) {
 							formatTaskStatusText(message.tool, status),
 						),
 						`task-info-${i}`,
+						'md',
+						message.brief,
 					);
 					continue;
 				}
@@ -683,6 +726,7 @@ export function History(props: HistoryProps) {
 				}
 				if (
 					message.tool &&
+					!isAgentControlTool(message.tool.name) &&
 					!message.running &&
 					!shouldRenderSettledAgentMessage(
 						message.tool.name,
@@ -706,6 +750,7 @@ export function History(props: HistoryProps) {
 				while (
 					i + 1 < all.length &&
 					all[i + 1]?.role === 'tool' &&
+					!isAgentControlTool(all[i + 1]?.tool?.name ?? '') &&
 					!all[i + 1]?.running &&
 					(!all[i + 1]?.toolId || !liveToolIds().has(all[i + 1]!.toolId!))
 				) {
@@ -952,11 +997,11 @@ export function History(props: HistoryProps) {
 		Record<string, string>
 	>({});
 	const liveThoughtHeader = createMemo(() => {
-		if (!running() || !throttledReasoning()) return '';
+		if (!running() || !thinkingActive() || !throttledReasoning()) return '';
 		return liveThinkingHeader(spinnerFrame(), thinkingElapsed());
 	});
 	const liveThoughtTail = createMemo(() => {
-		if (!running() || !throttledReasoning()) return '';
+		if (!running() || !thinkingActive() || !throttledReasoning()) return '';
 		const width = renderWidth();
 		const tail = throttledReasoning()
 			.replace(/\n+$/, '')
@@ -989,9 +1034,8 @@ export function History(props: HistoryProps) {
 		if (!running()) return [];
 		const outputs = throttledToolOutputs();
 		const seenToolIds = new Set<string>();
-		const runningAgents = activeAgentRuns().filter(
-			run => run.status === 'running',
-		);
+		const runningAgents = runningAgentsForHistory();
+		let activityMessages: ChatMessage[] = [];
 		const rows: Array<
 			LiveRowSegments & {
 				toolId?: string;
@@ -1003,21 +1047,12 @@ export function History(props: HistoryProps) {
 				agentAggregate?: boolean;
 			}
 		> = [];
-		for (const run of runningAgents) {
-			const width = renderWidth();
-			const tail = formatSubagentCompactTail(
-				run.output,
-				4,
-				Math.max(20, width - 6),
-			);
-			const raw = `✦ Ran agent:${run.name}(${run.description}) running\n${tail}`;
-			rows.push({
-				toolId: run.id,
-				lang: 'agentrow',
-				...liveRowSegments(raw, 'agentrow', 'running', colors(), width),
-			});
-		}
 		for (const message of messages()) {
+			if (
+				!message.running ||
+				!activityGroupForTool(message.tool?.name ?? '', message.tool?.args)
+			)
+				activityMessages = [];
 			if (
 				message.role === 'tool' &&
 				message.running &&
@@ -1056,6 +1091,45 @@ export function History(props: HistoryProps) {
 				const streamed = message.toolId ? outputs[message.toolId] : undefined;
 				const output =
 					streamed !== undefined ? streamed : (message.tool.output ?? '');
+				const activity = activityGroupForTool(
+					message.tool.name,
+					message.tool.args,
+				);
+				if (activity) {
+					const current = {...message, tool: {...message.tool, output}};
+					const blocks = groupToolRun([...activityMessages, current]);
+					const combined = blocks.length === 1 && activityMessages.length > 0;
+					activityMessages = blocks.at(-1)!;
+					// Live groups keep streamed output visible; settled groups expose
+					// full entries through the existing details modal.
+					const raw =
+						formatActivityMessages(activity, activityMessages, renderWidth()) +
+						activityMessages
+							.map(item => {
+								const tail = formatOutputTail(
+									item.tool?.output ?? '',
+									false,
+									renderWidth(),
+								);
+								return tail ? `\n${tail}` : '';
+							})
+							.join('');
+					if (combined) rows.pop();
+					rows.push({
+						toolId: activityMessages[0]?.toolId,
+						lang: 'grouprow',
+						brief: activityMessages[0]?.brief,
+						batchBriefed: activityMessages[0]?.brief === ' ',
+						...liveRowSegments(
+							raw,
+							'grouprow',
+							'running',
+							colors(),
+							renderWidth(),
+						),
+					});
+					continue;
+				}
 				// Plain text (no fence, no blink swap): `✦ Name(detail)`
 				// header + `  └   ` body, exactly like the settled row.
 				const raw = formatToolEntry(
@@ -1571,14 +1645,26 @@ export function History(props: HistoryProps) {
 	);
 	if (props.embedded) {
 		return (
-			<box
+			<scrollbox
 				width={props.width ?? '100%'}
 				height={props.height ?? '100%'}
-				flexDirection="column"
+				ref={element => {
+					scrollRef = element;
+				}}
 				minHeight={0}
+				paddingRight={2}
+				stickyScroll
+				stickyStart="bottom"
+				scrollAcceleration={resolveScrollAcceleration()}
+				{...({
+					onMouseDown: handleMouseDown,
+					onMouseUp: handleMouseUp,
+					onMouseMove: handleMouseMove,
+					onMouseOut: handleMouseOut,
+				} as any)}
 			>
 				{transcriptContent()}
-			</box>
+			</scrollbox>
 		);
 	}
 	return (
@@ -1805,7 +1891,7 @@ function wordWrapForBackground(text: string, width: number): string[] {
  * Group only activity-style tools into chronological trees. Exploration
  * calls share `Explored`, web calls share `Navigated Web`, and MCP calls
  * share one group per server. Every other tool remains standalone: file
- * mutations, agents, bash, tasks, skills, lifecycle tools, etc.
+ * mutations, agents, non-exploration bash, tasks, lifecycle tools, etc.
  *
  * A same-family block stays ONE batch only while it shares a single brief:
  * within one round the first call carries the real brief and later calls
@@ -1817,14 +1903,14 @@ function groupToolRun(run: ChatMessage[]): ChatMessage[][] {
 	const blocks: ChatMessage[][] = [];
 	for (const message of run) {
 		const name = message.tool?.name ?? '';
-		const activity = activityGroupForTool(name);
+		const activity = activityGroupForTool(name, message.tool?.args);
 		if (!activity) {
 			blocks.push([message]);
 			continue;
 		}
 		const last = blocks[blocks.length - 1];
 		const lastActivity = last?.[0]?.tool
-			? activityGroupForTool(last[0].tool.name)
+			? activityGroupForTool(last[0].tool.name, last[0].tool.args)
 			: null;
 		const incomingBrief = message.brief;
 		const groupBrief = last?.[0]?.brief;
@@ -1854,21 +1940,43 @@ export function toolRunBriefs(run: ChatMessage[]): Array<string | undefined> {
 }
 
 /**
- * Render a run of consecutive tool calls. Each rendered row carries its
- * OWN block's brief (for a compacted same-round batch that is the batch's
- * single brief; for single-call rows it is that call's brief), so later
- * rounds' narration is never swallowed by the first row of the run.
+ * Select the latest settled snapshot per user turn. Running updates do not
+ * supersede the previous settled list.
  */
+export function latestSettledTaskMessages(
+	all: ChatMessage[],
+): Set<ChatMessage> {
+	const latest = new Set<ChatMessage>();
+	let seen = false;
+	for (let index = all.length - 1; index >= 0; index--) {
+		const message = all[index]!;
+		if (message.role === 'user') {
+			seen = false;
+			continue;
+		}
+		if (
+			message.role !== 'tool' ||
+			message.tool?.name !== 'write_tasks' ||
+			message.running
+		)
+			continue;
+		if (!seen) latest.add(message);
+		seen = true;
+	}
+	return latest;
+}
+
+/** Render each tool block with its own brief, including compact task updates. */
 export function renderToolRun(
 	run: ChatMessage[],
 	width: number,
 	details: Map<string, string>,
-	latestTaskMessages: Set<ChatMessage> = new Set(),
+	latestTaskMessages: Set<ChatMessage> = latestSettledTaskMessages(run),
 ): Array<{text: string; blockKey?: string; brief?: string}> {
 	return groupToolRun(run).flatMap(block => {
 		const brief = block[0]?.brief;
 		const activity = block[0]?.tool
-			? activityGroupForTool(block[0].tool.name)
+			? activityGroupForTool(block[0].tool.name, block[0].tool.args)
 			: null;
 		if (!activity) {
 			const message = block[0]!;
@@ -1922,6 +2030,13 @@ export function renderToolRun(
 						? formatToolEntry(
 								{
 									...message.tool,
+									// Bash detail is a truncated preview; grouped expansion
+									// must retain the actual command as well as its output.
+									detail:
+										message.tool.name === 'execute_bash' &&
+										typeof message.tool.args?.command === 'string'
+											? message.tool.args.command
+											: message.tool.detail,
 									output: liveOutput(message),
 								},
 								true,
@@ -2002,7 +2117,10 @@ function singleToolRow(
 	compactTask = false,
 ): string {
 	if (!message.tool) return message.content;
-	if (isTaskProgressTool(message.tool.name)) {
+	if (
+		message.tool.name !== 'write_tasks' &&
+		isTaskProgressTool(message.tool.name)
+	) {
 		return fence(
 			'inforow',
 			message.running ? 'running' : 'done',

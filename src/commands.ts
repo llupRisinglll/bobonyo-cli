@@ -18,6 +18,7 @@ export const BASE_COMMAND_NAMES = [
 	'clear',
 	'compact',
 	'goal',
+	'goal:this',
 	'loop',
 	'fork',
 	'resume',
@@ -67,6 +68,7 @@ export const BASE_COMMAND_NAMES = [
 	'remember',
 	'forget',
 	'preferences',
+	'plugin',
 ] as const;
 
 /** `/mock:<name>` preview scenarios, only registered in preview mode. */
@@ -133,6 +135,8 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	clear: 'Start a new conversation',
 	compact: 'Compact the conversation; optional preservation instructions',
 	goal: 'Set or manage a long-running goal',
+	'goal:this':
+		'Convert conversation findings into an actionable implementation and verification goal, then start it',
 	loop: 'Create, list, or stop scheduled thread jobs',
 	fork: 'Fork this conversation into a new session',
 	'herdr:fork': 'Fork into a new Herdr pane',
@@ -148,7 +152,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	model: 'Pick a model',
 	effort: 'Reasoning effort (minimal/low/medium/high/default)',
 	providers: 'List providers',
-	mode: 'Switch approval mode',
+	mode: 'Switch mode: default (sandboxed), normal, plan, auto-accept, yolo (sandbox off)',
 	settings: 'Open settings',
 	'setup-providers': 'Add or edit a provider',
 	connect: 'Connect a provider (add or edit)',
@@ -181,6 +185,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	remember: 'Save durable guidance',
 	forget: 'Forget memory by id or clear a scope',
 	preferences: 'Show durable memory',
+	plugin: 'Manage skill plugins and marketplaces',
 };
 
 /** Fish-style inline argument hints for built-in commands. */
@@ -188,6 +193,7 @@ export const COMMAND_ARGUMENT_HINTS: Record<string, string> = {
 	compact: '[instructions to preserve]',
 	'herdr:fork': '<vertical|horizontal>',
 	goal: '<objective>|status|stop',
+	'goal:this': '[focus]',
 	loop: '<interval> <task>|list|stop <id>',
 	resume: '<session id>',
 	rename: '<name>',
@@ -246,10 +252,13 @@ const MOCK_PROMPTS: Record<string, string> = {
 };
 
 export interface CommandContext {
+	/** Record a typed built-in invocation before its handler runs. */
+	onBuiltinCommand?: (input: string) => void;
 	exit: () => void;
 	clear: () => void;
 	compact: (instructions: string) => void;
 	goal: (args: string) => void;
+	goalFromContext?: (args: string) => void;
 	loop: (args: string) => void;
 	fork: () => void;
 	herdrFork: (split: string) => void;
@@ -323,6 +332,7 @@ export interface CommandContext {
 	remember: (args: string) => void;
 	forget: (args: string) => void;
 	preferences: () => void;
+	plugin: (args: string) => void;
 }
 
 let customCommandsCache: ReturnType<typeof loadCustomCommands> | null = null;
@@ -402,6 +412,12 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		appendInfo(`Unknown skill '${skillName}'.`);
 		return true;
 	}
+	if (
+		(BASE_COMMAND_NAMES as readonly string[]).includes(name) ||
+		name === 'herdr:fork'
+	) {
+		ctx.onBuiltinCommand?.(input);
+	}
 	switch (name) {
 		case 'help':
 			ctx.help();
@@ -418,6 +434,10 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'goal':
 			ctx.goal(args);
+			return true;
+		case 'goal:this':
+			if (ctx.goalFromContext) ctx.goalFromContext(args);
+			else appendInfo('/goal:this is unavailable in this context.');
 			return true;
 		case 'loop':
 			ctx.loop(args);
@@ -573,6 +593,9 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		case 'preferences':
 			ctx.preferences();
 			return true;
+		case 'plugin':
+			ctx.plugin(args);
+			return true;
 		default:
 			// One slash namespace: built-ins, then custom commands, then skills.
 			// `/skill:name` remains as a compatibility alias, but suggestions and
@@ -605,6 +628,7 @@ export const HELP_TEXT = [
 	'/clear     , new conversation (cancels in-flight runs)',
 	'/compact   , checkpoint and compact context',
 	'/goal <objective> [--tokens N] [--max-iterations N] [--completion-promise "TEXT"]',
+	'/goal:this [focus], convert conversation findings into an actionable implementation and verification goal, then start it; do not repeat completed investigation',
 	'/loop <spec>, schedule after-turn or timed continuation work',
 	'/retry     , re-run the last prompt',
 	'/resume [last|N|id], load a previous session',
@@ -624,6 +648,8 @@ export const HELP_TEXT = [
 	'/remember [user|project|session] <text>, save durable guidance',
 	'/forget <memory-id|user|project|session>, forget memory',
 	'/preferences, show durable memory',
+	'/plugin marketplace add <owner/repo>, register a skill marketplace',
+	'/plugin install <skill>@<marketplace>, install a skill plugin',
 	'',
 	'!<command> , run a shell command directly (Executed Bash)',
 ].join('\n');

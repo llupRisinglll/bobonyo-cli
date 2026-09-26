@@ -40,6 +40,16 @@ const write = (rel: string, content: string): void => {
 };
 
 describe('loadSkills (bobonyo-local discovery, flat files)', () => {
+	test('ships Ponytail skills as built-in skills', () => {
+		const names = loadSkills().map(skill => skill.name);
+		expect(names).toContain('ponytail');
+		expect(names).toContain('ponytail-review');
+		expect(names).toContain('ponytail-audit');
+		expect(names).toContain('ponytail-debt');
+		expect(names).toContain('ponytail-gain');
+		expect(names).toContain('ponytail-help');
+	});
+
 	test('loads skill argument metadata for progressive input hints', () => {
 		write(
 			'.nanocoder/skills/deploy.md',
@@ -72,6 +82,15 @@ describe('loadSkills (bobonyo-local discovery, flat files)', () => {
 			'---\nname: global-skill\n---\nbody',
 		);
 		expect(loadSkills().map(skill => skill.name)).toContain('global-skill');
+	});
+	test('loads OpenClaude-style argument-hint metadata', () => {
+		write(
+			'.nanocoder/skills/hint.md',
+			'---\nname: hint\nargument-hint: "[mode] [target]"\n---\nbody',
+		);
+		expect(
+			loadSkills().find(skill => skill.name === 'hint')?.argumentHint,
+		).toBe('[mode] [target]');
 	});
 
 	test('does not read Claude or Codex-owned skill folders', () => {

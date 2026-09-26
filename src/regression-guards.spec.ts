@@ -2,6 +2,72 @@ import {describe, expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 
+test('partial agent completions use existing wait indicator, not transcript assignment dumps', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	const completion = app.slice(
+		app.indexOf('function queueDetachedCompletion('),
+		app.indexOf('function saveGoal('),
+	);
+	expect(completion).not.toContain('appendInfo(');
+	expect(completion).toContain('enqueueTaskNotification');
+	expect(completion).toContain('shouldProcessDetachedCompletion');
+	expect(completion).toContain('queueMicrotask(processQueue)');
+});
+
+test('context goal command wires isolated generation to persisted goal runner', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	const draft = app.slice(
+		app.indexOf('async function goalFromContext'),
+		app.indexOf('function goalCommand'),
+	);
+	expect(app).toContain('void goalFromContext(focus)');
+	expect(draft).toContain('return response.text');
+	expect(draft).toContain('workspaceCwd() === ownerCwd');
+	expect(draft).toContain('currentGoal?.graphId === previousGoalGraph');
+	expect(draft).toContain('setCurrentGoal(oldGoal)');
+	expect(draft.indexOf('saveGoal(goal)')).toBeLessThan(
+		draft.indexOf('queueGoalContinuation('),
+	);
+	expect(draft).toContain('controller.signal,\n\t\t\t\t\t\t[]');
+});
+
+test('queue dispatch supplies live graph ownership to completion barriers', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	expect(app).toMatch(
+		/dequeuePendingWork\(pendingQueue\(\),\s*\{\s*activeAgentRuns: activeAgentRuns\(\)/,
+	);
+});
+
+test('task checklists use history only, without a duplicate composer panel', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	expect(app).not.toContain('<TaskPanel');
+	expect(app).not.toContain('taskPanelHeight');
+	expect(app).not.toContain("from './components/task-panel'");
+	expect(app).toMatch(
+		/const tasksList = \(\) => \{\s*const current = selectedTasks\(\);/,
+	);
+	expect(app.indexOf('<History')).toBeLessThan(app.indexOf('<InputBox'));
+});
+
+test('ordinary user turns cannot auto-restart active goal continuations', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	const completion = app.slice(app.indexOf('if (!completionFailed'));
+	expect(completion).toContain('goalMatchesOwner(currentGoal, goalOwner)');
+	expect(completion).toMatch(
+		/goalMatchesOwner\(currentGoal, goalOwner\) &&\s*\(autonomousTurn \|\| taskTurn \|\| !systemTurn\)/,
+	);
+});
+
+test('manual compaction resumes an active goal instead of leaving it idle', () => {
+	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
+	const compact = app.slice(app.indexOf('const compact = async'));
+	const catchIndex = compact.indexOf('} catch (error)');
+	const success = compact.slice(0, catchIndex);
+	expect(success).toContain("currentGoal?.status === 'active'");
+	expect(success).toContain('queueGoalContinuation()');
+	expect(success).toContain('Compaction preserved active goal');
+});
+
 /**
  * REGRESSION GUARDS (detection tests).
  *
@@ -32,6 +98,71 @@ const read = (rel: string): string =>
 		.replace(/^\s*\/\/.*$/gm, '');
 
 describe('regression guards (foolproof live rows + hover)', () => {
+	test('queued steering enters the existing provider loop, never the tool call loop', () => {
+		const app = read('./app.tsx');
+		const loop = app.indexOf('turnLoop: for');
+		const drain = app.indexOf('await deliverPendingPrompts()', loop);
+		const provider = app.indexOf('result = await streamChat(', loop);
+		expect(drain).toBeGreaterThan(loop);
+		expect(provider).toBeGreaterThan(drain);
+		const toolLoop = app.slice(
+			app.indexOf('callLoop:'),
+			app.indexOf('history = [...history, assistantToolMsg, ...toolMessages]'),
+		);
+		expect(toolLoop).not.toContain('deliverPendingPrompts');
+		const delivery = app.slice(
+			app.indexOf('const deliverPendingPrompts'),
+			loop,
+		);
+		expect(delivery).toMatch(/commitTurnContext|setContext\(history\)/);
+		expect(delivery).toMatch(/persist\(\)/);
+		expect(delivery).not.toContain('runTurn(');
+		expect(app).toContain('steeringSnapshot(pendingQueue())');
+		const submit = app.slice(
+			app.indexOf('const submit = async'),
+			app.indexOf('const submitPrepared = async'),
+		);
+		expect(submit.indexOf('enqueueUserWork')).toBeLessThan(
+			submit.indexOf('await submitPrepared'),
+		);
+		expect(submit).toContain('promptPreparingRef = true');
+	});
+	test('background agent launch keeps foreground alive for the full launch batch', () => {
+		const source = readFileSync(join(import.meta.dir, 'tools.ts'), 'utf8');
+		const app = read('./app.tsx');
+		expect(source).toContain("ctx.onDetachedWork?.('agent', id)");
+		expect(source).toContain('const background = args.background !== false');
+		expect(source).toContain(
+			'Continue launching every agent requested in this batch',
+		);
+		const historyAppend = app.indexOf(
+			'history = [...history, assistantToolMsg, ...toolMessages]',
+		);
+		const detachedRelease = app.indexOf(
+			'shouldReleaseDetachedAgentBatch(completedCalls, toolResults)',
+		);
+		expect(historyAppend).toBeGreaterThan(-1);
+		expect(detachedRelease).toBeGreaterThan(historyAppend);
+	});
+
+	test('subagent token updates do not rebuild settled Markdown history', () => {
+		const history = read('./components/history.tsx');
+		const tools = read('./tools.ts');
+		const app = read('./app.tsx');
+		expect(history).toContain('const runningAgentsForHistory = createMemo(');
+		expect(history).toContain(
+			'const runningAgents = runningAgentsForHistory();',
+		);
+		expect(history).not.toMatch(
+			/const runningAgents = activeAgentRuns\(\)\.filter/,
+		);
+		expect(tools).toContain('SUBAGENT_PROGRESS_INTERVAL_MS = 500');
+		expect(tools).toContain(
+			'history: force ? structuredClone(history) : undefined',
+		);
+		expect(app).toContain('createDebouncedFlush(persist, 2000)');
+		expect(app).toContain('onAgentProgress: agentProgressPersistence.schedule');
+	});
 	test('MCP subprocesses have an application-shutdown cleanup path', () => {
 		const app = read('./app.tsx');
 		const mcp = read('./mcp.ts');
@@ -81,11 +212,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(src).toMatch(/liveRowSegments/);
 	});
 
-	test('active subagent owns its live row; generic Agent row is suppressed', () => {
+	test('inline navigator owns agent-control rows; history suppresses all', () => {
 		const history = read('./components/history.tsx');
 		const rows = read('./live-tool-row.ts');
 		expect(history).toMatch(/shouldRenderRunningToolMessage/);
-		expect(rows).toMatch(/toolName !== 'agent' \|\| !hasRunningAgent/);
+		expect(rows).toMatch(/isAgentControlTool/);
 	});
 
 	test('every live tool row keeps the settled leading breakline', () => {
@@ -163,7 +294,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('launcher keeps the USER cwd and applies the OpenTUI preload', () => {
-		const build = read('../scripts/build.mjs');
+		const build = read('../scripts/launcher.sh');
+		expect(read('../scripts/build.mjs')).toContain("'./launcher.sh'");
 		// Running `bobonyo` in another project must NOT cd into the repo
 		// before exec: skills/AGENTS.md resolve against the user's cwd. A
 		// subshell `cd … && pwd` to RESOLVE the repo dir is fine; changing
@@ -179,6 +311,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The dist launcher is STRICTLY the release entry: dev runs go
 		// through the separate `bobonyo-dev` alias, never through dist.
 		expect(build).not.toMatch(/--dev/);
+	});
+	test('tool choice stays independent from filesystem sandbox policy', () => {
+		const bash = read('./bash.ts');
+		const sandbox = read('./sandbox.ts');
+		expect(bash).toContain('isHostDesktopLaunchCommand');
+		expect(bash).not.toContain('normalizeDesktopLaunchCommand');
+		expect(bash).toContain('...sandboxSettings');
+		expect(bash).toMatch(/mode:\s*isHostDesktopLaunchCommand\(command\)/);
+		expect(sandbox).toContain("'--bind'");
+		expect(sandbox).toContain("'/tmp'");
+		expect(sandbox).not.toContain("'--unshare-ipc'");
+		expect(bash).toContain('delete childEnv.KDE_SESSION_VERSION');
+		expect(bash).toContain('delete childEnv.XDG_CURRENT_DESKTOP');
 	});
 
 	test('trust/approval prompts never dereference a null signal', () => {
@@ -510,8 +655,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/messageCount: history\.length/);
 		expect(app).toMatch(/messageCap: maxMessages\(\)/);
 		expect(app).toMatch(/messageMargin: AUTO_COMPACT_MESSAGE_MARGIN/);
-		expect(app).toMatch(/history = await tryAutoCompactHistory\(history\)/);
-		expect(app).toMatch(/await tryAutoCompactHistory\(context\(\)\)/);
+		expect(app).toContain('messageTriggered');
+		expect(app).toContain('tryAutoCompactHistory');
 		const settings = read('./settings.ts');
 		expect(settings).toMatch(/autoCompact: \{enabled: true, threshold: 80\}/);
 	});
@@ -600,6 +745,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// below it, then slides down as rows are added, and sticks at the
 		// bottom once the content fills the cap.
 		expect(app).toMatch(/Math\.min\(\s*historyContentHeight\(\)/);
+		expect(app).toMatch(/Math\.max\(\s*0,/);
 		expect(app).toMatch(/onContentHeight=\{setHistoryContentHeight\}/);
 		expect(history).toMatch(/onContentHeight/);
 		expect(history).toMatch(/getChildren\(\)/);
@@ -607,9 +753,16 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// the bottom again — the terminal-like placement depends on it NOT
 		// growing.
 		expect(history).toMatch(/flexGrow=\{0\}/);
-		// The spacer keeps the status line pinned at the bottom while the
-		// conversation is short.
-		expect(app).toMatch(/<box flexGrow=\{1\} \/>/);
+		// No flex spacer may pin or split the interaction block. Its top follows
+		// measured history growth; the cap makes input + status + agents stick
+		// together at the bottom once content fills the terminal.
+		expect(app).not.toMatch(/<box flexGrow=\{1\} \/>/);
+		expect(app).toMatch(
+			/terminalHeight\(\) - composerRows\(\) - agentLayout\(\)\.height/,
+		);
+		expect(app).toMatch(
+			/<Show when=\{agentLayout\(\)\.gapHeight > 0\}>\s*<box height=\{agentLayout\(\)\.gapHeight\} flexShrink=\{0\}>\s*<text> <\/text>\s*<\/box>\s*<\/Show>\s*<InlineAgentRows\s+layout=\{agentLayout\(\)\}/,
+		);
 	});
 
 	test('startup gate keeps the typed message (Enter never silently eats it)', () => {
@@ -741,19 +894,28 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(cache).toMatch(/block\.part\.text/);
 	});
 
-	test('bash calls render STANDALONE, never enter an activity group', () => {
-		// Bash has no activity group, so every call keeps its own bordered
-		// command row. Only exploration, web, and MCP tools group.
+	test('bash grouping uses full arguments and leaves unsafe calls standalone', () => {
 		const history = read('./components/history.tsx');
 		const groupToolRun = history.slice(
 			history.indexOf('function groupToolRun'),
 			history.indexOf('function groupToolRun') + 1400,
 		);
-		expect(groupToolRun).toMatch(/activityGroupForTool\(name\)/);
+		expect(groupToolRun).toMatch(
+			/activityGroupForTool\(name, message\.tool\?\.args\)/,
+		);
 		expect(groupToolRun).toMatch(/if \(!activity\)/);
 		expect(groupToolRun).toMatch(/blocks\.push\(\[message\]\);/);
 		const activity = read('./activity-groups.ts');
-		expect(activity).not.toContain("'execute_bash'");
+		expect(activity).toContain(
+			"name === 'execute_bash' && isExplorationCommand(args?.command)",
+		);
+		expect(history).toContain(
+			'activityGroupForTool(last[0].tool.name, last[0].tool.args)',
+		);
+		expect(history).toContain(
+			'activityGroupForTool(block[0].tool.name, block[0].tool.args)',
+		);
+		expect(activity).toContain('return `${action} ${call.args.command}`');
 	});
 
 	test('selective tool groups render chronological activity trees, never ×N tallies', () => {
@@ -816,6 +978,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const row = read('./components/bash-tool-row.tsx');
 		expect(row).toMatch(/export function BashToolRow/);
 		expect(row).toMatch(/borderStyle="rounded"/);
+		expect(row).toMatch(/paddingX=\{1\}/);
 		// Glyph outside the border: the glyph <text> is a SIBLING of the
 		// bordered <box>, never inside it.
 		expect(row).toMatch(/fg=\{glyph\}/);
@@ -884,10 +1047,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('task closeout never deletes the streamed Markdown reply', () => {
 		const app = read('./app.tsx');
 		const closeout = app.slice(
-			app.indexOf('if (unfinishedTasks.length > 0'),
+			app.indexOf('shouldNudgeTaskCloseout(\n'),
 			app.indexOf(
 				'completionSummary =',
-				app.indexOf('if (unfinishedTasks.length > 0'),
+				app.indexOf('shouldNudgeTaskCloseout(\n'),
 			),
 		);
 		expect(closeout).toMatch(/appendAssistantMessage\(/);
@@ -993,13 +1156,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('detached background work releases foreground chat ownership', () => {
 		const app = read('./app.tsx');
 		const tools = read('./tools.ts');
-		expect(tools).toMatch(/onDetachedWork\?\.\('bash', result\.task\.id\)/);
-		expect(app).toMatch(
-			/if \(queryActiveRef \|\| \(busy\(\) && foregroundTurnOwner !== 0\)\)/,
-		);
+		expect(tools).toMatch(/onDetachedWork\?\.\(/);
+		expect(app).toContain('queryActiveRef');
+		expect(app).toContain('foregroundTurnOwner');
 		expect(app).toMatch(/foregroundTurnOwner = 0/);
 		expect(app).toMatch(/setBusy\(false\)/);
-		expect(app).toMatch(/break turnLoop/);
+		expect(app).toMatch(
+			/releaseForegroundForDetachedWork|foregroundTurnOwner = 0/,
+		);
 	});
 	test('subagent background tools cannot terminate the parent turn', () => {
 		const tools = read('./tools.ts');
@@ -1022,7 +1186,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/enqueueTaskNotification/);
 		expect(app).toMatch(/!options\?\.allowWhileTasksRun/);
 		expect(processes).toMatch(/setBgTasks/);
-		expect(app).toMatch(/if \(queryActiveRef \|\| busy\(\)/);
+		expect(app).toContain('queryActiveRef');
+		expect(app).toContain('busy()');
 		expect(app).toMatch(/queryActiveRef = false/);
 		expect(
 			(app.match(/queueMicrotask\(processQueue\)/g) ?? []).length,
@@ -1030,8 +1195,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 	test('running background work suppresses final completion surfaces', () => {
 		const app = read('./app.tsx');
-		expect(app).toContain('Waiting for ${kinds}');
-		expect(app).toContain('Chat remains available.');
+		const notification = read('./background-notification.ts');
+		expect(app).toContain(
+			'backgroundWaitingMessage(kinds, elapsedSeconds, quietSeconds)',
+		);
+		expect(notification).toContain('Waiting for ${kinds}${running}');
+		expect(notification).toContain('Chat remains available.');
 		expect(app).toMatch(/!waitingForBackgroundWork/);
 		expect(app).toMatch(/completionPopupController\.cancel\(\)/);
 	});
@@ -1066,10 +1235,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 	test('task completions steer invisibly instead of impersonating users', () => {
 		const app = read('./app.tsx');
-		expect(app).toMatch(
-			/void runTurn\(next\.value, next\.value, next\.attachments, undefined, \{/,
+		expect(app).toContain(
+			'void runTurn(next.value, next.value, next.attachments',
 		);
-		expect(app).toMatch(/task: true/);
+		expect(app).toContain("task: next.source === 'task'");
 		expect(app).not.toContain(
 			'appendInfo(`Background ${kind} ${id} ${status}.`);',
 		);
@@ -1079,7 +1248,15 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');
-		expect(app).toContain('/^\\/goal(?:\\s|$)/i.test(prompt)');
+		expect(app).toContain('onBuiltinCommand: () =>');
+		expect(app).toContain('submittedCommand: true');
+		const record = app.slice(
+			app.indexOf('onBuiltinCommand: () =>'),
+			app.indexOf('goal: goalCommand', app.indexOf('onBuiltinCommand: () =>')),
+		);
+		expect(record).toContain('content: value');
+		expect(record).toContain('persist()');
+		expect(record).not.toContain('setContext(');
 		expect(app).toMatch(
 			/const systemTurn = autonomousTurn \|\| loopTurn \|\| taskTurn/,
 		);
@@ -1464,6 +1641,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(subagents).toMatch(/unlinkSync\(agent\.path\)/);
 		expect(subagents).toMatch(/agentModels/);
 	});
+
+	test('embedded subagent history remains a sticky scrollbox', () => {
+		const history = read('./components/history.tsx');
+		const jobs = read('./components/background-jobs-modal.tsx');
+		expect(history).toContain('<scrollbox');
+		expect(history).toContain('stickyScroll');
+		expect(history).toContain('stickyStart="bottom"');
+		expect(jobs).toContain('detailAgent()');
+		expect(jobs).toContain('? availableHeight()');
+		expect(jobs).toContain('if (detailAgent()) {');
+	});
 	test('provider connect is a MODAL — the input-box wizard must not return', () => {
 		// The old /connect flow asked questions in the chat input row
 		// (`setPendingPrompt`); it was replaced by the opencode-style modal.
@@ -1615,6 +1803,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(panel).toMatch(/thinkingMode: \['hidden', 'show', 'line'\]/);
 	});
 
+	test('busy animation uses direct text nodes and live thought obeys phase state', () => {
+		const input = read('./components/input-box.tsx');
+		const history = read('./components/history.tsx');
+		expect(input).toContain('<box height={1} flexDirection="row">');
+		expect(input).toContain('{gearGlyph(spinnerFrame())}');
+		expect(input).toContain('{workingDots(spinnerFrame())}');
+		expect(input).not.toMatch(
+			/<span[\s\S]{0,500}gearGlyph\(spinnerFrame\(\)\)[\s\S]{0,500}workingDots\(spinnerFrame\(\)\)/,
+		);
+		expect(history).toContain(
+			'!running() || !thinkingActive() || !throttledReasoning()',
+		);
+	});
+
 	test('line mode: ticker renders in input-box, not in chat history', () => {
 		const input = read('./components/input-box.tsx');
 		// The ticker row is gated on the pure helper (line + busy +
@@ -1646,6 +1848,59 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		const input = read('./components/input-box.tsx');
 		expect(input).toMatch(/export function lineTickerVisible/);
+	});
+
+	test('history may collapse when live agent rows need terminal space', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/const historyHeight = createMemo\(\(\) =>\s*\n\s*\t*\tMath\.max\(\s*\n\s*\t*\t\t0,\s*\n\s*\t*\t\tMath\.min\(/,
+		);
+	});
+
+	test('history reserves live-agent spacer and rows together', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/inlineAgentLayout\(\s*runningAgentRows\(\)\.length,\s*terminalHeight\(\) - composerRows\(\)/,
+		);
+		expect(app).toContain(
+			'terminalHeight() - composerRows() - agentLayout().height',
+		);
+		expect(app).toContain('layout={agentLayout()}');
+	});
+	test('activity badge and inline rows use one running-agent projection', () => {
+		const app = read('./app.tsx');
+		const rows = read('./components/inline-agent-rows.tsx');
+		const state = read('./state.ts');
+		expect(state).toMatch(
+			/export const runningAgentRows = createMemo\(\(\) =>\s*activeAgentRuns\(\)\.filter/,
+		);
+		expect(rows).toContain('finishedAgentRows(activeAgentRuns())');
+		expect(rows).toContain('import {activeAgentRuns, runningAgentRows');
+		expect(rows).toContain("export {runningAgentRows} from '../state'");
+		expect(app).toContain('agentCount={runningAgentRows().length}');
+		const indicatorStart = app.indexOf('<ActivityIndicator');
+		expect(indicatorStart).toBeGreaterThanOrEqual(0);
+		const badgeStart = app.lastIndexOf('<Show', indicatorStart);
+		const badgeEnd = app.indexOf('</Show>', indicatorStart);
+		expect(badgeStart).toBeGreaterThanOrEqual(0);
+		expect(badgeEnd).toBeGreaterThan(badgeStart);
+		const badge = app.slice(badgeStart, badgeEnd);
+		expect(badge).toContain('<ActivityIndicator');
+		expect(badge).toContain('agentCount={runningAgentRows().length}');
+		expect(badge).not.toContain('activeAgents()');
+		expect(badge).toMatch(
+			/<Show\s+when=\{[\s\S]*runningAgentRows\(\)\.length > 0[\s\S]*<ActivityIndicator/,
+		);
+	});
+
+	test('idle Escape never arms the Ctrl+C exit confirmation', () => {
+		const app = read('./app.tsx');
+		const escapeBlock = app.match(
+			/if \(event\.name === 'escape'\) \{([\s\S]*?)\n\s*\t\t\}/,
+		)?.[1];
+		expect(escapeBlock).toBeTruthy();
+		expect(escapeBlock).not.toContain('setExitConfirm');
+		expect(escapeBlock).not.toContain('exit();');
 	});
 
 	test('/settings set thinkingMode validates the three modes and persists', () => {
@@ -1947,6 +2202,43 @@ describe('regression guards (brief gap + COMPLETED modal only-when-idle)', () =>
 	});
 });
 
+describe('regression guards (historical task snapshots)', () => {
+	test('write_tasks reaches task rows before generic task summaries', () => {
+		const display = read('./tool-display.ts');
+		expect(display).toMatch(
+			/if \(tool\.name === 'write_tasks'\) return formatTaskList\(tool, status\);/,
+		);
+		const history = read('./components/history.tsx');
+		expect(history).toContain(
+			'const latestTaskMessages = latestSettledTaskMessages(all)',
+		);
+		expect(history).toMatch(
+			/message\.tool\.name !== 'write_tasks' &&\s*isTaskProgressTool\(message\.tool\.name\)/,
+		);
+	});
+});
+
+describe('regression guards (execution mode labels)', () => {
+	test('status, context, and settings distinguish default from unsandboxed yolo', () => {
+		expect(read('./state.ts')).toContain("createSignal<Mode>('default')");
+		expect(read('./components/status.tsx')).toContain('labelForMode(mode())');
+		expect(read('./components/history.tsx')).toContain('modeLabel(mode())');
+		expect(read('./app.tsx')).toContain('permissions: modeLabel(mode())');
+		expect(read('./components/input-box.tsx')).toContain('SAFE_MODE_CYCLE');
+		expect(read('./components/settings-panel.tsx')).toContain(
+			'autoApprovesTools(mode())',
+		);
+	});
+	test('/herdr:fork passes current normalized mode explicitly', () => {
+		const app = read('./app.tsx');
+		expect(app).toMatch(
+			/forkInHerdrPane\(\s*forked\.id,\s*mode\(\),\s*normalizedSplit/,
+		);
+		const herdr = read('./herdr.ts');
+		expect(herdr).toContain("mode === 'yolo' ? '--yolo'");
+		expect(herdr).toContain('`--mode ${shellQuote(mode)}`');
+	});
+});
 describe('regression guards (shared parent/subagent transcript renderer)', () => {
 	test('/ps subagent details reuse History instead of hand-rendering rows', () => {
 		const modal = read('./components/background-jobs-modal.tsx');

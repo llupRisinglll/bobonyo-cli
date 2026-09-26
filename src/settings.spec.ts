@@ -2,19 +2,41 @@ import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadSettings, resumeCwdDecision} from './settings';
+import {
+	commandSandboxSettings,
+	loadSettings,
+	resumeCwdDecision,
+	saveModeSettings,
+	saveSettings,
+} from './settings';
+import {buildSandboxCommand} from './sandbox';
+import {cliMode} from './cli-mode';
 
 const ORIGINAL_CONFIG_DIR = process.env.NANOCODER_CONFIG_DIR;
 const ORIGINAL_CWD = process.cwd();
+const MODE_ENV_KEYS = [
+	'BOBONYO_CONFIG_DIR',
+	'BOBONYO_MODE',
+	'NANOCODER_MODE',
+] as const;
+let originalModeEnv: Record<string, string | undefined> = {};
 let root = '';
 
 beforeEach(() => {
+	originalModeEnv = Object.fromEntries(
+		MODE_ENV_KEYS.map(key => [key, process.env[key]]),
+	);
+	for (const key of MODE_ENV_KEYS) delete process.env[key];
 	root = mkdtempSync(join(tmpdir(), 'bobonyo-settings-'));
 	process.env.NANOCODER_CONFIG_DIR = root;
 	process.chdir(root);
 });
 
 afterEach(() => {
+	for (const key of MODE_ENV_KEYS) {
+		if (originalModeEnv[key] === undefined) delete process.env[key];
+		else process.env[key] = originalModeEnv[key];
+	}
 	process.chdir(ORIGINAL_CWD);
 	if (ORIGINAL_CONFIG_DIR === undefined)
 		delete process.env.NANOCODER_CONFIG_DIR;
@@ -168,6 +190,71 @@ describe('model fallback default', () => {
 });
 
 describe('command sandbox defaults', () => {
+	test('fresh default keeps bubblewrap isolation when available', () => {
+		const settings = loadSettings();
+		expect(settings.mode).toBe('default');
+		const sandbox = buildSandboxCommand(
+			'true',
+			root,
+			commandSandboxSettings(settings),
+			true,
+			root,
+		);
+		expect(sandbox.active).toBe(true);
+		expect(sandbox.argv).toContain('--ro-bind');
+	});
+	test('legacy saved yolo migrates without disabling its sandbox', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({
+				mode: 'yolo',
+				sandbox: {mode: 'workspace-write', network: false, writablePaths: []},
+			}),
+		);
+		const settings = loadSettings();
+		expect(settings.mode).toBe('default');
+		expect(commandSandboxSettings(settings).mode).toBe('workspace-write');
+		saveSettings(settings);
+		expect(loadSettings().mode).toBe('default');
+	});
+	test('--yolo disables even read-only sandbox without erasing saved preferences', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({
+				mode: 'normal',
+				sandbox: {mode: 'read-only', network: false, writablePaths: []},
+			}),
+		);
+		process.env.BOBONYO_MODE = cliMode(['--yolo']);
+		const settings = loadSettings();
+		expect(settings.mode).toBe('yolo');
+		expect(settings.sandbox?.mode).toBe('read-only');
+		expect(
+			buildSandboxCommand(
+				'true',
+				root,
+				commandSandboxSettings(settings),
+				true,
+				root,
+			),
+		).toMatchObject({
+			active: false,
+			backend: 'none',
+			argv: ['bash', '-c', 'true'],
+		});
+		saveSettings(settings);
+		delete process.env.BOBONYO_MODE;
+		expect(loadSettings().mode).toBe('yolo');
+		expect(commandSandboxSettings().mode).toBe('off');
+		saveModeSettings('default');
+		expect(commandSandboxSettings().mode).toBe('read-only');
+	});
+	test('switching modes supersedes a launch override and restores sandbox', () => {
+		process.env.BOBONYO_MODE = 'yolo';
+		saveModeSettings('default');
+		expect(loadSettings().mode).toBe('default');
+		expect(commandSandboxSettings().mode).toBe('auto');
+	});
 	test('defaults to portable workspace-write isolation with network', () => {
 		expect(loadSettings().sandbox).toEqual({
 			mode: 'auto',

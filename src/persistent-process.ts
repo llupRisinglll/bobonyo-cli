@@ -1,5 +1,5 @@
 import {buildSandboxCommand} from './sandbox';
-import {loadSettings} from './settings';
+import {commandSandboxSettings} from './settings';
 import {
 	capBackgroundTasks,
 	capOutputTail,
@@ -52,11 +52,7 @@ export function startPersistentProcess(
 	owner: PersistentProcess['owner'] = 'user',
 	onComplete?: (process: PersistentProcess) => void,
 ): PersistentProcess {
-	const sandbox = buildSandboxCommand(
-		command,
-		cwd,
-		loadSettings().sandbox ?? {mode: 'auto', network: true, writablePaths: []},
-	);
+	const sandbox = buildSandboxCommand(command, cwd, commandSandboxSettings());
 	if (sandbox.argv.length === 0) throw new Error(`REFUSED: ${sandbox.reason}`);
 	const proc = Bun.spawn(sandbox.argv, {
 		cwd,

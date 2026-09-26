@@ -147,7 +147,12 @@ describe('codex limit rows (payload → /status rows)', () => {
 		const rows = codexLimitRows({
 			rate_limit_reset_credits: {available_count: 2},
 		});
-		expect(rows).toEqual([{label: 'Resets available', value: '2'}]);
+		expect(rows).toEqual([
+			{
+				label: 'Resets available',
+				value: '2 · use /usage to see details and reset',
+			},
+		]);
 	});
 	test('unlimited credits and empty payloads', () => {
 		expect(

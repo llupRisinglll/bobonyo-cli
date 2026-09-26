@@ -2,7 +2,15 @@
 import {readdirSync} from 'node:fs';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	Show,
+	onCleanup,
+} from 'solid-js';
+import type {PendingWorkItem} from '../background-notification';
 import {
 	COMMAND_ARGUMENT_HINTS,
 	COMMAND_DESCRIPTIONS,
@@ -17,7 +25,7 @@ import {
 } from '../custom';
 import {
 	insertMention,
-	listProjectFiles,
+	listMentionPaths,
 	mentionPathText,
 	mentionSearchToken,
 	mentionToken,
@@ -71,7 +79,8 @@ import {
 	setPendingPrompt,
 } from '../state';
 import {CHALK_GREY, colors} from '../theme';
-import {loadSettings, saveSettings} from '../settings';
+import {saveModeSettings} from '../settings';
+import {SAFE_MODE_CYCLE} from '../modes';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
 import {liveThoughtOneLine} from './history';
@@ -175,9 +184,14 @@ export function slashArgumentHint(inputText: string): string {
 	const builtin = COMMAND_ARGUMENT_HINTS[name];
 	if (builtin) return builtin;
 	const command = loadCustomCommands().find(item => item.name === name);
-	if (command) return progressiveArgumentHint(command.arguments, '');
+	if (command)
+		return (
+			command.argumentHint ?? progressiveArgumentHint(command.arguments, '')
+		);
 	const skill = loadSkills().find(item => item.name === name);
-	return skill ? progressiveArgumentHint(skill.arguments, '') : '';
+	return skill
+		? (skill.argumentHint ?? progressiveArgumentHint(skill.arguments, ''))
+		: '';
 }
 
 /** A typed first separator replaces the hint's decorative separator. */
@@ -279,9 +293,15 @@ export function isNewlineInsert(event: {
  */
 export function InputBox(props: {
 	onSubmit: (value: string, attachments?: Record<string, string>) => void;
+	agentNavigationIndex?: number;
+	onAgentNavigate?: (direction: 'up' | 'down') => boolean;
+	/** App checks this before aborting: global keyboard listeners run first. */
+	onQueueEscapeHandler?: (handler: (() => boolean) | null) => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const [draft, setDraft] = createSignal('');
+	const [selectedQueued, setSelectedQueued] =
+		createSignal<PendingWorkItem | null>(null);
 	// ---- Cursor-aware input editing --------------------------------------
 	// The input tracks a cursor index (parity: Ink's TextInput). Arrow keys
 	// move it; attachment tokens (`[Image #N]` / `[Text #N]`) and a leading
@@ -301,12 +321,14 @@ export function InputBox(props: {
 	// this effect never overrides deliberate cursor movement.
 	let locallyWrittenInput = input();
 	const writeInput = (value: string): void => {
+		setSelectedQueued(null);
 		locallyWrittenInput = value;
 		setInput(value);
 	};
 	createEffect(() => {
 		const value = input();
 		if (value === locallyWrittenInput) return;
+		setSelectedQueued(null);
 		locallyWrittenInput = value;
 		setCursorPos(value.length);
 	});
@@ -404,12 +426,27 @@ export function InputBox(props: {
 		);
 		return true;
 	};
-	const [selectedQueued, setSelectedQueued] = createSignal(-1);
 	const visiblePendingQueue = createMemo(() =>
-		pendingQueue()
-			.map((item, queueIndex) => ({item, queueIndex}))
-			.filter(({item}) => !item.source),
+		pendingQueue().filter(item => !item.source),
 	);
+	createEffect(() => {
+		const selected = selectedQueued();
+		if (selected && !visiblePendingQueue().includes(selected))
+			setSelectedQueued(null);
+	});
+	const deselectQueued = (): boolean => {
+		const selected = selectedQueued();
+		if (
+			!selected ||
+			input().length > 0 ||
+			!visiblePendingQueue().includes(selected)
+		)
+			return false;
+		setSelectedQueued(null);
+		return true;
+	};
+	props.onQueueEscapeHandler?.(deselectQueued);
+	onCleanup(() => props.onQueueEscapeHandler?.(null));
 	const [selectedCompletion, setSelectedCompletion] = createSignal(0);
 	const [mentionSelected, setMentionSelected] = createSignal(0);
 	const [pasteAttachments, setPasteAttachments] = createSignal<
@@ -592,7 +629,7 @@ export function InputBox(props: {
 	const mentionFiles = createMemo(() => {
 		const token = mentionToken(input(), cursorPos());
 		if (token === null) return [];
-		const all = listProjectFiles();
+		const all = listMentionPaths(token);
 		const cwd = process.cwd();
 		const q = mentionSearchToken(token).toLowerCase();
 		const scored = q
@@ -685,7 +722,9 @@ export function InputBox(props: {
 		cursorForceTimer = setTimeout(() => setCursorForced(false), 900);
 	};
 	const cursorVisible = createMemo(
-		() => cursorForced() || (spinnerFrame() >> 2) % 2 === 0,
+		() =>
+			(props.agentNavigationIndex ?? -1) < 0 &&
+			(cursorForced() || (spinnerFrame() >> 2) % 2 === 0),
 	);
 	useKeyboard(event => {
 		// Any key pauses the caret blink (visible while typing, debounced).
@@ -862,31 +901,38 @@ export function InputBox(props: {
 			}
 			return;
 		}
-		// Queue navigation (parity: nanocoder), when busy with queued
-		// messages and an empty input, ↑/↓ select a queued item instead of
-		// walking prompt history.
+		// Once an agent row is selected, arrows stay inside that list. Up from
+		// its first row exits back to the newest input position.
 		if (
-			busy() &&
+			(props.agentNavigationIndex ?? -1) >= 0 &&
+			(event.name === 'up' || event.name === 'down') &&
+			props.onAgentNavigate?.(event.name)
+		) {
+			event.preventDefault();
+			return;
+		}
+		if (event.name === 'escape' && deselectQueued()) {
+			event.preventDefault();
+			return;
+		}
+		// Queue sits above the empty draft. Up enters its last row;
+		// Down enters its first row, then exits after the last row.
+		if (
 			input().length === 0 &&
 			visiblePendingQueue().length > 0 &&
 			(event.name === 'up' || event.name === 'down')
 		) {
 			event.preventDefault();
-			const index = selectedQueued();
+			const queue = visiblePendingQueue();
+			const index = queue.indexOf(selectedQueued()!);
 			if (event.name === 'up') {
-				if (index < 0) {
-					// Nothing above the queue, fall through to history.
-				} else {
-					setSelectedQueued(index - 1);
-					return;
-				}
+				setSelectedQueued(
+					queue[index < 0 ? queue.length - 1 : Math.max(0, index - 1)]!,
+				);
 			} else {
-				if (index >= visiblePendingQueue().length - 1) {
-					return;
-				}
-				setSelectedQueued(index + 1);
-				return;
+				setSelectedQueued(queue[index + 1] ?? null);
 			}
+			return;
 		}
 		if (event.name === 'up') {
 			event.preventDefault();
@@ -959,6 +1005,9 @@ export function InputBox(props: {
 				setCursorPos(input().length);
 				return;
 			}
+			// Only Down from the newest empty input enters the agent list.
+			// Recalled prompt history keeps normal Up/Down behavior.
+			if (index === -1 && props.onAgentNavigate?.('down')) return;
 			if (history.length === 0) return;
 			if (index === -1) return;
 			if (index >= history.length - 1) {
@@ -1004,23 +1053,17 @@ export function InputBox(props: {
 		}
 		if (event.name === 'tab') {
 			event.preventDefault();
-			// Shift+Tab cycles the approval mode (yolo → normal → plan →
-			// auto-accept → yolo), parity with the original's mode toggle.
+			// Keyboard cycling never opts into unsandboxed yolo accidentally.
 			if (event.shift) {
-				const ORDER: Array<'yolo' | 'normal' | 'plan' | 'auto-accept'> = [
-					'yolo',
-					'normal',
-					'plan',
-					'auto-accept',
-				];
+				const ORDER = SAFE_MODE_CYCLE;
 				const current = mode();
 				const next =
 					ORDER[
 						(ORDER.indexOf(current as (typeof ORDER)[number]) + 1) %
 							ORDER.length
-					] ?? 'yolo';
+					] ?? 'default';
 				setMode(next);
-				saveSettings({...loadSettings(), mode: next});
+				saveModeSettings(next);
 				return;
 			}
 			const matches = completions();
@@ -1053,15 +1096,20 @@ export function InputBox(props: {
 			event.preventDefault();
 			// Enter on a selected queued item loads it back into the input
 			// for editing (and removes it from the queue).
-			const queuedIndex = selectedQueued();
-			if (queuedIndex >= 0 && queuedIndex < visiblePendingQueue().length) {
-				const selected = visiblePendingQueue()[queuedIndex];
-				const value = selected?.item.value ?? '';
-				setInputAt(value);
-				setPendingQueue(prev =>
-					prev.filter((_, index) => index !== selected?.queueIndex),
+			const selected = selectedQueued();
+			if (
+				input().length === 0 &&
+				selected &&
+				visiblePendingQueue().includes(selected)
+			) {
+				setPasteAttachments({...selected.attachments});
+				setInputAt(
+					selected.delivery === 'after-current'
+						? `/queue ${selected.value}`
+						: selected.value,
 				);
-				setSelectedQueued(-1);
+				setHistoryIndex(-1);
+				setPendingQueue(prev => prev.filter(item => item !== selected));
 				return;
 			}
 			const value = input().trim();
@@ -1072,21 +1120,15 @@ export function InputBox(props: {
 		if (isDeleteKey(event)) {
 			event.preventDefault();
 			// Del on a selected queued item removes it.
-			const queuedIndex = selectedQueued();
+			const selected = selectedQueued();
 			if (
-				queuedIndex >= 0 &&
-				queuedIndex < visiblePendingQueue().length &&
+				event.name === 'delete' &&
+				selected &&
+				visiblePendingQueue().includes(selected) &&
 				input().length === 0
 			) {
-				const selected = visiblePendingQueue()[queuedIndex];
-				setPendingQueue(prev =>
-					prev.filter((_, index) => index !== selected?.queueIndex),
-				);
-				setSelectedQueued(prev =>
-					prev >= visiblePendingQueue().length - 1
-						? visiblePendingQueue().length - 2
-						: prev,
-				);
+				setSelectedQueued(null);
+				setPendingQueue(prev => prev.filter(item => item !== selected));
 				return;
 			}
 			// Backspace deletes at the CURSOR, a whole atomic token when the
@@ -1126,12 +1168,17 @@ export function InputBox(props: {
 			{/* Working indicator: FIXED above the input box (parity with
 			    nanocoder's live region, never scrolled away). */}
 			<Show when={busy()}>
-				<box height={1}>
+				<box height={1} flexDirection="row">
+					{/* Keep rapidly changing fragments in direct text nodes. Nested
+					    spans can repaint independently in OpenTUI, producing impossible
+					    mixed frames such as a stale gear beside newer dots. */}
 					<text
 						fg={retryingAttempt() > 0 ? colors().warning : colors().primary}
 					>
 						{gearGlyph(spinnerFrame())}{' '}
-						{workingLabel(thinkingMode(), thinkingActive())}
+						{workingLabel(thinkingMode(), thinkingActive())}{' '}
+					</text>
+					<text fg={colors().secondary}>
 						{workingDots(spinnerFrame())} · ({formatElapsed(turnElapsed())})
 						{retryingAttempt() > 0 ? ` · retrying (${retryingAttempt()})` : ''}{' '}
 						· Esc to cancel
@@ -1193,8 +1240,7 @@ export function InputBox(props: {
 					</text>
 				</box>
 			</Show>
-			{/* modal-style exit confirmation: the first Ctrl+C/Esc with an
-			    empty input shows this line; the next press exits. */}
+			{/* Modal-style exit confirmation: Ctrl+C only. */}
 			<Show when={exitConfirm()}>
 				<box height={1}>
 					<text fg={colors().warning} attributes={bold()}>
@@ -1216,31 +1262,36 @@ export function InputBox(props: {
 				<box flexDirection="column" height={visiblePendingQueue().length + 1}>
 					<box height={1} flexDirection="row">
 						<text fg={colors().secondary} attributes={dim()}>
-							Queued messages (↑/↓ select, Enter edit, Del remove):
+							Queued messages (↑/↓ select, Enter edit, Del remove · /queue
+							waits):
 						</text>
 					</box>
 					<For each={visiblePendingQueue()}>
-						{(entry, index) => {
-							const active = selectedQueued() === index();
+						{entry => {
+							const active = () =>
+								selectedQueued() === entry && input().length === 0;
 							return (
 								<box
 									flexDirection="row"
 									height={1}
-									backgroundColor={active ? activeRow().bg : undefined}
+									backgroundColor={active() ? activeRow().bg : undefined}
 									{...({
-										onMouseMove: () => setSelectedQueued(index()),
+										onMouseMove: () =>
+											setSelectedQueued(input().length === 0 ? entry : null),
 										onMouseUp: () => {
-											setSelectedQueued(index());
+											setSelectedQueued(input().length === 0 ? entry : null);
 										},
 									} as any)}
 								>
 									<text
-										width={11}
-										fg={active ? activeRow().fg : colors().secondary}
-										attributes={active ? bold() : undefined}
+										width={18}
+										fg={active() ? activeRow().fg : colors().secondary}
+										attributes={active() ? bold() : undefined}
 									>
-										{active ? '▸ ' : '  '}
-										{'(queued)'}
+										{active() ? '▸ ' : '  '}
+										{entry.delivery === 'after-current'
+											? '(after current)'
+											: '(next round)'}
 									</text>
 									{/* Fixed-width tag cell (11 = `▸ (queued)`): the
 									    renderer TRIMS a text node's trailing space,
@@ -1249,8 +1300,8 @@ export function InputBox(props: {
 									    width-1 box both vanish. The width reserves
 									    the cell (completion-row pattern), the next
 									    node starts after it. */}
-									<text fg={active ? activeRow().fg : colors().text}>
-										{entry.item.value}
+									<text fg={active() ? activeRow().fg : colors().text}>
+										{entry.value}
 									</text>
 								</box>
 							);
@@ -1299,7 +1350,7 @@ export function InputBox(props: {
 									} as any)}
 								>
 									<text
-										fg={active ? activeRow().fg : colors().text}
+										fg={active ? activeRow().fg : colors().primary}
 										attributes={active ? bold() : undefined}
 									>
 										{active ? '❯ ' : '  '}@{item.mention}
@@ -1356,18 +1407,11 @@ export function InputBox(props: {
 									} as any)}
 								>
 									<text
-										width={2}
-										fg={active ? activeRow().fg : colors().secondary}
-										attributes={active ? bold() : undefined}
-									>
-										{active ? '❯ ' : '  '}
-									</text>
-									<text
-										width={30}
+										width={32}
 										fg={active ? activeRow().fg : colors().text}
 										attributes={active ? bold() : undefined}
 									>
-										/{item.name}
+										{active ? '❯ ' : '  '}/{item.name}
 									</text>
 									{item.prefix ? (
 										<text
@@ -1620,7 +1664,7 @@ export function completionPopupHeight(inputText: string, _width = 100): number {
 export function mentionPopupHeight(inputText: string): number {
 	const token = mentionToken(inputText);
 	if (token === null) return 0;
-	const all = listProjectFiles();
+	const all = listMentionPaths(token);
 	const cwd = process.cwd();
 	const q = mentionSearchToken(token).toLowerCase();
 	const matches = q

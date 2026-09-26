@@ -1,4 +1,4 @@
-import {describe, expect, test} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
 import {
 	existsSync,
 	mkdtempSync,
@@ -30,7 +30,26 @@ import {
 	searchDeferredTools,
 	MAX_SUBAGENT_TOOL_ROUNDS,
 	SUBAGENT_FINALIZATION_PROMPT,
+	reviewBatchKey,
 } from './tools';
+
+test('review batch keys deduplicate equivalent reviewer launches', () => {
+	const first = reviewBatchKey({
+		graphId: 'graph-1',
+		root: '/repo',
+		base: 'origin/main',
+		reviewers: ['review-security', 'review-ui'],
+		changedFiles: ['src/App.tsx'],
+	});
+	const second = reviewBatchKey({
+		graphId: 'graph-1',
+		root: '/repo',
+		base: 'origin/main',
+		reviewers: ['REVIEW-UI', 'review-security'],
+		changedFiles: ['src/App.tsx'],
+	});
+	expect(second).toBe(first);
+});
 import {loadPersistentMemory} from './memory';
 import {
 	beginFileUndoExchange,
@@ -179,6 +198,16 @@ describe('stable workspace boundary after nested cwd changes', () => {
 });
 
 describe('external folder write approvals', () => {
+	let previousMode: string | undefined;
+	beforeEach(() => {
+		previousMode = process.env.BOBONYO_MODE;
+		process.env.BOBONYO_MODE = 'normal';
+	});
+	afterEach(() => {
+		if (previousMode === undefined) delete process.env.BOBONYO_MODE;
+		else process.env.BOBONYO_MODE = previousMode;
+	});
+
 	test('write_file asks once and session grant covers later edits', async () => {
 		resetSessionPermissionGrants();
 		const root = mkdtempSync(join(tmpdir(), 'bobonyo-grant-root-'));
@@ -544,6 +573,16 @@ describe('deferred tool discovery', () => {
 });
 
 describe('scoped permission requests', () => {
+	let previousMode: string | undefined;
+	beforeEach(() => {
+		previousMode = process.env.BOBONYO_MODE;
+		process.env.BOBONYO_MODE = 'normal';
+	});
+	afterEach(() => {
+		if (previousMode === undefined) delete process.env.BOBONYO_MODE;
+		else process.env.BOBONYO_MODE = previousMode;
+	});
+
 	test('grant is session-scoped and external access is path-scoped', async () => {
 		resetSessionPermissionGrants();
 		expect(requiresApproval('execute_bash', 'normal')).toBe(true);

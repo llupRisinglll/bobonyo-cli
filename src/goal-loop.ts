@@ -7,6 +7,10 @@ export type GoalStatus =
 	| 'complete';
 
 export interface SessionGoal {
+	/** Optional on legacy sessions; normalized when loaded. */
+	id?: string;
+	revision?: number;
+	graphId?: string;
 	objective: string;
 	status: GoalStatus;
 	tokenBudget?: number;
@@ -19,6 +23,53 @@ export interface SessionGoal {
 	updatedAt: number;
 	/** Compact durable operational state, refreshed after autonomous turns. */
 	progress?: GoalProgress;
+}
+export interface GoalOwner {
+	id: string;
+	revision: number;
+	graphId: string;
+}
+
+/** Assign legacy goals an identity once, then persist it with the session. */
+export function normalizeGoal(goal: SessionGoal): SessionGoal & GoalOwner {
+	const id = goal.id ?? crypto.randomUUID();
+	const revision = goal.revision ?? 1;
+	return {...goal, id, revision, graphId: `goal:${id}:${revision}`};
+}
+
+export function goalOwnerFromGraphId(graphId?: string): GoalOwner | undefined {
+	const match = /^goal:(.+):(\d+)$/.exec(graphId ?? '');
+	return match
+		? {id: match[1]!, revision: Number(match[2]), graphId: graphId!}
+		: undefined;
+}
+
+export function goalMatchesOwner(
+	goal: SessionGoal | undefined,
+	owner: GoalOwner | undefined,
+): boolean {
+	return Boolean(
+		goal &&
+		owner &&
+		goal.id === owner.id &&
+		goal.revision === owner.revision &&
+		goal.graphId === owner.graphId,
+	);
+}
+
+export function reviseGoal(
+	goal: SessionGoal,
+	objective: string,
+	now = Date.now(),
+): SessionGoal & GoalOwner {
+	const current = normalizeGoal(goal);
+	return normalizeGoal({
+		...current,
+		objective,
+		revision: current.revision + 1,
+		progress: undefined,
+		updatedAt: now,
+	});
 }
 export interface GoalProgress {
 	updatedAt: number;

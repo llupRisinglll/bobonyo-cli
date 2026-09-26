@@ -364,7 +364,11 @@ export function formatCacheRate(
 	const total = hit + miss;
 	if (total <= 0) return undefined;
 	const missPct = Math.round((miss / total) * 100);
-	return `${formatTokens(hit)}/${formatTokens(total)} (${missPct}% miss)`;
+	const amount =
+		hit === total
+			? formatTokens(total)
+			: `${formatTokens(hit)}/${formatTokens(total)}`;
+	return missPct === 0 ? amount : `${amount} (${missPct}% miss)`;
 }
 
 /**

@@ -10,7 +10,45 @@ import {
 	parseGoalSpec,
 	parseLoopControl,
 	parseLoopSpec,
+	normalizeGoal,
+	reviseGoal,
+	goalMatchesOwner,
+	goalOwnerFromGraphId,
 } from './goal-loop';
+describe('goal revision ownership', () => {
+	const legacy = {
+		objective: 'Ship release',
+		status: 'active' as const,
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		createdAt: 1,
+		updatedAt: 1,
+	};
+	test('legacy identity survives persistence and accounting updates', () => {
+		const goal = normalizeGoal(legacy);
+		const restored = normalizeGoal(JSON.parse(JSON.stringify(goal)));
+		expect(restored).toEqual(goal);
+		expect(
+			normalizeGoal({...goal, tokensUsed: 100, iteration: 2}).graphId,
+		).toBe(goal.graphId);
+		expect(goalMatchesOwner(restored, goalOwnerFromGraphId(goal.graphId))).toBe(
+			true,
+		);
+	});
+	test('edits and replacements reject old completion owners', () => {
+		const goal = normalizeGoal(legacy);
+		const owner = goalOwnerFromGraphId(goal.graphId);
+		const edited = reviseGoal(goal, 'Different objective', 2);
+		expect(edited.id).toBe(goal.id);
+		expect(edited.revision).toBe(goal.revision + 1);
+		expect(edited.graphId).not.toBe(goal.graphId);
+		expect(goalMatchesOwner(edited, owner)).toBe(false);
+		expect(goalMatchesOwner(normalizeGoal(legacy), owner)).toBe(false);
+		expect(goalMatchesOwner(undefined, owner)).toBe(false);
+		expect(goalMatchesOwner(goal, undefined)).toBe(false);
+		expect(goalOwnerFromGraphId('session:legacy:work:old')).toBeUndefined();
+	});
+});
 
 describe('goal helpers', () => {
 	test('continuation prompt carries objective and terminal markers', () => {

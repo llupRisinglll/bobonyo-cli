@@ -10,6 +10,7 @@ const base = {
 	createdAt: 0,
 	updatedAt: 0,
 	firstMessage: '',
+	lastMessage: '',
 };
 
 describe('sessionLabel', () => {
@@ -57,7 +58,8 @@ describe('sessionMatchesQuery (resume search)', () => {
 	const session = {
 		...base,
 		name: 'Refactor theme',
-		firstMessage: 'Please extract the color tokens',
+		firstMessage: 'Old first prompt',
+		lastMessage: 'Please extract the color tokens',
 	};
 
 	test('empty or whitespace query matches everything', () => {
@@ -83,10 +85,7 @@ describe('sessionMatchesQuery (resume search)', () => {
 	test('missing id/name/firstMessage never crashes', () => {
 		expect(sessionMatchesQuery({...base, id: '', name: ''}, 'x')).toBe(false);
 		expect(
-			sessionMatchesQuery(
-				{...base, name: '', firstMessage: ''},
-				'sess_abc_1',
-			),
+			sessionMatchesQuery({...base, name: '', firstMessage: ''}, 'sess_abc_1'),
 		).toBe(true);
 	});
 });

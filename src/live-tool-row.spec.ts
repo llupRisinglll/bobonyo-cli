@@ -2,6 +2,7 @@ import {describe, expect, test} from 'bun:test';
 import {
 	liveRowSegments,
 	shouldRenderRunningToolMessage,
+	shouldRenderAgentInHistory,
 	shouldRenderSettledAgentMessage,
 	splitChunksByLine,
 } from './live-tool-row';
@@ -56,9 +57,24 @@ describe('splitChunksByLine', () => {
 });
 
 describe('running agent row ownership', () => {
+	test('running delegated agents stay out of main history', () => {
+		expect(shouldRenderAgentInHistory('agent', true)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent', false)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent_wait', true)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent_wait', false)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent_status', false)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent_message', false)).toBe(false);
+		expect(shouldRenderAgentInHistory('agent_cancel', false)).toBe(false);
+		expect(shouldRenderAgentInHistory('read_file', true)).toBe(true);
+	});
 	test('active agent row suppresses duplicate generic Agent tool row', () => {
 		expect(shouldRenderRunningToolMessage('agent', true)).toBe(false);
-		expect(shouldRenderRunningToolMessage('agent', false)).toBe(true);
+		expect(shouldRenderRunningToolMessage('agent', false)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent_wait', true)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent_wait', false)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent_status', false)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent_message', false)).toBe(false);
+		expect(shouldRenderRunningToolMessage('agent_cancel', false)).toBe(false);
 		expect(shouldRenderRunningToolMessage('read_file', true)).toBe(true);
 	});
 

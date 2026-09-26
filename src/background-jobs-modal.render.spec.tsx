@@ -314,6 +314,41 @@ test('agents tab supports selection, details, and live transcript updates', asyn
 	}
 });
 
+test('mounts directly into selected agent details without initialization error', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_direct',
+			name: 'general',
+			description: 'inspect direct detail',
+			output: '',
+			transcript: ['Task: inspect direct detail'],
+			streaming: '',
+			history: [{role: 'user', content: 'Task: inspect direct detail'}],
+			status: 'running',
+		},
+	]);
+	const setup = await testRender(
+		() => (
+			<BackgroundJobsModal
+				onClose={() => {}}
+				initialTab="agents"
+				initialAgentId="agent_direct"
+			/>
+		),
+		{width: 100, height: 30},
+	);
+	try {
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'Subagent details')).toBe(true);
+		expect(frameHas(setup.captureSpans(), 'inspect direct detail')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});
+
 test('agents tab retains an interrupted restored subagent for inspection', async () => {
 	setBgTasks([]);
 	const {setActiveAgentRuns} = await import('./state');
@@ -338,8 +373,46 @@ test('agents tab retains an interrupted restored subagent for inspection', async
 		setup.mockInput.pressArrow('right');
 		await setup.flush();
 		const frame = setup.captureSpans();
-		expect(frameHas(frame, 'Agents (1)')).toBe(true);
+		expect(frameHas(frame, 'Agents (0)')).toBe(true);
 		expect(frameHas(frame, 'interrupted')).toBe(true);
+	} finally {
+		setActiveAgentRuns([]);
+		setup.renderer.destroy();
+	}
+});
+
+test('agents tab count excludes retained interrupted agents', async () => {
+	setBgTasks([]);
+	const {setActiveAgentRuns} = await import('./state');
+	setActiveAgentRuns([
+		{
+			id: 'agent_running',
+			name: 'explore',
+			description: 'current work',
+			output: '',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'running',
+		},
+		{
+			id: 'agent_old',
+			name: 'explore',
+			description: 'interrupted work',
+			output: 'Interrupted by session restart.',
+			transcript: [],
+			streaming: '',
+			history: [],
+			status: 'cancelled',
+		},
+	]);
+	const setup = await testRender(
+		() => <BackgroundJobsModal initialTab="agents" onClose={() => {}} />,
+		{width: 100, height: 30},
+	);
+	try {
+		await setup.flush();
+		expect(frameHas(setup.captureSpans(), 'Agents (1)')).toBe(true);
 	} finally {
 		setActiveAgentRuns([]);
 		setup.renderer.destroy();

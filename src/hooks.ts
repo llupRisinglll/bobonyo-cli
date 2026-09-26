@@ -242,9 +242,27 @@ export function listHooks(): HookSummary[] {
 	);
 }
 
-/** Run every Bobonyo hook for one lifecycle event. */
+// Session bookkeeping must remain available to record blockers and completion.
+// Never invoke external tool hooks here: even an observational hook can hang,
+// rewrite a checklist, or prevent the recovery report it requests. Native tool
+// schema, ownership, dependency, and generation validation remain authoritative.
+const INTERNAL_CHECKLIST_TOOLS = new Set([
+	'write_tasks',
+	'task_create',
+	'task_update',
+	'task_get',
+	'task_list',
+]);
+
+/** Run lifecycle hooks, excluding internal checklist tool bookkeeping. */
 export async function runHooks(input: HookInput): Promise<HookResult> {
 	const result: HookResult = {additionalContext: [], messages: []};
+	if (
+		(input.event === 'PreToolUse' || input.event === 'PostToolUse') &&
+		INTERNAL_CHECKLIST_TOOLS.has(input.toolName ?? '')
+	) {
+		return result;
+	}
 	const subject =
 		input.toolName ??
 		input.agentName ??

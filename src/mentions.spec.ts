@@ -7,6 +7,7 @@ import {
 	extractMentionReferences,
 	insertMention,
 	listProjectFiles,
+	listMentionPaths,
 	mentionSearchToken,
 	parseMentionReference,
 } from './mentions';
@@ -29,6 +30,15 @@ describe('mention suggestions', () => {
 		expect(paths).toContain(join(root, 'src', 'alpha.php'));
 		expect(paths.indexOf(join(root, 'src'))).toBeLessThan(
 			paths.indexOf(join(root, 'src', 'alpha.php')),
+		);
+	});
+
+	test('suggests same-directory files and parent-directory entries', () => {
+		expect(listMentionPaths('src/al', root)).toContain(
+			join(root, 'src', 'alpha.php'),
+		);
+		expect(listMentionPaths('..', join(root, 'src'))).toContain(
+			join(root, 'src', 'nested'),
 		);
 	});
 });
@@ -90,6 +100,10 @@ describe('mention references', () => {
 		expect(insertMention('See @my', 'my folder/file.php', 'my')).toBe(
 			'See @"my folder/file.php" ',
 		);
+	});
+
+	test('keeps directory completion open for child path typing', () => {
+		expect(insertMention('See @src', 'src/', 'src')).toBe('See @src/');
 	});
 
 	test('rejects traversal outside the workspace', () => {

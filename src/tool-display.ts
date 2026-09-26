@@ -187,6 +187,7 @@ function formatGenericEntry(
 	if (tool.name === 'skill' || tool.name === 'check_skill') {
 		return formatSkillRow(tool, status);
 	}
+	if (tool.name === 'write_tasks') return formatTaskList(tool, status);
 	if (isTaskProgressTool(tool.name)) return formatTaskStatusText(tool, status);
 	if (tool.name === 'review_changes') return tool.output;
 	if (tool.name === 'agent') {
@@ -209,7 +210,8 @@ function formatGenericEntry(
 /**
  * Task list (parity: nanocoder's TaskListDisplay), `✦ <title> (N done, M in
  * progress, K open)` header + `›/◆/·` status icons per task, colored by
- * state. Reads the LIVE task signal so a running row shows progress.
+ * state. Saved arguments own each snapshot, including an explicit empty
+ * list. Only a running call without saved tasks may read the live signal.
  */
 function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
 	const saved = Array.isArray(tool.args?.tasks)
@@ -221,7 +223,11 @@ function formatTaskList(tool: ToolDisplayData, status: RowStatus): string {
 					typeof (task as {status?: unknown}).status === 'string',
 			)
 		: [];
-	const list = saved.length > 0 ? saved : status === 'running' ? tasks() : [];
+	const list = Array.isArray(tool.args?.tasks)
+		? saved
+		: status === 'running'
+			? tasks()
+			: [];
 	const done = list.filter(task => task.status === 'completed').length;
 	const running = list.filter(task => task.status === 'in_progress').length;
 	const cancelled = list.filter(task => task.status === 'cancelled').length;

@@ -18,6 +18,19 @@ describe('interruptedContext (Esc commits the turn to the provider context)', ()
 		]);
 	});
 
+	test('keeps newest interrupted prompt after an earlier completed turn', () => {
+		const latest: ChatMessageLike[] = [
+			...history,
+			{role: 'assistant', content: 'Earlier answer'},
+			{role: 'user', content: 'continue the interrupted deployment check'},
+		];
+		expect(interruptedContext(latest, '')).toEqual(latest);
+		expect(interruptedContext(latest, 'I was checking the rollout')).toEqual([
+			...latest,
+			{role: 'assistant', content: 'I was checking the rollout'},
+		]);
+	});
+
 	test('returns a copy — the caller history is never mutated', () => {
 		const before = JSON.stringify(history);
 		interruptedContext(history, 'partial');

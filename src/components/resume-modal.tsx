@@ -1,11 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -16,6 +12,7 @@ export interface ResumeSession {
 	createdAt: number;
 	updatedAt: number;
 	firstMessage: string;
+	lastMessage?: string;
 	/** Folder the conversation was created in (legacy sessions may lack it). */
 	cwd?: string;
 	/** Provider + model the conversation ran on (legacy sessions may lack
@@ -71,7 +68,9 @@ export function sessionMatchesQuery(
 	return (
 		(session.id ?? '').toLowerCase().includes(q) ||
 		(session.name ?? '').toLowerCase().includes(q) ||
-		(session.firstMessage ?? '').toLowerCase().includes(q)
+		(session.lastMessage ?? session.firstMessage ?? '')
+			.toLowerCase()
+			.includes(q)
 	);
 }
 
@@ -80,9 +79,7 @@ function dateGroup(createdAt: number): string {
 	const date = new Date(createdAt);
 	const startOfDay = (d: Date): number =>
 		new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-	const dayDiff = Math.round(
-		(startOfDay(now) - startOfDay(date)) / 86_400_000,
-	);
+	const dayDiff = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
 	if (dayDiff <= 0) return 'Today';
 	if (dayDiff === 1) return 'Yesterday';
 	if (dayDiff < 7) return 'This week';
@@ -149,13 +146,14 @@ export function ResumeModal(props: {
 		const available = Math.max(8, dims().height - 2);
 		const lineCount = (row: Row): number =>
 			row.kind === 'session' &&
-			(row.session.firstMessage ?? '').trim()
+			(row.session.lastMessage ?? row.session.firstMessage ?? '').trim()
 				? 2
 				: 1;
 		const content = allRows().reduce((sum, row) => sum + lineCount(row), 0);
 		return Math.min(26, Math.max(10, Math.min(content + 10, available)));
 	};
-	const cardY = () => Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+	const cardY = () =>
+		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const listVisible = () => Math.max(3, cardHeight() - 10);
 
@@ -168,8 +166,7 @@ export function ResumeModal(props: {
 		const seen = new Set<string>();
 		const filtered = [...props.sessions]
 			.sort(
-				(a, b) =>
-					(b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
+				(a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
 			)
 			.filter(session => {
 				// Defensive dedupe (listSessions already dedupes by id).
@@ -214,7 +211,7 @@ export function ResumeModal(props: {
 		// overflow the card and overlap the next row.
 		const lineCount = (row: Row): number =>
 			row.kind === 'session' &&
-			(row.session.firstMessage ?? '').trim()
+			(row.session.lastMessage ?? row.session.firstMessage ?? '').trim()
 				? 2
 				: 1;
 		const sel = Math.min(Math.max(0, rowIndex()), all.length - 1);
@@ -241,10 +238,7 @@ export function ResumeModal(props: {
 		const rows = allRows();
 		if (rows.length === 0) return;
 		let next = rowIndex() + delta;
-		while (
-			rows[next]?.kind === 'header' ||
-			rows[next]?.kind === 'spacer'
-		) {
+		while (rows[next]?.kind === 'header' || rows[next]?.kind === 'spacer') {
 			next += delta;
 		}
 		if (next < 0 || next >= rows.length) return;
@@ -382,7 +376,7 @@ export function ResumeModal(props: {
 				</Show>
 				<box height={1} />
 				<For each={visibleItems()}>
-					{(item) => {
+					{item => {
 						const row = item.row;
 						if (row.kind === 'empty') {
 							return (
@@ -404,17 +398,18 @@ export function ResumeModal(props: {
 						if (row.kind === 'spacer') {
 							return <box height={1} />;
 						}
-						const reason = (row.session.firstMessage ?? '').trim();
+						const reason = (
+							row.session.lastMessage ??
+							row.session.firstMessage ??
+							''
+						).trim();
 						return (
 							<box
 								flexDirection="column"
 								height={reason ? 2 : 1}
-								backgroundColor={
-									item.active ? activeRow().bg : undefined
-								}
+								backgroundColor={item.active ? activeRow().bg : undefined}
 								{...({
-									onMouseUp: () =>
-										props.onResume(row.session.id),
+									onMouseUp: () => props.onResume(row.session.id),
 									onMouseMove: () =>
 										setRowIndex(
 											allRows().findIndex(
@@ -431,48 +426,29 @@ export function ResumeModal(props: {
 								    ago" on ONE row. */}
 								<box flexDirection="row">
 									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().text
-										}
-										attributes={
-											item.active ? bold() : undefined
-										}
+										fg={item.active ? activeRow().fg : colors().text}
+										attributes={item.active ? bold() : undefined}
 									>
 										{item.active ? '❯ ' : '  '}
 										{sessionLabel(row.session).slice(0, 48)}
 									</text>
 									<Show when={row.session.model}>
 										<text
-											fg={
-												item.active
-													? activeRow().fg
-													: colors().secondary
-											}
+											fg={item.active ? activeRow().fg : colors().secondary}
 											attributes={dim()}
 										>
 											{' · '}
 											{row.session.model}
-											{row.session.provider
-												? ` · ${row.session.provider}`
-												: ''}
+											{row.session.provider ? ` · ${row.session.provider}` : ''}
 										</text>
 									</Show>
 									<box flexGrow={1} />
 									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={
-											item.active ? bold() : dim()
-										}
+										fg={item.active ? activeRow().fg : colors().secondary}
+										attributes={item.active ? bold() : dim()}
 									>
 										{relativeTime(
-											row.session.updatedAt ??
-												row.session.createdAt,
+											row.session.updatedAt ?? row.session.createdAt,
 										)}
 									</text>
 								</box>
@@ -481,14 +457,8 @@ export function ResumeModal(props: {
 								    color rule as the other optional lines. */}
 								{reason ? (
 									<text
-										fg={
-											item.active
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={
-											item.active ? bold() : dim()
-										}
+										fg={item.active ? activeRow().fg : colors().secondary}
+										attributes={item.active ? bold() : dim()}
 									>
 										{' └ '}
 										{reason.slice(0, 44)}
@@ -502,7 +472,8 @@ export function ResumeModal(props: {
 				</For>
 				<box height={1} />
 				<text fg={colors().secondary} attributes={dim()}>
-					↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} · Esc close
+					↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} ·
+					Esc close
 				</text>
 			</box>
 		</box>

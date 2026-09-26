@@ -484,6 +484,67 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 		}
 	});
 
+	test('surfaces provider-hosted web search without treating it as a local tool call', async () => {
+		const sse = [
+			'event: response.output_item.added',
+			'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"in_progress"}}',
+			'',
+			'event: response.output_item.done',
+			'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"PostgreSQL million-row pagination"}}}',
+			'',
+			'event: response.output_text.delta',
+			'data: {"type":"response.output_text.delta","output_index":1,"delta":"Sources found."}',
+			'',
+			'event: response.completed',
+			'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
+			'',
+		].join('\n');
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(sse));
+				controller.close();
+			},
+		});
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({
+			ok: true,
+			status: 200,
+			body: stream,
+		})) as unknown as typeof fetch;
+		try {
+			setActiveEndpoint({
+				id: 'responses-web-search-test',
+				name: 'Responses Web Search Test',
+				baseUrl: 'https://api.openai.com',
+				apiKey: 'sk-test',
+				model: 'gpt-5.5-codex',
+				models: ['gpt-5.5-codex'],
+				contextWindow: 400_000,
+				sdkProvider: 'responses',
+			});
+			const searches: unknown[] = [];
+			const result = await streamChat(
+				[{role: 'user', content: 'research pagination'}],
+				{
+					onText: () => {},
+					onReasoning: () => {},
+					onWebSearch: action => searches.push(action),
+				},
+				undefined,
+				[],
+				{stallTimeoutMs: 2000},
+			);
+			expect(searches).toEqual([
+				{type: 'search', query: 'PostgreSQL million-row pagination'},
+			]);
+			expect(result.toolCalls).toEqual([]);
+			expect(result.text).toBe('Sources found.');
+		} finally {
+			globalThis.fetch = realFetch;
+		}
+	});
+
 	test('codexAccount sends the codex backend URL + ChatGPT auth headers', async () => {
 		process.env.CODEX_HOME = `${import.meta.dir}/.test-temp-codex-auth`;
 		mkdirSync(process.env.CODEX_HOME, {recursive: true});
