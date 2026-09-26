@@ -1,13 +1,41 @@
 {
 	"name": "bobonyo",
 	"version": "0.1.0",
-	"private": true,
 	"type": "module",
 	"packageManager": "bun@1.4.0",
 	"engines": {
 		"bun": ">=1.4.0"
 	},
-	"description": "Rewrite of the nanocoder CLI on Solid + OpenTUI (parity target: docs/business-logic/cli)",
+	"description": "A model-agnostic terminal coding harness with multi-agent collaboration",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/llupRisinglll/bobonyo-cli.git"
+	},
+	"homepage": "https://github.com/llupRisinglll/bobonyo-cli#readme",
+	"bugs": {
+		"url": "https://github.com/llupRisinglll/bobonyo-cli/issues"
+	},
+	"keywords": [
+		"coding-agent",
+		"terminal",
+		"ai",
+		"llm",
+		"cli"
+	],
+	"files": [
+		"src",
+		"dist",
+		"scripts/launcher.sh",
+		"LICENSE",
+		"README.md"
+	],
+	"bin": {
+		"bobonyo": "dist/bobonyo"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"dev": "bun run src/index.tsx",
 		"preview": "bun run src/index.tsx --preview tui",

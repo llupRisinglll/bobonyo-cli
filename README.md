@@ -127,7 +127,26 @@ the mouse, so you can hover and click.
 
 ## Install
 
-You need [Bun](https://bun.sh) version 1.2 or newer.
+You need [Bun](https://bun.sh) version 1.4 or newer. The npm package uses a
+launcher that runs the app with Bun; npm does not install Bun for you.
+
+Install the published CLI globally:
+
+```bash
+npm install --global bobonyo
+bobonyo
+```
+
+Or run it without a global install:
+
+```bash
+npx bobonyo
+```
+
+The package is published under the unscoped `bobonyo` name, not under an npm
+organization. Configure your model provider on first launch.
+
+To work from source instead:
 
 ```bash
 git clone https://github.com/llupRisinglll/bobonyo-cli.git

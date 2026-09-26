@@ -7,8 +7,32 @@ set +m
 
 # Resolve paths in a subshell: preserve the user's cwd, arguments, and absolute
 # OpenTUI preload even when the user's project has its own node_modules/bunfig.
-DIR="$(cd "$(dirname "$0")/.." && pwd)" || exit 1
-PRELOAD="$DIR/node_modules/@opentui/solid/scripts/preload.js"
+SOURCE="$0"
+while [[ -L "$SOURCE" ]]; do
+	SOURCE_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)" || exit 1
+	LINK="$(readlink "$SOURCE")" || exit 1
+	if [[ "$LINK" = /* ]]; then
+		SOURCE="$LINK"
+	else
+		SOURCE="$SOURCE_DIR/$LINK"
+	fi
+done
+DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)" || exit 1
+PRELOAD=''
+SEARCH_DIR="$DIR"
+while [[ "$SEARCH_DIR" != / ]]; do
+	CANDIDATE="$SEARCH_DIR/node_modules/@opentui/solid/scripts/preload.js"
+	if [[ -f "$CANDIDATE" ]]; then
+		PRELOAD="$CANDIDATE"
+		break
+	fi
+	SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+done
+# Keep repository-relative default for build-time isolation and report useful
+# failure later if neither local nor hoisted dependency is actually installed.
+if [[ -z "$PRELOAD" ]]; then
+	PRELOAD="$DIR/node_modules/@opentui/solid/scripts/preload.js"
+fi
 
 saved_stty=''
 if [[ -t 0 ]]; then
