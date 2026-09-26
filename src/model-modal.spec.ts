@@ -35,6 +35,19 @@ describe('effortLevelsForModel', () => {
 		]);
 		expect(effortLevelsForModel('gpt-4.1')).not.toContain('xhigh');
 	});
+
+	test('GPT-6 family gets the full ladder (auto-extends to new models)', () => {
+		for (const model of ['gpt-6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+			expect(effortLevelsForModel(model)).toEqual([
+				'minimal',
+				'low',
+				'medium',
+				'high',
+				'xhigh',
+				'max',
+			]);
+		}
+	});
 });
 
 const provider = (name: string) => ({

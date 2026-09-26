@@ -22,8 +22,9 @@ export const EFFORT_LEVELS = [
 /** API effort values supported by current GPT model families. */
 export function effortLevelsForModel(model: string): string[] {
 	const levels = ['minimal', 'low', 'medium', 'high'];
-	if (/gpt-5(?:\.[2-9])?(?:-|$)|codex-max/i.test(model)) levels.push('xhigh');
-	if (/gpt-5\.6/i.test(model)) levels.push('max');
+	if (/gpt-(?:5(?:\.[2-9])?|6(?:\.\d+)?)(?:-|$)|codex-max/i.test(model))
+		levels.push('xhigh');
+	if (/gpt-(?:5\.6|6(?:\.\d+)?)(?:-|$)/i.test(model)) levels.push('max');
 	return levels;
 }
 
