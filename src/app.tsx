@@ -3156,7 +3156,10 @@ export function App() {
 		// `/command` → slash-command pipeline (display-only output).
 		if (prompt.startsWith('/')) {
 			setInput('');
-			runCommand(prompt, {
+			// Unknown commands return false → fall through to the regular
+			// message path so file paths / natural language starting with /
+			// still reach the model and get recorded in prompt history.
+			const handled = runCommand(prompt, {
 				onBuiltinCommand: () => {
 					appendMessage({role: 'user', content: value, submittedCommand: true});
 					setPromptHistory(prev =>
@@ -3286,7 +3289,10 @@ export function App() {
 					);
 				},
 			});
-			return;
+			// Unknown commands return false → fall through to the regular
+			// message path so file paths / natural language starting with /
+			// still reach the model and get recorded in prompt history.
+			if (handled) return;
 		}
 
 		const prepared = await prepareUserPrompt(value, attachments);
