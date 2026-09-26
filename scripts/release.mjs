@@ -48,23 +48,25 @@ function parseChangeset(name, text) {
 	let level;
 	for (const line of match[1].split(/\r?\n/)) {
 		if (!line.trim()) continue;
-		const pair = /^\s*"([^"]+)"\s*:\s*([a-z]+)\s*$/.exec(line);
+		// Either quote style: formatters (prettier's YAML frontmatter pass)
+		// rewrite `"bobonyo"` to 'bobonyo' on commit.
+		const pair = /^\s*(['"])([^'"]+)\1\s*:\s*([a-z]+)\s*$/.exec(line);
 		if (!pair) {
 			throw new Error(
 				`.changeset/${name}: malformed frontmatter line: ${line}`,
 			);
 		}
-		if (pair[1] !== 'bobonyo') {
+		if (pair[2] !== 'bobonyo') {
 			throw new Error(
-				`.changeset/${name}: unknown package "${pair[1]}" (expected "bobonyo")`,
+				`.changeset/${name}: unknown package "${pair[2]}" (expected "bobonyo")`,
 			);
 		}
-		if (!LEVELS.includes(pair[2])) {
+		if (!LEVELS.includes(pair[3])) {
 			throw new Error(
-				`.changeset/${name}: invalid level "${pair[2]}" (use major/minor/patch)`,
+				`.changeset/${name}: invalid level "${pair[3]}" (use major/minor/patch)`,
 			);
 		}
-		level = pair[2];
+		level = pair[3];
 	}
 	const summary = (match[2] ?? '').trim();
 	if (!level)
@@ -140,7 +142,10 @@ function requireChangeset(base) {
 			file === 'tsconfig.json',
 	);
 	const changesetFiles = files.filter(
-		file => /^\.changeset\/.+\.md$/.test(file) && existsSync(join(root, file)),
+		file =>
+			/^\.changeset\/.+\.md$/.test(file) &&
+			file !== '.changeset/README.md' &&
+			existsSync(join(root, file)),
 	);
 	// Malformed entries must never reach main: validate every changed one.
 	for (const file of changesetFiles) {

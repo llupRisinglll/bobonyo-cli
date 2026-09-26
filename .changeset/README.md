@@ -16,7 +16,8 @@ One-line summary of the change (this becomes the CHANGELOG entry).
 ```
 
 - File name: any unique slug, e.g. `fix-model-list.md`.
-- Package name must be `"bobonyo"`.
+- Package name must be `"bobonyo"` (single quotes also accepted — the
+  pre-commit formatter rewrites the quotes).
 - Level is one of `major`, `minor`, `patch`:
   - `patch` — fixes, tests, docs, chores, CI.
   - `minor` — new features, and breaking changes while the version is 0.x.
