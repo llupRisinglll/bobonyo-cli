@@ -53,7 +53,7 @@ banner = next(
     (
         e[2]
         for e in events[exit_at : exit_at + 12]
-        if e[1] == "o" and "bobonyo (v0.1.0)" in e[2]
+        if e[1] == "o" and "bobonyo (v" in e[2]
     ),
     None,
 )

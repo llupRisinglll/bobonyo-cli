@@ -4,6 +4,7 @@
  * trailing tip.
  */
 import type {ChatMessage} from './state';
+import {VERSION} from './version';
 
 /**
  * Whether the transcript holds a REAL conversation. System log rows carry a
@@ -37,7 +38,7 @@ export function buildBannerBox(options: {
 	// the same column: mascot width + 2.
 	const labelCol = mascot.length + 2;
 	const contentLines = [
-		`★${' '.repeat(labelCol - 1)}bobonyo (v0.1.0)`,
+		`★${' '.repeat(labelCol - 1)}bobonyo (v${VERSION})`,
 		`${mascot}  model:       ${model}  /model to change`,
 		`${mascotBase}  directory:   ${cwd}`,
 		`${' '.repeat(labelCol)}permissions: ${permissions}`,

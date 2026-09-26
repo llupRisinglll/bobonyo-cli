@@ -18,3 +18,23 @@ verification, configuration ownership, and safety. These rules supplement it.
   authentication, or remote configuration prevent completion, report the exact
   blocker and retain the work. Never claim a commit or push succeeded without
   verifying it.
+
+## Hard rule: every commit carries a change set
+
+- Every non-release commit MUST add exactly one `.changeset/<slug>.md` file
+  describing that logical change (format in `.changeset/README.md`):
+  `---\n"bobonyo": patch\n---\n` followed by a one-line user-facing summary.
+  Levels: `patch` fixes/tests/docs/chores, `minor` features (and breaking
+  changes while 0.x), `major` reserved for 1.0.
+- The summary is pasted verbatim into `CHANGELOG.md` and the GitHub Release
+  notes — write it for users, not for the diff.
+- CI (`.github/workflows/ci.yml`) rejects PRs whose `src/`, `scripts/`,
+  `package.json` or `bun.lock` changed without a valid change set. Do not
+  bypass it; add the change set.
+- `chore(release)` commits (the bot's version bump) are the ONLY exemption.
+- Releases are automatic: pushing to `main` lets
+  `.github/workflows/release.yml` consume the pending change sets, bump
+  `package.json` `version` (single source of truth — `src/version.ts`),
+  update `CHANGELOG.md`, tag `vX.Y.Z`, and publish a GitHub Release.
+  Never edit `package.json`'s `version` by hand and never hand-edit a
+  generated `CHANGELOG.md` release section.

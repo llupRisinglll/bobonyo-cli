@@ -302,7 +302,7 @@ import {
 	shouldPersistTaskCloseoutReply,
 } from './task-closeout';
 
-const VERSION = '0.1.0';
+import {VERSION} from './version';
 import {CompletionPopup} from './components/completion-popup';
 import {
 	COMPLETION_POPUP_IDLE_MS,

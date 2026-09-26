@@ -23,6 +23,7 @@ import {
 	resolve,
 } from 'node:path';
 import {bobonyoConfigDir} from './bobonyo-paths';
+import {VERSION} from './version';
 
 export interface MCPServerConfig {
 	id: string;
@@ -402,7 +403,7 @@ export async function connectMCPServer(
 		await client.request('initialize', {
 			protocolVersion: '2024-11-05',
 			capabilities: {},
-			clientInfo: {name: 'bobonyo', version: '0.1.0'},
+			clientInfo: {name: 'bobonyo', version: VERSION},
 		});
 		const listed = (await client.request('tools/list', {})) as {
 			tools?: Array<{

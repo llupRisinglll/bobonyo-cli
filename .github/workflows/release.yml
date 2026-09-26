@@ -1,0 +1,59 @@
+name: Release
+
+# Consumes `.changeset/` entries on every push to main: bumps package.json's
+# version, updates CHANGELOG.md, commits `chore(release): vX.Y.Z`, tags, and
+# publishes a GitHub Release with the generated notes. A push with no pending
+# change sets is a no-op.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Verify
+        run: |
+          bun run typecheck
+          bun test
+          bun run build
+
+      - name: Consume change sets
+        id: release
+        run: node scripts/release.mjs --notes /tmp/release-notes.md
+
+      - name: Commit, tag, and publish GitHub Release
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HUSKY: '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json CHANGELOG.md .changeset
+          git commit -m "chore(release): v${{ steps.release.outputs.version }}"
+          git tag "v${{ steps.release.outputs.version }}"
+          git pull --rebase origin main
+          git push origin main --follow-tags
+          gh release create "v${{ steps.release.outputs.version }}" \
+            --title "v${{ steps.release.outputs.version }}" \
+            --notes-file /tmp/release-notes.md
