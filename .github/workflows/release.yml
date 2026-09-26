@@ -48,6 +48,10 @@ jobs:
         id: release
         run: node scripts/release.mjs --notes /tmp/release-notes.md
 
+      - name: Rebuild with released version
+        if: steps.release.outputs.released == 'true'
+        run: bun run build
+
       - name: Commit, tag, and publish GitHub Release
         if: steps.release.outputs.released == 'true'
         env:
@@ -60,7 +64,7 @@ jobs:
           git commit -m "chore(release): v${{ steps.release.outputs.version }}"
           git tag "v${{ steps.release.outputs.version }}"
           git pull --rebase origin main
-          git push origin main --follow-tags
+          git push origin main "refs/tags/v${{ steps.release.outputs.version }}"
           gh release create "v${{ steps.release.outputs.version }}" \
             --title "v${{ steps.release.outputs.version }}" \
             --notes-file /tmp/release-notes.md
