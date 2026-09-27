@@ -1,14 +1,23 @@
 /** @jsxImportSource @opentui/solid */
 import '@opentui/solid/preload';
 import {afterEach, describe, expect, test} from 'bun:test';
-import {RGBA} from '@opentui/core';
+import {RGBA, type BoxRenderable} from '@opentui/core';
 import {testRender, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, Show} from 'solid-js';
 import {
 	InlineAgentRows,
 	inlineAgentLayout,
 } from './components/inline-agent-rows';
-import {runningAgentRows, setActiveAgentRuns, setActiveAgents} from './state';
+import {
+	type ActiveAgentRun,
+	input,
+	runningAgentRows,
+	setActiveAgentRuns,
+	setActiveAgents,
+	setBusy,
+	setInput,
+} from './state';
+import {InputBox, computeInputBoxHeight} from './components/input-box';
 import {ActivityIndicator} from './components/activity-indicator';
 import {Status} from './components/status';
 import {colors} from './theme';
@@ -72,6 +81,162 @@ test('running rows survive count changes with unchanged retained-run cardinality
 afterEach(() => {
 	setActiveAgentRuns([]);
 	setActiveAgents(0);
+	setInput('');
+	setBusy(false);
+});
+
+test('recently completed agents consume no rows with a zero allocation', async () => {
+	setActiveAgentRuns([
+		{...makeAgent(1), status: 'completed', finishedAt: Date.now()},
+	]);
+	const setup = await testRender(
+		() => (
+			<box flexDirection="column">
+				<InlineAgentRows
+					layout={inlineAgentLayout(0, 0)}
+					selectedIndex={-1}
+					onSelect={() => {}}
+					onOpen={() => {}}
+					onNavigate={() => true}
+				/>
+				<text height={1}>Next row</text>
+			</box>
+		),
+		{width: 80, height: 12},
+	);
+	try {
+		await setup.flush();
+		expect(
+			setup
+				.captureSpans()
+				.lines[0]!.spans.map(span => span.text)
+				.join(''),
+		).toContain('Next row');
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test('real composer stays intact through agent completion and narrow resize', async () => {
+	setBusy(false);
+	const draft = 'Keep this draft intact while agents finish.';
+	setInput(draft);
+	setActiveAgentRuns([makeAgent(1), makeAgent(2), makeAgent(3)]);
+	let root!: BoxRenderable;
+	let end!: BoxRenderable;
+	let allocated = () => inlineAgentLayout(0, 0);
+	const setup = await testRender(
+		() => {
+			const dimensions = useTerminalDimensions();
+			const composerRows = createMemo(
+				() => computeInputBoxHeight(input(), dimensions().width, false) + 2,
+			);
+			const layout = createMemo(() =>
+				inlineAgentLayout(
+					runningAgentRows().length,
+					dimensions().height - composerRows(),
+				),
+			);
+			allocated = layout;
+			return (
+				<box ref={root} height="100%" flexDirection="column" paddingX={1}>
+					{/* Saturate the available history without mounting unrelated session machinery. */}
+					<box
+						height={Math.max(
+							0,
+							dimensions().height - composerRows() - layout().height,
+						)}
+						flexShrink={0}
+						overflow="hidden"
+					>
+						<text>{'History transcript\n'.repeat(40)}</text>
+					</box>
+					<box height={1} />
+					<InputBox onSubmit={() => {}} />
+					<Status cwd="/work" />
+					<Show when={layout().gapHeight > 0}>
+						<box height={layout().gapHeight} flexShrink={0}>
+							<text> </text>
+						</box>
+					</Show>
+					<InlineAgentRows
+						layout={layout()}
+						selectedIndex={-1}
+						onSelect={() => {}}
+						onOpen={() => {}}
+						onNavigate={() => true}
+					/>
+					<box ref={end} height={0} flexShrink={0} />
+				</box>
+			);
+		},
+		{width: 80, height: 12},
+	);
+	const assertGeometry = async (width: number, height: number) => {
+		await setup.flush();
+		const lines = setup
+			.captureSpans()
+			.lines.map(line => line.spans.map(span => span.text).join(''));
+		const statusY = height - allocated().height - 1;
+		const inputHeight = computeInputBoxHeight(draft, width, false);
+		expect(end.y).toBe(height);
+		expect(root.height).toBe(height);
+		expect(lines[statusY]).toMatch(/^\s*⏵⏵⏵ /);
+		expect(lines[statusY - inputHeight]).toContain('╭');
+		expect(lines[statusY - inputHeight]).toContain('╮');
+		expect(lines[statusY - 1]).toContain('╰');
+		expect(lines[statusY - 1]).toContain('╯');
+		const paintedDraft = lines
+			.slice(statusY - inputHeight + 1, statusY - 1)
+			.join('')
+			.replace(/[\s│❯]/g, '');
+		expect(paintedDraft).toContain(draft.replace(/\s/g, ''));
+		expect(input()).toBe(draft);
+	};
+	try {
+		await assertGeometry(80, 12);
+		setActiveAgentRuns(runs =>
+			runs.map((run, index) =>
+				index === 0
+					? {...run, status: 'completed', finishedAt: Date.now()}
+					: run,
+			),
+		);
+		await assertGeometry(80, 12);
+		setup.resize(32, 8);
+		await assertGeometry(32, 8);
+		setActiveAgentRuns(runs =>
+			runs.map(run => ({...run, status: 'completed', finishedAt: Date.now()})),
+		);
+		await assertGeometry(32, 8);
+		setup.resize(80, 12);
+		await assertGeometry(80, 12);
+
+		// A failed or cancelled child must release the same allocation as a success.
+		setActiveAgentRuns([makeAgent(1), makeAgent(2), makeAgent(3)]);
+		await assertGeometry(80, 12);
+		const outcomes = [
+			'error',
+			'cancelled',
+			'completed',
+		] as const satisfies readonly ActiveAgentRun['status'][];
+		for (const [index, status] of outcomes.entries()) {
+			const finishedAt = Date.now();
+			setActiveAgentRuns(runs =>
+				runs.map((run, runIndex) =>
+					runIndex === index ? {...run, status, finishedAt} : run,
+				),
+			);
+			expect(runningAgentRows()).toHaveLength(outcomes.length - index - 1);
+			await assertGeometry(80, 12);
+			setup.resize(32, 8);
+			await assertGeometry(32, 8);
+			setup.resize(80, 12);
+			await assertGeometry(80, 12);
+		}
+	} finally {
+		setup.renderer.destroy();
+	}
 });
 
 test('badge and inline rows share reactive running projection, not execution counter', async () => {

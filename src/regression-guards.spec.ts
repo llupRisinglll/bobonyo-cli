@@ -1922,8 +1922,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(state).toMatch(
 			/export const runningAgentRows = createMemo\(\(\) =>\s*activeAgentRuns\(\)\.filter/,
 		);
-		expect(rows).toContain('finishedAgentRows(activeAgentRuns())');
-		expect(rows).toContain('import {activeAgentRuns, runningAgentRows');
+		expect(rows).not.toContain('finishedAgentRows(activeAgentRuns())');
+		expect(rows).toContain('import {runningAgentRows');
+		// Completed summaries belong to History, not an unbudgeted footer box.
+		expect(rows).toContain('<Show when={layout().listHeight > 0}>');
+		expect(rows).toContain('height={layout().listHeight}');
+		expect(rows).not.toContain('finished().length');
 		expect(rows).toContain("export {runningAgentRows} from '../state'");
 		expect(app).toContain('agentCount={runningAgentRows().length}');
 		const indicatorStart = app.indexOf('<ActivityIndicator');

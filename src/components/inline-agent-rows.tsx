@@ -9,7 +9,7 @@ import {
 	onMount,
 } from 'solid-js';
 import {useTerminalDimensions} from '@opentui/solid';
-import {activeAgentRuns, runningAgentRows, type ActiveAgentRun} from '../state';
+import {runningAgentRows, type ActiveAgentRun} from '../state';
 export {runningAgentRows} from '../state';
 import {colors} from '../theme';
 import {agentDisplayLabels} from '../agent-label';
@@ -216,7 +216,6 @@ export function InlineAgentRows(props: {
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const agents = () => runningAgentRows();
-	const finished = () => finishedAgentRows(activeAgentRuns());
 	const layout = createMemo(
 		() =>
 			props.layout ??
@@ -263,14 +262,11 @@ export function InlineAgentRows(props: {
 		previousAgentCount = count;
 	});
 	return (
-		<Show when={layout().listHeight > 0 || finished().length > 0}>
+		<Show when={layout().listHeight > 0}>
 			<box
 				flexDirection="column"
 				flexShrink={0}
-				height={
-					layout().listHeight +
-					(finished().length > 0 ? finished().length + 1 : 0)
-				}
+				height={layout().listHeight}
 				overflow="hidden"
 				{...({
 					onMouseScroll: (event: {
