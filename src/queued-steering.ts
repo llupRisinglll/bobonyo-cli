@@ -1,5 +1,14 @@
 import type {PendingWorkItem} from './background-notification';
 
+/** Delivery and final-response continuation must agree on turn ownership. */
+export function canDeliverQueuedSteering(state: {
+	taskTurn: boolean;
+	detachedWorkStarted: boolean;
+	aborted: boolean;
+}): boolean {
+	return !state.taskTurn && !state.detachedWorkStarted && !state.aborted;
+}
+
 /** Only ordinary chat may join an active turn; commands and events keep their dispatcher. */
 export function steeringSnapshot(queue: PendingWorkItem[]): PendingWorkItem[] {
 	const boundary = queue.findIndex(

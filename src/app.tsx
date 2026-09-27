@@ -121,7 +121,11 @@ import {
 	type DetachedCompletion,
 } from './background-notification';
 import {createDebouncedFlush} from './debounced-flush';
-import {deliverQueuedSteering, steeringSnapshot} from './queued-steering';
+import {
+	canDeliverQueuedSteering,
+	deliverQueuedSteering,
+	steeringSnapshot,
+} from './queued-steering';
 import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
 import {
 	loadSettings,
@@ -3601,16 +3605,22 @@ export function App() {
 					abortRef?.abort();
 				}, watchdogMsRef);
 			}
+			const canDeliverPendingPrompts = (): boolean =>
+				canDeliverQueuedSteering({
+					taskTurn,
+					detachedWorkStarted,
+					aborted: controller.signal.aborted,
+				});
 			const deliverPendingPrompts = async (): Promise<void> => {
 				await deliverQueuedSteering(
 					pendingQueue(),
 					async item => {
-						if (controller.signal.aborted || detachedWorkStarted) return false;
+						if (!canDeliverPendingPrompts()) return false;
 						const prompt = await prepareUserPrompt(
 							item.value,
 							item.attachments,
 						);
-						if (controller.signal.aborted || detachedWorkStarted) return false;
+						if (!canDeliverPendingPrompts()) return false;
 						if (prompt === undefined) return true;
 						const images = supportsNativeImageInput(activeEndpoint())
 							? Object.entries(item.attachments ?? {})
@@ -3709,7 +3719,7 @@ export function App() {
 						];
 					}
 					// The previous complete tool batch is in history; never drain inside callLoop.
-					if (!taskTurn) await deliverPendingPrompts();
+					if (canDeliverPendingPrompts()) await deliverPendingPrompts();
 					controller.signal.throwIfAborted();
 					// Settled `⚙ Thought (Ns)` reports the THINKING phase length
 					// (since reasoning first streamed), not the whole turn.
@@ -3842,7 +3852,10 @@ export function App() {
 					}
 
 					if (result.toolCalls.length === 0) {
-						if (steeringSnapshot(pendingQueue()).length > 0) {
+						if (
+							canDeliverPendingPrompts() &&
+							steeringSnapshot(pendingQueue()).length > 0
+						) {
 							if (result.text.trim() || result.reasoning.trim()) {
 								appendAssistantMessage(scrubberRef.rehydrate(result.text), {
 									reasoning: result.reasoning.trim() || undefined,
