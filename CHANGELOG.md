@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.2.5 (2026-09-27)
+
+### Patch
+- Keep the input box and status line aligned when background agents finish.
 ## v0.2.4 (2026-09-27)
 
 ### Patch
