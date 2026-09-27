@@ -1,4 +1,6 @@
 import {describe, expect, test} from 'bun:test';
+import * as state from './state';
+import {runOwnedContextOperation} from './hooks';
 import {
 	anyModalOpen,
 	compactingLabel,
@@ -16,6 +18,37 @@ import {
 	setSettingsOpen,
 	setStatusOpen,
 } from './state';
+test('clear and resume reset old indicator without letting stale completion clear new work', async () => {
+	for (const replacement of ['clear', 'resume']) {
+		for (const fails of [false, true]) {
+			let owner = 1;
+			const captured = owner;
+			const release = Promise.withResolvers<void>();
+			state.setCompacting(true);
+			const old = runOwnedContextOperation(
+				async () => {
+					await release.promise;
+					if (fails) throw new Error('old failure');
+				},
+				() => owner === captured,
+				() => {
+					throw new Error('stale error callback');
+				},
+				() => state.setCompacting(false),
+			);
+			owner++;
+			if (replacement === 'clear') state.clearMessages();
+			else state.resetSessionCompaction();
+			const reset = state.compacting();
+			state.setCompacting(true);
+			release.resolve();
+			await old;
+			expect(reset).toBe(false);
+			expect(state.compacting()).toBe(true);
+			state.setCompacting(false);
+		}
+	}
+});
 
 function closeEveryModal(): void {
 	setSettingsOpen(false);

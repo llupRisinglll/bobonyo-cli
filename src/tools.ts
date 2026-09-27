@@ -46,7 +46,13 @@ import {snapshotFileBeforeMutation, snapshotMutationTargets} from './file-undo';
 import {createWorkGraph, recordWorkEvent, upsertWorkNode} from './work-graph';
 import {appendMemory, clearMemory, forgetMemory} from './memory';
 import {executeNativeWebSearch, resolveWebSearchFallback} from './web-search';
-import {runBashPostHooks, runBashPreHooks, runHooks} from './hooks';
+import {
+	runBashPostHooks,
+	runBashPreHooks,
+	runHooks,
+	withHookContext,
+	hookSessionId,
+} from './hooks';
 import {loadSettings} from './settings';
 import {autoApprovesTools} from './modes';
 import {
@@ -140,6 +146,8 @@ export interface ToolResult {
 }
 
 export interface ToolContext {
+	hookContextId?: string;
+	hookSessionId?: string;
 	/** Checklist owner. Omit only for the main conversation. */
 	agentId?: string;
 	/** Reject checklist writes from superseded agent attempts. */
@@ -635,14 +643,22 @@ export function requiresCallApproval(
  */
 export async function preprocessToolInput(
 	call: MockToolCall,
+	contextId = 'main',
+	sessionId = hookSessionId(),
 ): Promise<Record<string, unknown> | undefined> {
 	const name = resolveToolName(call.name);
 	if (name === 'execute_bash') return undefined;
-	const pre = await runHooks({
-		event: 'PreToolUse',
-		toolName: name,
-		toolInput: call.arguments,
-	});
+	const pre = await withHookContext(
+		contextId,
+		() =>
+			runHooks({
+				contextId,
+				event: 'PreToolUse',
+				toolName: name,
+				toolInput: call.arguments,
+			}),
+		sessionId,
+	);
 	if (pre.denied) return undefined;
 	return pre.updatedInput ?? call.arguments;
 }
@@ -692,7 +708,17 @@ export function readonlyFailurePath(content: string): string | null {
 	return null;
 }
 
-export async function executeTool(
+export function executeTool(
+	call: MockToolCall,
+	ctx: ToolContext = {},
+): Promise<ToolResult> {
+	return withHookContext(
+		ctx.agentId ? `agent:${ctx.agentId}` : (ctx.hookContextId ?? 'main'),
+		() => executeScopedTool(call, ctx),
+		ctx.hookSessionId,
+	);
+}
+async function executeScopedTool(
 	call: MockToolCall,
 	ctx: ToolContext = {},
 ): Promise<ToolResult> {

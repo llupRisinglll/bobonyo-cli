@@ -1538,7 +1538,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		);
 		expect(compact).toMatch(/setCompacting\(true\)/);
 		expect(compact).toMatch(/setCompacting\(false\)/);
-		expect(compact).toMatch(/finally/);
+		expect(compact).toMatch(/runOwnedContextOperation/);
+		expect(compact).toMatch(/ownsCompaction/);
+		const hooks = readFileSync(new URL('./hooks.ts', import.meta.url), 'utf8');
+		expect(hooks).toMatch(/finally\s*\{\s*if \(owns\(\)\) onFinally\(\)/);
 		expect(compact).toMatch(/partitionCompactionHistory\(ctx\)/);
 		expect(compact).toMatch(/summarizeContext\(\s*partition\.summarize/);
 		// The completion notice stays a permanent info row (the RESULT of the

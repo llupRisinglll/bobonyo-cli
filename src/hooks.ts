@@ -1,3 +1,5 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {configSearchDirs} from './project-paths';
@@ -32,7 +34,66 @@ interface HookGroup {
 interface HookSettings {
 	hooks?: Partial<Record<HookEvent, HookGroup[]>>;
 }
+const hookContext = new AsyncLocalStorage<{
+	sessionId: string;
+	contextId: string;
+}>();
+let sessionIdentity = randomUUID();
+const initialDelivery: Promise<HookResult> = Promise.resolve({
+	additionalContext: [],
+	messages: [],
+});
+const sessionDeliveries = new Map<string, Promise<HookResult>>([
+	[sessionIdentity, initialDelivery],
+]);
+const contextFailures = new Map<string, string>();
+const contextKey = (sessionId: string, contextId: string) =>
+	JSON.stringify([sessionId, contextId]);
+export function hookSessionId(): string {
+	return hookContext.getStore()?.sessionId ?? sessionIdentity;
+}
+export function withHookContext<T>(
+	contextId: string,
+	action: () => T,
+	sessionId = hookSessionId(),
+): T {
+	return hookContext.run({sessionId, contextId}, action);
+}
+export async function installCompactedContext(
+	install: () => boolean,
+	contextId: string,
+	sessionId = hookSessionId(),
+	stillOwnsContext: () => boolean = () => true,
+): Promise<boolean> {
+	if (!install()) return false;
+	const result = await withHookContext(
+		contextId,
+		() => runHooks({event: 'PostCompact'}),
+		sessionId,
+	);
+	if (!stillOwnsContext()) return false;
+	if (result.denied) throw new Error(result.denied);
+	return true;
+}
+/** Stale asynchronous work must not mutate replacement context UI or counters. */
+export async function runOwnedContextOperation<T>(
+	operation: () => Promise<T>,
+	owns: () => boolean,
+	onError: (error: unknown) => void,
+	onFinally: () => void,
+): Promise<T | undefined> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (!owns()) return undefined;
+		onError(error);
+		throw error;
+	} finally {
+		if (owns()) onFinally();
+	}
+}
 export interface HookInput {
+	contextId?: string;
 	event: HookEvent;
 	matcher?: string;
 	toolName?: string;
@@ -48,6 +109,22 @@ export interface HookResult {
 	updatedInput?: Record<string, unknown>;
 	additionalContext: string[];
 	messages: string[];
+}
+/** Admission returns no prompt on denial, so callers cannot reuse stale task evidence. */
+export function applyUserPromptHookResult(
+	prompt: string,
+	result: HookResult,
+	warn: (message: string) => void,
+): string | undefined {
+	if (result.denied) {
+		warn(result.denied);
+		return undefined;
+	}
+	if (typeof result.updatedInput?.prompt === 'string')
+		prompt = result.updatedInput.prompt;
+	if (result.additionalContext.length)
+		prompt += `\n\n${result.additionalContext.join('\n')}`;
+	return prompt;
 }
 
 interface HookSource {
@@ -118,6 +195,8 @@ function payload(input: HookInput): Record<string, unknown> {
 		message: input.message,
 		cwd: process.cwd(),
 		harness_pid: process.pid,
+		session_id: hookContext.getStore()?.sessionId ?? sessionIdentity,
+		context_id: input.contextId ?? hookContext.getStore()?.contextId ?? 'main',
 		...(input.data ?? {}),
 	};
 }
@@ -255,7 +334,54 @@ const INTERNAL_CHECKLIST_TOOLS = new Set([
 ]);
 
 /** Run lifecycle hooks, excluding internal checklist tool bookkeeping. */
-export async function runHooks(input: HookInput): Promise<HookResult> {
+export function runHooks(input: HookInput): Promise<HookResult> {
+	if (input.event === 'SessionStart' && input.sessionSource !== 'compact') {
+		sessionIdentity = randomUUID();
+		const identity = sessionIdentity;
+		const delivery = hookContext.run(
+			{sessionId: identity, contextId: 'main'},
+			() => safeDispatchHooks(input),
+		);
+		sessionDeliveries.set(identity, delivery);
+		return delivery;
+	}
+	const owner = hookContext.getStore() ?? {
+		sessionId: sessionIdentity,
+		contextId: input.contextId ?? 'main',
+	};
+	const delivery = sessionDeliveries.get(owner.sessionId);
+	if (!delivery)
+		return Promise.resolve({
+			denied: 'Unknown hook session identity.',
+			additionalContext: [],
+			messages: [],
+		});
+	return delivery.then(async lifecycle => {
+		if (lifecycle.denied) return lifecycle;
+		const key = contextKey(owner.sessionId, input.contextId ?? owner.contextId);
+		const failure = contextFailures.get(key);
+		if (failure && input.event !== 'PostCompact')
+			return {denied: failure, additionalContext: [], messages: []};
+		const result = await hookContext.run(owner, () => safeDispatchHooks(input));
+		if (input.event === 'PostCompact') {
+			if (result.denied) contextFailures.set(key, result.denied);
+			else contextFailures.delete(key);
+		}
+		return result;
+	});
+}
+async function safeDispatchHooks(input: HookInput): Promise<HookResult> {
+	try {
+		return await dispatchHooks(input);
+	} catch (error) {
+		return {
+			denied: `Hook delivery failed: ${error instanceof Error ? error.message : String(error)}`,
+			additionalContext: [],
+			messages: [],
+		};
+	}
+}
+async function dispatchHooks(input: HookInput): Promise<HookResult> {
 	const result: HookResult = {additionalContext: [], messages: []};
 	if (
 		(input.event === 'PreToolUse' || input.event === 'PostToolUse') &&
@@ -273,7 +399,11 @@ export async function runHooks(input: HookInput): Promise<HookResult> {
 		if (!regexMatches(group.matcher, subject)) continue;
 		for (const action of group.hooks ?? []) {
 			if (!conditionAccepts(action.if, input)) continue;
-			if (action.async) {
+			if (
+				action.async &&
+				input.event !== 'SessionStart' &&
+				input.event !== 'PostCompact'
+			) {
 				void (
 					action.type === 'http'
 						? httpAction(action, payload(input))
@@ -300,6 +430,12 @@ export async function runHooks(input: HookInput): Promise<HookResult> {
 			if (output.denied) result.denied = output.denied;
 			if (execution.exitCode === 2 && !result.denied) {
 				result.denied = execution.text || `Blocked by ${input.event} hook.`;
+			}
+			if (
+				execution.exitCode !== 0 &&
+				(input.event === 'SessionStart' || input.event === 'PostCompact')
+			) {
+				result.denied ||= `${input.event} hook failed (exit ${execution.exitCode}): ${execution.text}`;
 			}
 			if (result.denied) return result;
 		}

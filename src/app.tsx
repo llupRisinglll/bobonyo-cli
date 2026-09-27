@@ -245,7 +245,14 @@ import {buildBannerBox, hasPersistableConversation} from './banner';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
 import {QuestionModal} from './components/question-modal';
-import {listHooks, runHooks} from './hooks';
+import {
+	listHooks,
+	runHooks,
+	hookSessionId,
+	installCompactedContext,
+	runOwnedContextOperation,
+	applyUserPromptHookResult,
+} from './hooks';
 import {forkInHerdrPane, herdrAvailable, type HerdrSplit} from './herdr';
 import {
 	notifyTaskComplete,
@@ -324,6 +331,7 @@ import {
 	busy,
 	cancelling,
 	clearMessages,
+	resetSessionCompaction,
 	context,
 	contextPercent,
 	completionMessage,
@@ -1231,19 +1239,21 @@ export function App() {
 		persist();
 	};
 
+	let sessionLifecycleReady = Promise.resolve();
 	const startNewSession = (resumeRef?: string) => {
+		resetSessionCompaction();
 		graphContexts = new GraphContextStore();
 		compactionFailureRef = {...INITIAL_COMPACTION_FAILURE_STATE};
 		autoCompactReentryFloorRef = 0;
 		resetFileUndoStack();
-		void runHooks({
+		sessionLifecycleReady = runHooks({
 			event: 'SessionStart',
 			sessionSource: resumeRef
 				? 'resume'
 				: messages().length > 0
 					? 'clear'
 					: 'startup',
-		});
+		}).then(() => {});
 		if (resumeRef) {
 			const resumed = resolveSession(resumeRef);
 			if (!resumed) {
@@ -1269,7 +1279,8 @@ export function App() {
 			// answers the directory prompt before the session fully loads);
 			// everything up to the first await runs synchronously, so the
 			// transcript/context render immediately.
-			void (async () => {
+			const restoringSessionId = hookSessionId();
+			const restoreSession = (async () => {
 				// LAZY BUFFER: a resumed session with a huge transcript is
 				// capped to the bounded display window (older messages are
 				// trimmed with a marker) so the render stays light even when
@@ -1337,6 +1348,7 @@ export function App() {
 							onCancel: () => resolve(''),
 						}),
 					);
+					if (hookSessionId() !== restoringSessionId) return;
 					if (/^y(es)?$/i.test(answer.trim())) {
 						cwdChanged = tryChdir();
 					}
@@ -1456,6 +1468,10 @@ export function App() {
 					setCompletionTone('default');
 				}, 6000);
 			})();
+			sessionLifecycleReady = Promise.all([
+				sessionLifecycleReady,
+				restoreSession,
+			]).then(() => {});
 			return;
 		}
 		const id = newSessionId();
@@ -3015,19 +3031,9 @@ export function App() {
 			}
 		}
 
+		await sessionLifecycleReady;
 		const promptHook = await runHooks({event: 'UserPromptSubmit', prompt});
-		if (promptHook.denied) {
-			appendWarning(promptHook.denied);
-			return undefined;
-		}
-		if (typeof promptHook.updatedInput?.prompt === 'string') {
-			prompt = promptHook.updatedInput.prompt;
-		}
-		if (promptHook.additionalContext.length > 0) {
-			prompt += `\n\n${promptHook.additionalContext.join('\n')}`;
-		}
-
-		return prompt;
+		return applyUserPromptHookResult(prompt, promptHook, appendWarning);
 	};
 	const repairWorkspaceCwd = (): string | undefined => {
 		const recovered = recoverWorkingDirectory(workspaceCwd(), workspaceRoot);
@@ -3333,6 +3339,7 @@ export function App() {
 			goalOwner?: GoalOwner;
 		},
 	) => {
+		await sessionLifecycleReady;
 		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
 		const activeGoalOwner =
@@ -3357,6 +3364,8 @@ export function App() {
 			recordUsage(usage, goalOwner);
 		const loopTurn = turnOverride?.loop ?? loopTurnRef;
 		const taskTurn = turnOverride?.task ?? taskTurnRef;
+		const hookContextId = taskTurn ? `graph:${workGraphId}` : 'main';
+		const turnHookSessionId = hookSessionId();
 		const systemTurn = autonomousTurn || loopTurn || taskTurn;
 		const turnContextStore = graphContexts;
 		let contextLease: GraphContextLease;
@@ -3381,12 +3390,14 @@ export function App() {
 		setChecklistOwner(turnChecklistOwner);
 		try {
 			setTasks(structuredClone(contextLease.checklist));
-			const commitTurnContext = (next: ChatMessageLike[]): void => {
-				if (graphContexts !== turnContextStore) return;
+			const commitTurnContext = (next: ChatMessageLike[]): boolean => {
+				if (graphContexts !== turnContextStore) return false;
+				if (!turnContextStore.owns(contextLease)) return false;
 				if (turnContextStore.commit(contextLease, next)) setContext(next);
+				return true;
 			};
 			const compactTurnContext = async (next: ChatMessageLike[]) =>
-				tryAutoCompactHistory(next, commitTurnContext, taskTurn);
+				tryAutoCompactHistory(next, commitTurnContext, taskTurn, hookContextId);
 			let initialContext = contextLease.history;
 			autonomousTurnRef = false;
 			loopTurnRef = false;
@@ -3761,6 +3772,7 @@ export function App() {
 									'',
 									commitTurnContext,
 									taskTurn,
+									hookContextId,
 								);
 							} catch (compactionError) {
 								appendWarning(
@@ -4116,6 +4128,8 @@ export function App() {
 								calls.map(call =>
 									executeTool(call, {
 										sessionId: sessionId(),
+										hookContextId,
+										hookSessionId: turnHookSessionId,
 										workGraphId,
 										onProgress: content =>
 											setLiveOutputs(prev => ({
@@ -4265,7 +4279,11 @@ export function App() {
 						}
 						// B16: approval gating.
 						const preprocessedArgs = !isReadOnlyTool(call.name)
-							? await preprocessToolInput(call)
+							? await preprocessToolInput(
+									call,
+									hookContextId,
+									turnHookSessionId,
+								)
 							: undefined;
 						const approvalCall = preprocessedArgs
 							? {...call, arguments: preprocessedArgs}
@@ -4317,6 +4335,8 @@ export function App() {
 							parallelResults?.[index] ??
 							(await executeTool(call, {
 								sessionId: sessionId(),
+								hookContextId,
+								hookSessionId: turnHookSessionId,
 								workGraphId,
 								onProgress: content =>
 									setLiveOutputs(prev => ({...prev, [call.id]: content})),
@@ -4854,132 +4874,158 @@ export function App() {
 	const compactHistory = async (
 		ctx: ChatMessageLike[],
 		instructions = '',
-		commitScopedContext?: (history: ChatMessageLike[]) => void,
+		commitScopedContext?: (history: ChatMessageLike[]) => boolean,
 		backgroundContext = false,
+		hookContextId = 'main',
 	): Promise<ChatMessageLike[]> => {
+		const compactSessionId = hookSessionId();
+		const compactStore = graphContexts;
+		const ownsCompaction = () =>
+			hookSessionId() === compactSessionId && graphContexts === compactStore;
 		setCompacting(true);
-		try {
-			const partition = partitionCompactionHistory(ctx);
-			const transcriptPath = saveCompactionTranscript(
-				sessionId(),
-				messages(),
-				ctx,
-			);
-			const rawSummary = await summarizeContext(
-				partition.summarize,
-				partition.preservedTurns,
-				instructions,
-			);
-			if (!rawSummary) throw new Error('the model returned an empty summary');
-			const model = activeEndpoint().model;
-			const summary = truncateCompactionText(
-				rawSummary,
-				Math.max(
-					1_000,
-					Math.min(20_000, Math.floor(activeEndpoint().contextWindow * 0.2)),
-				),
-				model,
-			);
-			const state = buildCompactionStateSnapshot({
-				sessionId: sessionId(),
-				cwd: workspaceCwd(),
-				workspaceRoot,
-				transcriptPath,
-				tasks: backgroundContext ? [] : tasks(),
-				...(currentGoal && !backgroundContext ? {goal: currentGoal} : {}),
-				loopJobs: backgroundContext ? [] : loopJobsRef,
-				queuedPrompts: (backgroundContext ? [] : pendingQueue()).map(item => ({
-					value: item.value,
-					...(item.source ? {source: item.source} : {}),
-				})),
-				agents: backgroundContext ? [] : activeAgentRuns(),
-				messages: backgroundContext ? [] : messages(),
-				context: ctx,
-				availableSkills: loadSkills().map(skill => ({
-					name: skill.name,
-					source: skill.source,
-					body: skill.body,
-				})),
-				model,
-				budgets: compactionSnapshotBudgets(activeEndpoint().contextWindow),
-			});
-			let compacted: ChatMessageLike[] = [
-				{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
-				{role: 'user', content: state},
-				...partition.preserve,
-			];
-			let installedPreservedTurns = partition.preservedTurns;
-			const postCompactLimit = autoCompactTokenLimit(
-				activeEndpoint().contextWindow,
-				autoCompactRef.threshold,
-				AUTO_COMPACT_SAFETY_BUFFER_TOKENS,
-			);
-			let postCompactTokens = estimateContextTokens(
-				compacted,
-				model,
-				`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
-			);
-			while (
-				postCompactTokens >= postCompactLimit &&
-				partition.preservedTurns > 0
-			) {
-				const trimmed = dropOldestPreservedTurn(compacted.slice(2));
-				if (trimmed.length >= compacted.length - 2) break;
-				compacted = [...compacted.slice(0, 2), ...trimmed];
-				installedPreservedTurns = Math.max(0, installedPreservedTurns - 1);
-				postCompactTokens = estimateContextTokens(
-					compacted,
-					model,
-					`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
-				);
-			}
-			const reduction = Math.round(
-				((ctx.length - compacted.length) / Math.max(1, ctx.length)) * 100,
-			);
-			compactionFailureRef = recordCompactionSuccess();
-			autoCompactReentryFloorRef = autoCompactReentryFloor(
-				postCompactTokens,
-				postCompactLimit,
-			);
-			if (commitScopedContext) {
-				commitScopedContext(compacted);
-			} else {
-				graphContexts.reviseLatest(compacted);
-				setContext(compacted);
-			}
-			if (!backgroundContext) {
-				setMessages(
-					compactedDisplayMessages(messages(), installedPreservedTurns),
-				);
-				setRetrySnapshot(null);
-				resetFileUndoStack();
-			}
-			appendInfo(
-				`Context compacted via LLM summary (${reduction}% reduction, ` +
-					`${summary.split('\n').length} line summary, ${postCompactTokens} estimated tokens).`,
-			);
-			refreshContextPercent();
-			persist();
-			return compacted;
-		} catch (error) {
-			compactionFailureRef = recordCompactionFailure(compactionFailureRef);
-			if (
-				compactionFailureRef.consecutiveFailures >= COMPACTION_FAILURE_LIMIT &&
-				process.env.NODE_ENV !== 'test'
-			) {
-				appendWarning(
-					`Auto-compaction paused for ${Math.round(COMPACTION_FAILURE_COOLDOWN_MS / 1000)}s after ${compactionFailureRef.consecutiveFailures} consecutive failures.`,
-				);
-			}
-			throw error;
-		} finally {
-			setCompacting(false);
-		}
+		return (
+			(await runOwnedContextOperation(
+				async () => {
+					const partition = partitionCompactionHistory(ctx);
+					const transcriptPath = saveCompactionTranscript(
+						sessionId(),
+						messages(),
+						ctx,
+					);
+					const rawSummary = await summarizeContext(
+						partition.summarize,
+						partition.preservedTurns,
+						instructions,
+					);
+					if (!rawSummary)
+						throw new Error('the model returned an empty summary');
+					const model = activeEndpoint().model;
+					const summary = truncateCompactionText(
+						rawSummary,
+						Math.max(
+							1_000,
+							Math.min(
+								20_000,
+								Math.floor(activeEndpoint().contextWindow * 0.2),
+							),
+						),
+						model,
+					);
+					const state = buildCompactionStateSnapshot({
+						sessionId: sessionId(),
+						cwd: workspaceCwd(),
+						workspaceRoot,
+						transcriptPath,
+						tasks: backgroundContext ? [] : tasks(),
+						...(currentGoal && !backgroundContext ? {goal: currentGoal} : {}),
+						loopJobs: backgroundContext ? [] : loopJobsRef,
+						queuedPrompts: (backgroundContext ? [] : pendingQueue()).map(
+							item => ({
+								value: item.value,
+								...(item.source ? {source: item.source} : {}),
+							}),
+						),
+						agents: backgroundContext ? [] : activeAgentRuns(),
+						messages: backgroundContext ? [] : messages(),
+						context: ctx,
+						availableSkills: loadSkills().map(skill => ({
+							name: skill.name,
+							source: skill.source,
+							body: skill.body,
+						})),
+						model,
+						budgets: compactionSnapshotBudgets(activeEndpoint().contextWindow),
+					});
+					let compacted: ChatMessageLike[] = [
+						{role: 'user', content: `${SUMMARY_PREFIX}\n${summary}`},
+						{role: 'user', content: state},
+						...partition.preserve,
+					];
+					let installedPreservedTurns = partition.preservedTurns;
+					const postCompactLimit = autoCompactTokenLimit(
+						activeEndpoint().contextWindow,
+						autoCompactRef.threshold,
+						AUTO_COMPACT_SAFETY_BUFFER_TOKENS,
+					);
+					let postCompactTokens = estimateContextTokens(
+						compacted,
+						model,
+						`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
+					);
+					while (
+						postCompactTokens >= postCompactLimit &&
+						partition.preservedTurns > 0
+					) {
+						const trimmed = dropOldestPreservedTurn(compacted.slice(2));
+						if (trimmed.length >= compacted.length - 2) break;
+						compacted = [...compacted.slice(0, 2), ...trimmed];
+						installedPreservedTurns = Math.max(0, installedPreservedTurns - 1);
+						postCompactTokens = estimateContextTokens(
+							compacted,
+							model,
+							`${buildSystemPrompt(toolProfile())}\n${JSON.stringify(toolCatalogForModel(model))}`,
+						);
+					}
+					const reduction = Math.round(
+						((ctx.length - compacted.length) / Math.max(1, ctx.length)) * 100,
+					);
+					const installed = await installCompactedContext(
+						() => {
+							if (!ownsCompaction()) return false;
+							if (commitScopedContext) return commitScopedContext(compacted);
+							graphContexts.reviseLatest(compacted);
+							setContext(compacted);
+							return true;
+						},
+						hookContextId,
+						compactSessionId,
+						ownsCompaction,
+					);
+					if (!installed) return ctx;
+					compactionFailureRef = recordCompactionSuccess();
+					autoCompactReentryFloorRef = autoCompactReentryFloor(
+						postCompactTokens,
+						postCompactLimit,
+					);
+					if (!backgroundContext) {
+						setMessages(
+							compactedDisplayMessages(messages(), installedPreservedTurns),
+						);
+						setRetrySnapshot(null);
+						resetFileUndoStack();
+					}
+					appendInfo(
+						`Context compacted via LLM summary (${reduction}% reduction, ` +
+							`${summary.split('\n').length} line summary, ${postCompactTokens} estimated tokens).`,
+					);
+					refreshContextPercent();
+					persist();
+					return compacted;
+				},
+				ownsCompaction,
+				() => {
+					compactionFailureRef = recordCompactionFailure(compactionFailureRef);
+					if (
+						compactionFailureRef.consecutiveFailures >=
+							COMPACTION_FAILURE_LIMIT &&
+						process.env.NODE_ENV !== 'test'
+					) {
+						appendWarning(
+							`Auto-compaction paused for ${Math.round(COMPACTION_FAILURE_COOLDOWN_MS / 1000)}s after ${compactionFailureRef.consecutiveFailures} consecutive failures.`,
+						);
+					}
+				},
+				() => {
+					setCompacting(false);
+				},
+			)) ?? ctx
+		);
 	};
 	const tryAutoCompactHistory = async (
 		ctx: ChatMessageLike[],
-		commitScopedContext?: (history: ChatMessageLike[]) => void,
+		commitScopedContext?: (history: ChatMessageLike[]) => boolean,
 		backgroundContext = false,
+		hookContextId = 'main',
 	): Promise<ChatMessageLike[]> => {
 		try {
 			return await compactHistory(
@@ -4987,6 +5033,7 @@ export function App() {
 				'',
 				commitScopedContext,
 				backgroundContext,
+				hookContextId,
 			);
 		} catch (error) {
 			appendWarning(
@@ -4996,7 +5043,7 @@ export function App() {
 		}
 	};
 	const compact = async (instructions = '') => {
-		void runHooks({event: 'SessionStart', sessionSource: 'compact'});
+		await sessionLifecycleReady;
 		if (busy()) {
 			appendInfo('Cannot compact while a turn is running.');
 			return;
@@ -5006,13 +5053,19 @@ export function App() {
 			appendInfo('Context is already compact (fewer than 7 messages).');
 			return;
 		}
+		const manualSession = hookSessionId();
+		const manualStore = graphContexts;
 		try {
 			await compactHistory(ctx, instructions);
+			if (hookSessionId() !== manualSession || graphContexts !== manualStore)
+				return;
 			if (currentGoal?.status === 'active') {
 				appendInfo('Compaction preserved active goal; resuming goal work.');
 				queueMicrotask(() => queueGoalContinuation());
 			}
 		} catch (error) {
+			if (hookSessionId() !== manualSession || graphContexts !== manualStore)
+				return;
 			appendError(
 				`Compaction failed: ${error instanceof Error ? error.message : String(error)}`,
 			);

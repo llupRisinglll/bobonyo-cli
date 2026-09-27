@@ -20,6 +20,21 @@ const history = (content: string): ChatMessageLike[] => [
 const checklist = (title: string): SessionTask[] => [
 	{id: 'task', title, status: 'in_progress', dependsOn: ['prerequisite']},
 ];
+test('revision ownership lookup never clones stored histories', () => {
+	const store = new GraphContextStore();
+	const lease = store.begin('owner', history('large history'));
+	const clone = globalThis.structuredClone;
+	globalThis.structuredClone = (() => {
+		throw new Error('unexpected clone');
+	}) as typeof structuredClone;
+	try {
+		expect(store.owns(lease)).toBe(true);
+		expect(store.owns({...lease, revision: lease.revision + 1})).toBe(false);
+		expect(store.owns({...lease, graphId: 'missing'})).toBe(false);
+	} finally {
+		globalThis.structuredClone = clone;
+	}
+});
 describe('graph-owned parent checklists', () => {
 	test('selected presentation hides background execution and retains foreground edits', () => {
 		const store = new GraphContextStore();

@@ -28,6 +28,13 @@ export class GraphContextStore {
 	snapshot(): GraphContextSnapshot {
 		return structuredClone(this.state);
 	}
+	/** Check revision ownership without copying unrelated histories. */
+	owns(lease: GraphContextLease): boolean {
+		return (
+			Object.hasOwn(this.state.graphs, lease.graphId) &&
+			this.state.graphs[lease.graphId]?.revision === lease.revision
+		);
+	}
 	/** Capture edits made while the foreground graph is selected. */
 	captureLatestChecklist(checklist: SessionTask[]): void {
 		const id = this.state.latestGraphId;

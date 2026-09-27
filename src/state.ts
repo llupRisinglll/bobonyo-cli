@@ -496,6 +496,10 @@ export const [completionPopup, setCompletionPopup] = createSignal(false);
  * row disappears the moment the compaction settles.
  */
 export const [compacting, setCompacting] = createSignal(false);
+/** Replacement contexts cannot inherit an abandoned compaction indicator. */
+export function resetSessionCompaction(): void {
+	setCompacting(false);
+}
 /**
  * Transient top-of-screen TOAST (parity: the reference "copied to clipboard"
  * toast). Used for setting changes (model/fallback/mode switches) so they
@@ -653,6 +657,7 @@ export function toggleToolBlock(key: string): void {
 }
 
 export function clearMessages(): void {
+	resetSessionCompaction();
 	setMessages([]);
 	setContext([]);
 	setStreaming('');
