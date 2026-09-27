@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.2.3 (2026-09-27)
+
+### Patch
+- Keep workflow skill prerequisites isolated by context and invalidate them after completed compaction.
 ## v0.2.2 (2026-09-27)
 
 ### Patch
