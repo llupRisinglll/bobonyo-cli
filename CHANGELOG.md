@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.2.6 (2026-09-27)
+
+### Patch
+- Prevent repeated completion replies when chat is queued during a background-agent completion turn, preserving queued messages for their own turn.
 ## v0.2.5 (2026-09-27)
 
 ### Patch

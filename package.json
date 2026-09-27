@@ -1,6 +1,6 @@
 {
 	"name": "bobonyo",
-	"version": "0.2.5",
+	"version": "0.2.6",
 	"type": "module",
 	"packageManager": "bun@1.4.0",
 	"engines": {
