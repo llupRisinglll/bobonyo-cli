@@ -2,13 +2,17 @@
 # Prettier runs on the files about to be committed only (never the whole
 # repo), so untouched legacy files keep their original formatting.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
-staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|mjs|js|json|md)$' || true)
+staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|mjs|js|json|md|ya?ml|css)$' || true)
 if [ -n "$staged" ]; then
-  if ! echo "$staged" | xargs -r npx prettier --write --log-level warn; then
-    echo "prettier failed — fix formatting and re-stage."
-    exit 1
-  fi
-  echo "$staged" | xargs -r git add
+	if ! printf '%s\n' "$staged" | xargs -r npx prettier --write --log-level warn; then
+		echo "prettier failed — fix formatting and re-stage."
+		exit 1
+	fi
+	printf '%s\n' "$staged" | xargs -r git add
+fi
+if ! git diff --cached --check; then
+	echo "staged diff contains whitespace errors."
+	exit 1
 fi
 # Some specs temporarily change process.cwd(). Bun's file scheduler can load
 # those specs together even with max-concurrency=1, so isolate each file in its

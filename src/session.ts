@@ -17,11 +17,9 @@ import {
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
-import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
-import {displayToolName, toolArgsSummary} from './tools';
-import type {ChatMessageLike, MockToolCall} from './client';
+import type {ChatMessageLike} from './client';
 import type {
 	ActiveAgentRun,
 	ChatMessage,
@@ -30,8 +28,26 @@ import type {
 } from './state';
 import type {LoopJob, SessionGoal} from './goal-loop';
 import {copySessionMemory} from './memory';
-import {isTaskNotification} from './background-notification';
 import type {GraphContextSnapshot} from './graph-context';
+import {firstMessagePreview, lastMessagePreview} from './session-previews';
+import {
+	convertNanocoderSession,
+	migrateNanocoderSessions,
+	nanocoderSessionsDir,
+} from './session-migration';
+import type {NanocoderSessionFile} from './session-migration';
+export {
+	convertNanocoderSession,
+	migrateNanocoderSessions,
+	nanocoderSessionsDir,
+} from './session-migration';
+export {firstMessagePreview, lastMessagePreview} from './session-previews';
+export {
+	loadCheckpoint,
+	listCheckpoints,
+	saveCheckpoint,
+} from './session-checkpoints';
+export type {CheckpointData} from './session-checkpoints';
 
 export interface SessionMeta {
 	id: string;
@@ -91,6 +107,9 @@ function sessionsDir(): string {
 	const base = bobonyoDataDir();
 	return join(base, 'sessions');
 }
+function sessionPath(id: string): string {
+	return join(sessionsDir(), `${id}.json`);
+}
 
 function compactionTranscriptsDir(): string {
 	return join(bobonyoDataDir(), 'compaction-transcripts');
@@ -113,153 +132,6 @@ export function saveCompactionTranscript(
 		'utf8',
 	);
 	return path;
-}
-
-/**
- * The LEGACY nanocoder sessions dir. The one-time full-dir copy in
- * `bobonyo-paths` only runs when the bobonyo data dir did not exist yet —
- * if it already did (or new sessions were created after the copy), old
- * UUID session files never reach `bobonyo/sessions` and `--resume <uuid>`
- * reports "not found". This is the source those sessions are migrated from.
- */
-function nanocoderSessionsDir(): string {
-	if (process.env.NANOCODER_DATA_DIR) {
-		return join(process.env.NANOCODER_DATA_DIR, 'sessions');
-	}
-	if (process.env.XDG_DATA_HOME) {
-		return join(process.env.XDG_DATA_HOME, 'nanocoder', 'sessions');
-	}
-	return join(homedir(), '.local', 'share', 'nanocoder', 'sessions');
-}
-
-/**
- * Migrate every legacy nanocoder session into the bobonyo sessions dir
- * (converted to the bobonyo shape, idempotent, non-destructive). The
- * legacy `sessions.json` index is skipped — only real `<uuid>.json`
- * conversations convert. Returns the number of sessions migrated.
- */
-export function migrateNanocoderSessions(): number {
-	const legacy = nanocoderSessionsDir();
-	if (!existsSync(legacy)) return 0;
-	mkdirSync(sessionsDir(), {recursive: true});
-	let migrated = 0;
-	for (const file of readdirSync(legacy)) {
-		if (!file.endsWith('.json') || file === 'sessions.json') continue;
-		try {
-			const raw = JSON.parse(
-				readFileSync(join(legacy, file), 'utf8'),
-			) as NanocoderSessionFile;
-			if (
-				typeof raw.id !== 'string' ||
-				!Array.isArray(raw.messages) ||
-				raw.messages.length === 0
-			) {
-				continue;
-			}
-			if (existsSync(sessionPath(raw.id))) {
-				// Repair COLLAPSED conversions: the old converter flattened
-				// display-shape tool rows (`toolId`/`tool`) into one row, so
-				// a legacy source with MORE messages than the migrated copy
-				// is a collapsed conversion — reconvert it. A file the user
-				// continued in bobonyo has >= the legacy count and is never
-				// touched.
-				try {
-					const existing = JSON.parse(
-						readFileSync(sessionPath(raw.id), 'utf8'),
-					) as {messages?: unknown[]};
-					if ((existing.messages?.length ?? 0) >= raw.messages.length) {
-						continue;
-					}
-				} catch {
-					continue;
-				}
-			}
-			const converted = convertNanocoderSession(raw);
-			if (!converted || converted.messages.length === 0) continue;
-			writeFileSync(
-				sessionPath(converted.id),
-				`${JSON.stringify(converted, null, 2)}\n`,
-				'utf8',
-			);
-			migrated += 1;
-		} catch {
-			// Corrupt legacy file: skip, never block resume/startup.
-		}
-	}
-	return migrated;
-}
-
-function checkpointsDir(): string {
-	const base = bobonyoDataDir();
-	return join(base, 'checkpoints');
-}
-
-export interface CheckpointData {
-	id: string;
-	name: string;
-	createdAt: number;
-	messages: ChatMessage[];
-	context: ChatMessageLike[];
-	graphContexts?: GraphContextSnapshot;
-}
-
-/** A4: save a named checkpoint snapshot of the current conversation. */
-export function saveCheckpoint(
-	name: string,
-	messages: ChatMessage[],
-	context: ChatMessageLike[],
-	graphContexts?: GraphContextSnapshot,
-): string {
-	const dir = checkpointsDir();
-	mkdirSync(dir, {recursive: true});
-	const safe = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-	const data: CheckpointData = {
-		id: `ckpt_${Date.now().toString(36)}`,
-		name: safe,
-		createdAt: Date.now(),
-		messages,
-		context,
-		graphContexts,
-	};
-	writeFileSync(
-		join(dir, `${safe}.json`),
-		`${JSON.stringify(data, null, 2)}\n`,
-		'utf8',
-	);
-	return safe;
-}
-
-export function listCheckpoints(): CheckpointData[] {
-	const dir = checkpointsDir();
-	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter(file => file.endsWith('.json'))
-		.map(file => {
-			try {
-				return JSON.parse(
-					readFileSync(join(dir, file), 'utf8'),
-				) as CheckpointData;
-			} catch {
-				return null;
-			}
-		})
-		.filter((data): data is CheckpointData => data !== null)
-		.sort((a, b) => b.createdAt - a.createdAt);
-}
-
-export function loadCheckpoint(name: string): CheckpointData | null {
-	const safe = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-	const file = join(checkpointsDir(), `${safe}.json`);
-	try {
-		if (!existsSync(file)) return null;
-		return JSON.parse(readFileSync(file, 'utf8')) as CheckpointData;
-	} catch {
-		return null;
-	}
-}
-
-function sessionPath(id: string): string {
-	return join(sessionsDir(), `${id}.json`);
 }
 
 let idSeq = 0;
@@ -375,6 +247,7 @@ export function listSessions(): SessionMeta[] {
 }
 
 export function loadSession(id: string): SessionData | null {
+	// Keep legacy file type private to migration module through inference.
 	try {
 		const raw = JSON.parse(
 			readFileSync(sessionPath(id), 'utf8'),
@@ -398,7 +271,7 @@ export function loadSession(id: string): SessionData | null {
 		if (!existsSync(legacy)) return null;
 		const raw = JSON.parse(
 			readFileSync(legacy, 'utf8'),
-		) as NanocoderSessionFile;
+		) as unknown as NanocoderSessionFile;
 		const converted = convertNanocoderSession(raw);
 		if (converted && converted.messages.length > 0) {
 			saveSession(converted);
@@ -540,162 +413,6 @@ function contextCoversTranscriptTail(
 	return true;
 }
 
-interface NanocoderSessionFile {
-	id: string;
-	title?: string;
-	createdAt?: string;
-	lastAccessedAt?: string;
-	messages?: Array<{
-		role: string;
-		content?: string;
-		submittedCommand?: boolean;
-		tool_call_id?: string;
-		/** Display-shape tool rows carry the full tool metadata directly. */
-		toolId?: string;
-		tool?: {
-			name?: string;
-			detail?: string;
-			output?: string;
-			args?: Record<string, unknown>;
-		};
-		name?: string;
-		tool_calls?: Array<{
-			id: string;
-			function?: {name: string; arguments: string | Record<string, unknown>};
-		}>;
-	}>;
-	/** Some nanocoder files carry the display label as `name`, not `title`. */
-	name?: string;
-}
-
-/** Convert a NANOCODER session file into bobonyo's SessionData shape. */
-export function convertNanocoderSession(
-	file: NanocoderSessionFile,
-): SessionData | null {
-	if (!file || typeof file.id !== 'string') return null;
-	const msgs = Array.isArray(file.messages) ? file.messages : [];
-	const messages: ChatMessage[] = [];
-
-	for (const message of msgs) {
-		if (isTaskNotification(message.content)) continue;
-		if (message.role === 'user') {
-			const content = message.content ?? '';
-			messages.push({
-				role: 'user',
-				content,
-				...(message.submittedCommand !== undefined
-					? {submittedCommand: message.submittedCommand}
-					: {}),
-			});
-			continue;
-		}
-		if (message.role === 'assistant') {
-			// Assistant tool calls become tool rows (rendered like executed
-			// calls); the assistant TEXT stays an assistant message.
-			if (message.tool_calls?.length) {
-				for (const call of message.tool_calls) {
-					const name = call.function?.name ?? 'unknown';
-					const rawArgs = call.function?.arguments;
-					const args =
-						typeof rawArgs === 'string'
-							? (safeParseArgs(rawArgs) ?? {})
-							: (rawArgs ?? {});
-					const mockCall = {
-						id: call.id ?? '',
-						name,
-						arguments: args,
-						rawArguments: JSON.stringify(args),
-					} as MockToolCall;
-					const detail = toolArgsSummary(mockCall);
-					messages.push({
-						role: 'tool',
-						content: `✦ ${displayToolName(name)}${detail ? `(${detail})` : ''}`,
-						toolId: call.id,
-						tool: {name, detail, output: '', args},
-					});
-				}
-			}
-			if (message.content) {
-				messages.push({role: 'assistant', content: message.content});
-			}
-			continue;
-		}
-		if (message.role === 'tool') {
-			const content = message.content ?? '';
-			// DISPLAY shape (nanocoder persisted rows carry the whole tool
-			// metadata: toolId + tool{name,detail,output,args}). Copy them
-			// VERBATIM — flattening them like OpenAI tool results collapsed
-			// entire agentic histories into one row and lost the tool
-			// outputs the model needs to continue.
-			if (message.toolId !== undefined || message.tool !== undefined) {
-				messages.push({
-					role: 'tool',
-					content: content || message.tool?.output || '',
-					toolId: message.toolId,
-					tool: message.tool
-						? {
-								name: message.tool.name ?? '',
-								detail: message.tool.detail ?? '',
-								output: message.tool.output ?? '',
-								args: message.tool.args ?? {},
-							}
-						: {
-								name: message.name ?? '',
-								detail: '',
-								output: content,
-								args: {},
-							},
-				});
-				continue;
-			}
-			// OPENAI shape: attach the result to the matching tool row.
-			const name = message.name ?? '';
-			const toolId = message.tool_call_id ?? '';
-			// Attach the result to the matching tool row (by call id).
-			const existing = messages.find(candidate => candidate.toolId === toolId);
-			if (existing?.tool) {
-				existing.tool.output = content;
-				existing.content = content;
-			} else {
-				messages.push({
-					role: 'tool',
-					content,
-					toolId,
-					tool: {name, detail: '', output: content, args: {}},
-				});
-			}
-		}
-	}
-
-	// Rebuild the provider context from the transcript rows: user + assistant
-	// narration verbatim, tool rows grouped into assistant `tool_calls`
-	// declarations + matching results (ids preserved from `toolId`). The
-	// legacy file may have no declarations of its own — the run grouping
-	// synthesizes them so the provider never sees orphan tool results.
-	const context = healResumedContext([], messages);
-
-	return {
-		id: file.id,
-		name: file.name ?? file.title ?? file.id,
-		createdAt: new Date(file.createdAt ?? Date.now()).getTime(),
-		updatedAt: new Date(
-			file.lastAccessedAt ?? file.createdAt ?? Date.now(),
-		).getTime(),
-		firstMessage: firstMessagePreview(messages),
-		lastMessage: lastMessagePreview(messages),
-		messages,
-		context,
-	};
-}
-
-function safeParseArgs(raw: string): Record<string, unknown> | null {
-	try {
-		return JSON.parse(raw) as Record<string, unknown>;
-	} catch {
-		return null;
-	}
-}
-
 export function deleteSession(id: string): void {
 	rmSync(sessionPath(id), {force: true});
 }
@@ -711,16 +428,4 @@ export function resolveSession(ref: string): SessionData | null {
 		return meta ? loadSession(meta.id) : null;
 	}
 	return loadSession(ref);
-}
-
-export function firstMessagePreview(messages: ChatMessage[]): string {
-	const user = messages.find(message => message.role === 'user');
-	const text = user?.content.trim() ?? '(empty conversation)';
-	return text.length > 48 ? `${text.slice(0, 48)}…` : text;
-}
-
-export function lastMessagePreview(messages: ChatMessage[]): string {
-	const user = [...messages].reverse().find(message => message.role === 'user');
-	const text = user?.content.trim() ?? '(empty conversation)';
-	return text.length > 48 ? `${text.slice(0, 48)}…` : text;
 }

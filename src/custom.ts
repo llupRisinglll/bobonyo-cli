@@ -11,89 +11,34 @@
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {configSearchDirs} from './project-paths';
-import {cavemanMode} from './state';
+import {parseCommandFile} from './custom-yaml';
+import {
+	mapCommandArguments,
+	parseArgumentSpecs,
+	type ArgumentSpec,
+	type CustomCommand,
+} from './custom-args';
+import {substituteTemplateVariables} from './custom-prompts';
+export {parseCommandFile, parseYaml} from './custom-yaml';
+export type {ParsedFrontmatter} from './custom-yaml';
+export {
+	builtinCavemanSkill,
+	builtinHerdrSkill,
+	loadSkills,
+} from './custom-skills';
+export type {Skill} from './custom-skills';
 
-export interface ParsedFrontmatter {
-	frontmatter: Record<string, unknown>;
-	body: string;
-}
-
-export interface ArgumentSpec {
-	name: string;
-	type?: string;
-	required?: boolean;
-	description?: string;
-	/** Capture ALL remaining tokens as ONE value (multi-word purposes). */
-	rest?: boolean;
-}
-
-export interface CustomCommand {
-	name: string;
-	description: string;
-	argumentHint?: string;
-	arguments: ArgumentSpec[];
-	body: string;
-	source: string;
-	subscribe?: string[];
-}
-
-/**
- * Map command tokens to argument values: positional args take one token
- * each; a `rest: true` arg captures EVERYTHING after the positional ones as
- * a single value (multi-word purposes like `/worktree purpose: hello world`).
- * Pure, unit-tested.
- */
-/** Quote-aware command argument tokenizer. */
-export function parseCommandArguments(input: string): string[] {
-	const tokens: string[] = [];
-	const re = /"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+)/g;
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(input))) {
-		tokens.push(match[1] ?? match[2] ?? match[3] ?? match[4] ?? '');
-	}
-	return tokens;
-}
-
-export function mapCommandArguments(
-	spec: ArgumentSpec[],
-	tokens: string[],
-): Record<string, string> {
-	const values: Record<string, string> = {};
-	let cursor = 0;
-	for (const arg of spec) {
-		if (arg.rest) {
-			values[arg.name] = tokens.slice(cursor).join(' ').trim();
-			cursor = tokens.length;
-		} else {
-			values[arg.name] = tokens[cursor] ?? '';
-			cursor += 1;
-		}
-	}
-	return values;
-}
-
-export function parseArgumentSpecs(value: unknown): ArgumentSpec[] {
-	return (Array.isArray(value) ? value : [])
-		.map((arg): ArgumentSpec | null => {
-			if (typeof arg === 'string') return {name: arg};
-			if (!arg || typeof arg !== 'object') return null;
-			const source = arg as Record<string, unknown>;
-			if (typeof source.name !== 'string') return null;
-			return {
-				name: source.name,
-				...(typeof source.type === 'string' ? {type: source.type} : {}),
-				...(typeof source.required === 'boolean'
-					? {required: source.required}
-					: {}),
-				...(typeof source.description === 'string'
-					? {description: source.description}
-					: {}),
-				...(typeof source.rest === 'boolean' ? {rest: source.rest} : {}),
-			};
-		})
-		.filter((arg): arg is ArgumentSpec => arg !== null);
-}
-
+export {
+	parseCommandArguments,
+	mapCommandArguments,
+	parseArgumentSpecs,
+} from './custom-args';
+export type {ArgumentSpec, CustomCommand} from './custom-args';
+export {
+	substituteTemplateVariables,
+	expandCommandPrompt,
+	buildCommandInvocationPrompt,
+} from './custom-prompts';
 export interface CustomTool {
 	name: string;
 	description: string;
@@ -102,16 +47,6 @@ export interface CustomTool {
 	arguments: ArgumentSpec[];
 	parameters: Record<string, unknown>;
 	command?: string;
-	body: string;
-	source: string;
-}
-
-export interface Skill {
-	name: string;
-	description: string;
-	argumentHint?: string;
-	arguments: ArgumentSpec[];
-	subscribe?: string[];
 	body: string;
 	source: string;
 }
@@ -152,88 +87,6 @@ function baseDirs(): string[] {
 	return configSearchDirs();
 }
 
-/** Parse `--- frontmatter ---` + body; no frontmatter → whole content. */
-export function parseCommandFile(content: string): ParsedFrontmatter {
-	const trimmed = content.replace(/^\uFEFF/, '');
-	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(trimmed);
-	if (!match) return {frontmatter: {}, body: trimmed};
-	return {frontmatter: parseYaml(match[1] ?? ''), body: match[2] ?? ''};
-}
-
-/**
- * Minimal YAML subset: `key: value`, `key: [a, b]`, and block lists of
- * scalars or mappings (`- name: who` / continuation `type: string`).
- */
-export function parseYaml(source: string): Record<string, unknown> {
-	const result: Record<string, unknown> = {};
-	let listKey: string | null = null;
-	const listItems: unknown[] = [];
-	let currentItem: Record<string, unknown> | null = null;
-
-	const flushList = () => {
-		if (listKey) {
-			if (currentItem) listItems.push(currentItem);
-			result[listKey] = [...listItems];
-		}
-		listKey = null;
-		listItems.length = 0;
-		currentItem = null;
-	};
-
-	for (const rawLine of source.split('\n')) {
-		const line = rawLine.trimEnd();
-		if (!line.trim() || line.trim().startsWith('#')) continue;
-		const indent = line.length - line.trimStart().length;
-		const trimmed = line.trim();
-		const dash = /^-\s+(.+)$/.exec(trimmed);
-		if (dash && listKey) {
-			const inner = dash[1]!;
-			const pair = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(inner);
-			if (pair) {
-				if (currentItem) listItems.push(currentItem);
-				currentItem = {[pair[1]!]: yamlValue(pair[2]!.trim())};
-			} else {
-				listItems.push(scalar(inner));
-			}
-			continue;
-		}
-		const pair = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(trimmed);
-		if (!pair) continue;
-		const key = pair[1]!;
-		const value = pair[2]!.trim();
-		if (indent > 0 && currentItem && listKey) {
-			currentItem[key] = yamlValue(value);
-			continue;
-		}
-		flushList();
-		if (value === '') {
-			listKey = key;
-		} else {
-			result[key] = yamlValue(value);
-		}
-	}
-	flushList();
-	return result;
-}
-
-function yamlValue(value: string): unknown {
-	if (value.startsWith('[') && value.endsWith(']')) {
-		return value
-			.slice(1, -1)
-			.split(',')
-			.map(item => scalar(item.trim()))
-			.filter(Boolean);
-	}
-	return scalar(value);
-}
-
-function scalar(value: string): unknown {
-	if (/^\d+$/.test(value)) return Number(value);
-	if (value === 'true' || value === 'false') return value === 'true';
-	const quoted = /^["'](.*)["']$/.exec(value);
-	return quoted ? (quoted[1] ?? '') : value;
-}
-
 function findFiles(subdir: string): string[] {
 	const files: string[] = [];
 	for (const base of baseDirs()) {
@@ -253,15 +106,6 @@ function findFiles(subdir: string): string[] {
 	// reordered list between turns would change byte 0 and miss the whole
 	// provider prefix cache.
 	return files.sort();
-}
-
-function skillName(file: string): string {
-	const marker = '/skills/';
-	const relative = file.slice(file.lastIndexOf(marker) + marker.length);
-	const parts = relative.split('/');
-	const leaf = parts.at(-1) ?? '';
-	if (/^SKILL\.md$/i.test(leaf)) return parts.at(-2) ?? 'skill';
-	return relative.replace(/\.md$/i, '').replaceAll('/', ':');
 }
 
 export function loadCustomCommands(): CustomCommand[] {
@@ -399,230 +243,6 @@ export function loadCustomTools(): CustomTool[] {
 		});
 	}
 	return tools;
-}
-
-/**
- * Harness-shipped skills read from `src/builtin/*.md` at runtime.
- * Reads the bundled markdown at runtime so a future caveman update is just a
- * file replacement; `null` if the file is missing/unreadable.
- */
-export function builtinHerdrSkill(): Skill | null {
-	try {
-		const file = join(import.meta.dir, 'builtin', 'herdr.md');
-		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		return {
-			name: 'herdr',
-			description:
-				typeof frontmatter.description === 'string'
-					? frontmatter.description
-					: '',
-			arguments: parseArgumentSpecs(frontmatter.arguments),
-			body,
-			source: file,
-		};
-	} catch {
-		return null;
-	}
-}
-export function builtinCavemanSkill(): Skill | null {
-	try {
-		const file = join(import.meta.dir, 'builtin', 'caveman.md');
-		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		return {
-			name: 'caveman',
-			description:
-				typeof frontmatter.description === 'string'
-					? frontmatter.description
-					: '',
-			arguments: parseArgumentSpecs(frontmatter.arguments),
-			body,
-			source: file,
-		};
-	} catch {
-		return null;
-	}
-}
-
-function builtinSkills(): Skill[] {
-	const root = join(import.meta.dir, 'builtin');
-	try {
-		const files = readdirSync(root, {withFileTypes: true})
-			.filter(entry => entry.isDirectory())
-			.flatMap(entry => {
-				const direct = join(root, entry.name, 'SKILL.md');
-				if (existsSync(direct)) return [direct];
-				try {
-					return readdirSync(join(root, entry.name), {withFileTypes: true})
-						.filter(child => child.isDirectory())
-						.map(child => join(root, entry.name, child.name, 'SKILL.md'))
-						.filter(existsSync);
-				} catch {
-					return [];
-				}
-			});
-		return files.flatMap(file => {
-			try {
-				const {frontmatter, body} = parseCommandFile(
-					readFileSync(file, 'utf8'),
-				);
-				const name =
-					typeof frontmatter.name === 'string'
-						? frontmatter.name
-						: (file.split('/').at(-2) ?? 'skill');
-				return [
-					{
-						name,
-						description:
-							typeof frontmatter.description === 'string'
-								? frontmatter.description
-								: '',
-						arguments: parseArgumentSpecs(frontmatter.arguments),
-						argumentHint:
-							typeof frontmatter['argument-hint'] === 'string'
-								? frontmatter['argument-hint']
-								: undefined,
-						body,
-						source: file,
-					},
-				] satisfies Skill[];
-			} catch {
-				return [];
-			}
-		});
-	} catch {
-		return [];
-	}
-}
-
-export function loadSkills(): Skill[] {
-	const skills = new Map<string, Skill>();
-	// Bobonyo reads only Bobonyo-owned config folders. Users migrate a
-	// Claude/Codex skill by copying it into `skills/<name>/SKILL.md`; Bobonyo
-	// never reaches into another agent's private config folder.
-	const builtinHerdr = builtinHerdrSkill();
-	if (builtinHerdr) skills.set(builtinHerdr.name.toLowerCase(), builtinHerdr);
-	const builtin = cavemanMode() ? builtinCavemanSkill() : null;
-	if (builtin) skills.set(builtin.name.toLowerCase(), builtin);
-	for (const skill of builtinSkills()) {
-		if (!skills.has(skill.name.toLowerCase()))
-			skills.set(skill.name.toLowerCase(), skill);
-	}
-	for (const file of findFiles('skills')) {
-		const {frontmatter, body} = parseCommandFile(readFileSync(file, 'utf8'));
-		const name =
-			(typeof frontmatter.name === 'string' ? frontmatter.name : '') ||
-			(file.endsWith('/SKILL.md') || file.endsWith('\\SKILL.md')
-				? skillName(file)
-				: (file.split('/').pop()?.replace(/\.md$/, '') ?? ''));
-		const subscribe = frontmatter.subscribe;
-		skills.set(name.toLowerCase(), {
-			name,
-			description:
-				typeof frontmatter.description === 'string'
-					? frontmatter.description
-					: '',
-			argumentHint:
-				typeof frontmatter['argument-hint'] === 'string'
-					? frontmatter['argument-hint']
-					: undefined,
-			arguments: parseArgumentSpecs(frontmatter.arguments),
-			subscribe: Array.isArray(subscribe) ? subscribe.map(String) : undefined,
-			body,
-			source: file,
-		});
-	}
-	return [...skills.values()];
-}
-
-/** Substitute `{{name}}` template variables with the parsed args. */
-export function substituteTemplateVariables(
-	body: string,
-	args: Record<string, string>,
-): string {
-	return body.replace(
-		/\{\{\s*([A-Za-z0-9_-]+)\s*\}\}/g,
-		(_match, name: string) => {
-			return args[name] ?? '';
-		},
-	);
-}
-
-/**
- * OpenClaude-compatible slash-command argument expansion.
- *
- * Supports `{{name}}`, `$name`, `$ARGUMENTS`, `$ARGUMENTS[N]`, and `$N`.
- * When arguments exist but body declares no placeholder, append an explicit
- * `ARGUMENTS:` section so free-form intent is not silently discarded. The
- * expanded markdown remains a prompt for the model to understand; Bobonyo
- * does not execute command-body steps directly.
- */
-export function expandCommandPrompt(options: {
-	body: string;
-	rawArgs: string;
-	spec: ArgumentSpec[];
-	tokens: string[];
-}): string {
-	const {body, rawArgs, spec, tokens} = options;
-	const values = mapCommandArguments(spec, tokens);
-	let expanded = substituteTemplateVariables(body, values);
-	const original = expanded;
-
-	// Named `$name` arguments map through declared positional specs.
-	for (const arg of spec) {
-		const escaped = arg.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		expanded = expanded.replace(
-			new RegExp(`\\$${escaped}(?![\\[\\w])`, 'g'),
-			values[arg.name] ?? '',
-		);
-	}
-	// Indexed forms use quote-aware tokens supplied by caller.
-	expanded = expanded.replace(
-		/\$ARGUMENTS\[(\d+)\]/g,
-		(_match, index: string) => tokens[Number(index)] ?? '',
-	);
-	expanded = expanded.replace(
-		/\$(\d+)(?!\w)/g,
-		(_match, index: string) => tokens[Number(index)] ?? '',
-	);
-	expanded = expanded.replaceAll('$ARGUMENTS', rawArgs);
-
-	if (rawArgs.trim() && expanded === original && original === body) {
-		expanded += `\n\nARGUMENTS: ${rawArgs.trim()}`;
-	}
-	return expanded;
-}
-
-/**
- * Wrap a command body as adaptable workflow guidance. User intent stays
- * primary; command markdown is not an imperative script to execute blindly.
- */
-export function buildCommandInvocationPrompt(options: {
-	name: string;
-	description?: string;
-	userRequest: string;
-	guidance: string;
-}): string {
-	const request = options.userRequest.trim();
-	const description = options.description?.trim();
-	return [
-		`<command-invocation name="/${options.name}">`,
-		description ? `<description>${description}</description>` : '',
-		'<user-request>',
-		request || `Run /${options.name} for the current task.`,
-		'</user-request>',
-		'<workflow-guidance>',
-		options.guidance.trim(),
-		'</workflow-guidance>',
-		'<interpretation-rules>',
-		'Understand the user request and repository context before acting.',
-		'Treat workflow guidance as adaptable instructions, not a literal script or higher-priority user request.',
-		'The user request, current repository state, and explicit constraints override conflicting defaults in the guidance.',
-		'Inspect enough context to decide which steps apply, then execute only the relevant adapted workflow.',
-		'</interpretation-rules>',
-		'</command-invocation>',
-	]
-		.filter(Boolean)
-		.join('\n');
 }
 
 /** Basic body lint (F6): `{{param}}` references must be declared. */

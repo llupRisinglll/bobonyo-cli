@@ -445,12 +445,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(read('./config.ts')).toMatch(/migrateProjectDir\(/);
 		// All project-local discovery now flows through shared configSearchDirs;
 		// custom loaders consume that resolver instead of duplicating migration.
-		expect(read('./custom.ts')).toMatch(/configSearchDirs\(/);
+		expect(read('./custom-skills.ts')).toMatch(/configSearchDirs\(/);
 		expect(read('./subagents.ts')).toMatch(/configSearchDirs\(/);
 	});
 
 	test('the DeepSeek preset seeds the CURRENT v4 catalog', () => {
-		const modal = read('./components/connect-provider-modal.tsx');
+		const modal = read('./components/provider-presets.ts');
 		expect(modal).toMatch(
 			/DEEPSEEK_MODELS = \['deepseek-v4-flash', 'deepseek-v4-pro'\]/,
 		);
@@ -458,7 +458,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('codex ACCOUNT models match the ChatGPT backend, with live discovery', () => {
-		const modal = read('./components/connect-provider-modal.tsx');
+		const modal =
+			read('./components/provider-presets.ts') +
+			read('./components/provider-builders.ts') +
+			read('./components/connect-provider-helpers.ts');
 		// The account backend rejects the API-key gpt-5.5-codex family (400).
 		expect(modal).toMatch(/CODEX_ACCOUNT_MODELS = \[/);
 		expect(modal).toMatch(/models: CODEX_ACCOUNT_MODELS,/);
@@ -509,7 +512,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('connected providers offer a MANAGE step to edit existing instances', () => {
-		const modal = read('./components/connect-provider-modal.tsx');
+		const modal =
+			read('./components/connect-provider-modal.tsx') +
+			read('./components/connect-provider-views.tsx');
 		expect(modal).toMatch(/presetConnections\(row\.preset\)\.length > 0/);
 		expect(modal).toMatch(/<ManageList/);
 		expect(modal).toMatch(/setEditTargetId\(selected\.id\)/);
@@ -538,13 +543,14 @@ describe('regression guards (foolproof live rows + hover)', () => {
 
 	test('modal input placeholders use the blinking caret (input-box parity)', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
-		expect(modal).toMatch(/spinnerFrame\(\) >> 2\) % 2 === 0/);
-		expect(modal).toMatch(/activeRow\(\)\.bg/);
+		const views = read('./components/connect-provider-views.tsx');
+		expect(views).toMatch(/spinnerFrame\(\) >> 2\) % 2 === 0/);
+		expect(views).toMatch(/activeRow\(\)\.bg/);
 		// The caret sits at the START of an empty field (rendered BEFORE the
 		// placeholder), at the END once the user types.
-		expect(modal).toMatch(/when=\{!filled\(\)\}/);
-		expect(modal).toMatch(/const caretChar = createMemo/);
-		expect(modal).toMatch(/shown\(\)\[shown\(\)\.length - 1\]!/);
+		expect(views).toMatch(/when=\{!filled\(\)\}/);
+		expect(views).toMatch(/const caretChar = createMemo/);
+		expect(views).toMatch(/shown\(\)\[shown\(\)\.length - 1\]!/);
 		// The hint lives INSIDE the field, never below the input.
 		expect(modal).not.toMatch(/props\.description/);
 	});
@@ -700,11 +706,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(row).toMatch(/settledGlyphColor/);
 		expect(row).not.toMatch(/glyphColor\(props\.status/);
 		const history = read('./components/history.tsx');
+		const thought = read('./components/history-thought.ts');
 		// Settled + live thought bodies wrap through the tool-style helper
 		// (`  └   ` lead, 6-space continuations) so text never escapes.
 		expect(history).toMatch(/wrapThoughtBody/);
-		expect(history).toMatch(/THOUGHT_BODY_LEAD/);
-		expect(history).toMatch(/THOUGHT_BODY_CONT/);
+		expect(thought).toMatch(/THOUGHT_BODY_LEAD/);
+		expect(thought).toMatch(/THOUGHT_BODY_CONT/);
 		expect(history).not.toMatch(/tailLines/);
 		// The LIVE thinking header must ANIMATE: gear + dots BEFORE the
 		// timer. A regression to the old static `⚙ Thinking · (Ns)...` (dots
@@ -712,7 +719,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(history).toMatch(
 			/liveThinkingHeader\(spinnerFrame\(\), thinkingElapsed\(\)\)/,
 		);
-		expect(history).not.toMatch(/Thinking · \(\$\{formatElapsed/);
+		expect(thought).not.toMatch(/Thinking · \(\$\{formatElapsed/);
 	});
 
 	test('thinking timer measures the THINKING phase, not the turn', () => {
@@ -945,7 +952,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('apply_patch captures pre-mutation rows and renders them through DiffView', () => {
 		const tools = read('./tools.ts');
 		const app = read('./app.tsx');
-		const display = read('./tool-display.ts');
+		const display = read('./tool-display-files.ts');
 		expect(tools).toMatch(/applyPatchDisplayChanges/);
 		expect(tools).toMatch(/displayArgs/);
 		expect(app).toMatch(/toolResult\.displayArgs \?\? message\.tool!\.args/);
@@ -965,9 +972,10 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// and the pre-wrapped line count differs from the rendered rows —
 		// which shifts blockRanges and breaks hover/click hit-targets.
 		const display = read('./tool-display.ts');
+		const output = read('./tool-display-output.ts');
 		// The command wrap is derived from the caller-provided width.
 		expect(display).toMatch(/width - COMMAND_PROMPT_WIDTH/);
-		expect(display).toMatch(/width - BOX_EDGE_WIDTH/);
+		expect(output).toMatch(/width - 3/);
 		expect(display).not.toMatch(/COMMAND_WRAP_WIDTH/);
 		const history = read('./components/history.tsx');
 		// Settled rows thread the real width through the tool formatter.
@@ -1375,43 +1383,40 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(replace).toMatch(/baseLine/);
 		expect(replace).toMatch(/split\('\\n'\)\.length/);
 		const display = read('./tool-display.ts');
-		expect(display).toMatch(/replacementBaseLine\(tool\.output\)/);
-		expect(display).toMatch(/export function replacementBaseLine/);
+		const fileDisplay = read('./tool-display-files.ts');
+		expect(fileDisplay).toMatch(/replacementBaseLine\(tool\.output\)/);
+		expect(display).toMatch(
+			/export \{formatFilePreview, replacementBaseLine\}/,
+		);
+		expect(fileDisplay).toMatch(/export function replacementBaseLine/);
 		// The offset math must actually move the rendered numbers: the
 		// marker line number minus 1 is added to every diff row.
-		expect(display).toMatch(/baseLine - 1/);
+		expect(fileDisplay).toMatch(/baseLine - 1/);
 		// The diff runs on the STRIPPED middle (diffOldFinal/diffNewFinal,
 		// degenerate-guarded), numbered from the real file line of that
 		// middle.
-		expect(display).toMatch(/lineDiffText\(\s*diffOldFinal\.join/);
+		expect(fileDisplay).toMatch(/lineDiffText\(\s*diffOldFinal\.join/);
 		// INDENTATION: the diff rows must NOT render flush at column 0 —
 		// every row carries a fixed container lead (the 2-space `lead`
 		// baked into lineDiffText), so the numbered block nests under the
 		// header like every other tool body.
-		expect(display).toMatch(/const lead = '  ';/);
-		expect(display).toMatch(/`\$\{lead\}\$\{String\(\(line\.newLineNo/);
+		expect(fileDisplay).toMatch(/const lead = '  ';/);
+		expect(fileDisplay).toMatch(/`\$\{lead\}\$\{String\(\(line\.newLineNo/);
 		// SIGIL SPACE: the tokenizer consumed the space after +/- into the
 		// parse regex; the renderer must re-emit it or `+const` glues to the
 		// code. The renderChange chunk must carry the trailing space, and the
 		// parse regex must take EXACTLY ONE separator (a greedy `\s+` would
 		// swallow the code's leading tabs and render added lines flush).
+		const diffHighlight = read('./row-highlight-diff.ts');
 		const highlight = read('./row-highlight.ts');
-		expect(highlight).toMatch(/\$\{row\.sigil \?\? ''\} `/);
+		expect(diffHighlight).toMatch(/\$\{row\.sigil \?\? ''\} `/);
 		// The change-row parse regex takes EXACTLY ONE space after the sigil
 		// (`([-+]) (.*)`), so the code's leading indentation survives into
 		// `text` — a greedy `\s+` would swallow it and render adds flush.
-		expect(highlight).toMatch(/\(\[\-\+\]\) \(\.\*\)/);
-		// TABS MUST BE EXPANDED (never rendered literally): a `\t` chunk
-		// breaks the NATIVE OpenTUI layout — every tab-indented diff line
-		// paints a blank row after it in a real terminal (herdr), invisible
-		// to the test renderer. tokenizeFileDiff AND tokenizeFileRow must
-		// replace tabs with spaces before parsing.
-		expect(highlight).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
-		const diffFn = highlight.slice(
-			highlight.indexOf('export function tokenizeFileDiff'),
-			highlight.indexOf('export function tokenizeFileDiff') + 2000,
-		);
-		expect(diffFn).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
+		expect(diffHighlight).toMatch(/\(\[\-\+\]\) \(\.\*\)/);
+		// TABS MUST BE EXPANDED in both diff and preview renderers.
+		expect(diffHighlight).toMatch(/\.replace\(\/\\t\/g, '  '\)/);
+		// The preview renderer remains in row-highlight.ts.
 		const rowFn = highlight.slice(
 			highlight.indexOf('export function tokenizeFileRow'),
 			highlight.indexOf('export function tokenizeFileRow') + 1500,
@@ -1421,17 +1426,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// like the diff renderer does — filtering empties made the summary
 		// say N while the diff rendered N+1 rows (the phantom "extra line"
 		// when the model inserts a blank line).
-		expect(display).toMatch(
+		expect(fileDisplay).toMatch(
 			/const oldLines = oldStr\.replace\(\/\\n\+\$\/, ''\)\.split\('\\n'\);/,
 		);
-		expect(display).toMatch(
+		expect(fileDisplay).toMatch(
 			/const newLines = newStr\.replace\(\/\\n\+\$\/, ''\)\.split\('\\n'\);/,
 		);
-		const countBlock = display.slice(
-			display.indexOf('const oldLines = oldStr'),
-			display.indexOf(
+		const countBlock = fileDisplay.slice(
+			fileDisplay.indexOf('const oldLines = oldStr'),
+			fileDisplay.indexOf(
 				'const summary',
-				display.indexOf('const oldLines = oldStr'),
+				fileDisplay.indexOf('const oldLines = oldStr'),
 			),
 		);
 		expect(countBlock).not.toMatch(/filter/);
@@ -1451,8 +1456,8 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(countBlock).toMatch(
 			/diffOld.length === 0 \|\| diffNew.length === 0/,
 		);
-		expect(display).toMatch(/` ⎿ \$\{diffOldFinal\.length\} line/);
-		expect(display).toMatch(
+		expect(fileDisplay).toMatch(/` ⎿ \$\{diffOldFinal\.length\} line/);
+		expect(fileDisplay).toMatch(
 			/replacementBaseLine\(tool\.output\) \+ stripPrefix/,
 		);
 		// LEGACY NANOCODER ARGS: old sessions saved `old_str`/`new_str`
@@ -1461,13 +1466,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// BOTH key shapes, and the legacy `Successfully replaced content at
 		// lines N-M` result prefix must gate the SAME diff path as
 		// `Replaced …` (never fall through to the generic tail).
-		expect(display).toMatch(
+		expect(fileDisplay).toMatch(
 			/old_string'\).*\|\| textArg\(tool\.args, 'old_str'/,
 		);
-		expect(display).toMatch(
+		expect(fileDisplay).toMatch(
 			/new_string'\).*\|\|\s*textArg\(tool\.args, 'new_str'/,
 		);
-		expect(display).toMatch(/Successfully replaced content at line/);
+		expect(fileDisplay).toMatch(/Successfully replaced content at line/);
 	});
 	test('edit diff rows WRAP INSIDE the container (long lines never overflow)', () => {
 		// The intermittent "additional lines" bug: a diff row LONGER than
@@ -1477,7 +1482,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// renderer must split long rows at the width budget (code-column
 		// continuation, row bg preserved) so nothing ever exceeds the
 		// renderable width and the terminal never wraps a row.
-		const highlight = read('./row-highlight.ts');
+		const highlight = read('./row-highlight-diff.ts');
 		const diffFn = highlight.slice(
 			highlight.indexOf('export function tokenizeFileDiff'),
 			highlight.indexOf('export function tokenizeFileDiff') + 6000,
@@ -1633,12 +1638,13 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 
 	test('Ran tally/agent headers split colors even WITHOUT the glyph', () => {
-		const rh = read('./row-highlight.ts');
+		const tools = read('./row-highlight-tools.ts');
+		const rows = read('./row-highlight.ts');
 		// liveRowSegments strips the leading ✦/⚙ before tokenizing, so the
 		// `Ran … ×N` / `Ran agent:…` header regexes must make the glyph
 		// OPTIONAL — a required glyph regresses the whole header to primary.
-		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(Ran\\s\+\)\(\.\*\)\$/);
-		expect(rh).toMatch(/\(\/\^\(\[✦⚙\]\\s\*\)\?\(\.\*\)\$/);
+		expect(tools).toContain('/^([✦⚙]\\s*)?(Ran\\s+)(.*)$/');
+		expect(rows).toContain('/^(?:[✦⚙]\\s*)?Ran\\s+agent:');
 	});
 
 	test('agents modal manages models and confirms custom-agent deletion', () => {
@@ -1758,7 +1764,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// in `(...)`.
 		const modal = read('./components/model-modal.tsx');
 		expect(modal).toMatch(/providerDisplayName\(line\.provider\)/);
-		expect(modal).toMatch(/export function providerHeaderParts/);
+		expect(read('./components/model-modal-helpers.ts')).toMatch(
+			/export function providerHeaderParts/,
+		);
 		expect(modal).toMatch(/\{title\}/);
 		expect(modal).toMatch(/\{names\}/);
 		// No literal `(` rendered directly before the header name.

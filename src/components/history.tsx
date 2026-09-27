@@ -26,7 +26,6 @@ import {
 	activeAgentRuns as globalActiveAgentRuns,
 	activeEndpoint,
 	expandedBlocks,
-	gearGlyph,
 	hoverRow,
 	thinkingMode,
 	thinkingActive,
@@ -43,9 +42,6 @@ import {
 	thinkingElapsed,
 	turnElapsed,
 	titleShape,
-	workingDots,
-	formatElapsed,
-	thoughtExpanded,
 	toggleToolBlock,
 	toolsExpanded,
 	setDetailsOpen,
@@ -80,7 +76,7 @@ import {
 	disabledScroll,
 	resolveScrollAcceleration,
 } from '../scroll-acceleration';
-import {formatCount, formatDuration} from '../format';
+import {formatDuration} from '../format';
 import {LiveToolRows} from './live-tool-rows';
 import {SettledToolRow} from './settled-tool-row';
 import {BashToolRow} from './bash-tool-row';
@@ -109,8 +105,18 @@ import {
 import {colors} from '../theme';
 import {buildBannerBox, hasConversation} from '../banner';
 import {historyFillWidth, toolRowFillWidth} from '../history-width';
-import {wrapText} from '../text-wrap';
-
+import {
+	liveThinkingHeader,
+	liveThoughtOneLine,
+	settledThought,
+	wrapThoughtBody,
+} from './history-thought';
+export {
+	liveThinkingHeader,
+	liveThoughtOneLine,
+	settledThought,
+	wrapThoughtBody,
+} from './history-thought';
 const PREVIEW_LINES = 3;
 /**
  * Fence languages rendered as PLAIN COMPONENTS (`SettledToolRow`) instead
@@ -1705,96 +1711,6 @@ export function History(props: HistoryProps) {
 		>
 			{transcriptContent()}
 		</scrollbox>
-	);
-}
-
-/** `  └   ` container lead (content starts at col 6, parity: tool rows). */
-const THOUGHT_BODY_LEAD = '  └   ';
-/** `      ` (6 spaces) continuation indent = the content column. */
-const THOUGHT_BODY_CONT = '      ';
-
-/**
- * LIVE thinking header: ANIMATED gear (⚙ ↔ ✦ in the SAME secondary color —
- * glyph animation, never a color blink) + spinner dots BEFORE the real-time
- * timer (parity: the Working indicator animates its glyph and dots). Pure,
- * unit-tested.
- */
-export function liveThinkingHeader(
-	frame: number,
-	elapsedSeconds: number,
-): string {
-	return `${gearGlyph(frame)} Thinking ${workingDots(frame)} (${formatElapsed(elapsedSeconds)})`;
-}
-
-/**
- * The dynamic ONE-LINE thinking ticker rendered below the live thought
- * block: newlines are collapsed (never shown), and the text keeps scrolling
- * to the RIGHT — only the LATEST content that fits the window width after
- * the `  └ ` prefix is shown. Secondary color (parity: the tail). Pure,
- * unit-tested.
- */
-export function liveThoughtOneLine(text: string, width: number): string {
-	const max = Math.max(0, width - 4); // after `  └ `
-	const flat = text.replace(/\s*\n\s*/g, ' ').trim();
-	if (flat.length <= max) return flat;
-	return flat.slice(flat.length - max);
-}
-
-/**
- * Wrap a thought's reasoning text to the chat width using the TOOL body
- * container format: the first line gets `  └   ` and EVERY continuation
- * (wrapped piece OR explicit newline) gets `      ` (6 spaces, the content
- * column), so long prose lines can never escape the `└` indentation
- * (parity: formatOutputTail's `  └   `/`      ` rows). Pure, unit-tested.
- */
-export function wrapThoughtBody(text: string, width: number): string {
-	if (!text.trim()) return '';
-	const safe = Math.max(1, width);
-	const contentWidth = Math.max(1, safe - THOUGHT_BODY_CONT.length);
-	const wrapped: string[] = [];
-	for (const line of text.replace(/\n+$/, '').split('\n')) {
-		for (const piece of wrapText(line, contentWidth)) {
-			wrapped.push(piece);
-		}
-	}
-	if (wrapped.length === 0) return '';
-	return wrapped
-		.map(
-			(piece, index) =>
-				(index === 0 ? THOUGHT_BODY_LEAD : THOUGHT_BODY_CONT) + piece,
-		)
-		.join('\n');
-}
-
-/**
- * Settled Thought block, `⚙ Thought (Ns) · ~N tokens` header with a `└`
- * preview of the FIRST rendered lines (head once settled), expandable via
- * Ctrl+R. The body uses the same `  └   ` container as tool rows, and the
- * text is pre-wrapped to the chat width so wrapped lines stay inside the
- * indentation.
- */
-export function settledThought(
-	reasoningText: string,
-	durationSec: number | undefined,
-	key: string,
-	width: number,
-): string {
-	const tokens = Math.max(1, Math.ceil(reasoningText.length / 4));
-	const header =
-		`⚙ Thought${durationSec ? ` (${formatDuration(durationSec)})` : ''}` +
-		` · ~${formatCount(tokens)} tokens`;
-	const body = wrapThoughtBody(reasoningText, width);
-	const lines = body.split('\n');
-	const expanded = expandedBlocks()[key] ?? thoughtExpanded();
-	if (expanded || lines.length <= PREVIEW_LINES) {
-		return fence('thought', 'done', `${header}\n${body}`);
-	}
-	const preview = lines.slice(0, PREVIEW_LINES).join('\n');
-	return fence(
-		'thought',
-		'done',
-		`${header}\n${preview}\n` +
-			`     … +${lines.length - PREVIEW_LINES} more lines`,
 	);
 }
 

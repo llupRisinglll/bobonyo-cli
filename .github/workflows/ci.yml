@@ -31,6 +31,14 @@ jobs:
         if: github.event_name == 'pull_request'
         run: node scripts/release.mjs --require-changeset "origin/${{ github.base_ref }}"
 
+      - name: Check formatting
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            bash scripts/check-format.sh "origin/${GITHUB_BASE_REF}"
+          else
+            bash scripts/check-format.sh "${GITHUB_EVENT_BEFORE}"
+          fi
+
       - name: Typecheck
         run: bun run typecheck
 

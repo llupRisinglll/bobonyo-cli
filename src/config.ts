@@ -19,6 +19,15 @@ import {dirname, join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {bobonyoConfigDir, migrateProjectDir} from './bobonyo-paths';
 import {readCodexAuth} from './codex-auth';
+import {
+	effectiveContextWindow,
+	modelsDevContextWindow,
+	resolveContextWindow,
+	type ModelsDevCatalog,
+} from './context-window';
+
+export {effectiveContextWindow, modelsDevContextWindow, resolveContextWindow};
+export type {ModelsDevCatalog};
 
 export interface ProviderConfig {
 	id: string;
@@ -67,121 +76,6 @@ export interface ResolvedProvider extends ProviderConfig {
 	/** Undefined when the provider config did not declare a window (E6 fallback). */
 	contextWindow?: number;
 	alwaysAllow: string[];
-}
-
-/** E6: models.dev context-window fallback, cached for a day. */
-const MODELS_DEV_TTL_MS = 24 * 60 * 60 * 1000;
-let modelsDevCache: {
-	url: string;
-	data: ModelsDevCatalog;
-	at: number;
-} | null = null;
-
-/** One model entry in the models.dev catalog. */
-interface ModelsDevModel {
-	id?: string;
-	/** New schema (2026): the context window lives under `limit.context`. */
-	limit?: {context?: number; input?: number; output?: number};
-	/** Old schema: some snapshots carry `context_window` on the model. */
-	context_window?: number;
-}
-
-export interface ModelsDevCatalog {
-	[providerId: string]:
-		| {
-				models?: Record<string, ModelsDevModel>;
-				/** Old provider-keyed shape, `context_window` at the top. */
-				context_window?: number;
-		  }
-		| undefined;
-}
-
-async function fetchModelsDev(): Promise<ModelsDevCatalog> {
-	const url =
-		process.env.NANOCODER_MODELS_DEV_URL ?? 'https://models.dev/api.json';
-	const now = Date.now();
-	if (
-		modelsDevCache &&
-		modelsDevCache.url === url &&
-		now - modelsDevCache.at < MODELS_DEV_TTL_MS
-	) {
-		return modelsDevCache.data;
-	}
-	const response = await fetch(url);
-	if (!response.ok) throw new Error(`models.dev responded ${response.status}`);
-	const data = (await response.json()) as ModelsDevCatalog;
-	modelsDevCache = {url, data, at: now};
-	return data;
-}
-
-/**
- * Extract a model's context window from a models.dev catalog snapshot.
- * Handles BOTH schemas:
- *   1. current: `catalog[providerId].models[modelId].limit.context`
- *   2. legacy:  `catalog[modelId].context_window` (direct key)
- * The providerId lookup is tried FIRST, then the whole catalog is searched by
- * model id — auto-discovered ids (deepseek-chat, mimo-v2.5-pro) often live
- * under a DIFFERENT provider key than the config id (e.g. the Xiaomi
- * token-plan host vs the plain `xiaomi` entry). Pure, unit-tested.
- */
-export function modelsDevContextWindow(
-	catalog: ModelsDevCatalog,
-	providerId: string,
-	model: string,
-): number | undefined {
-	const pick = (entry: ModelsDevModel | undefined): number | undefined => {
-		const window = entry?.limit?.context ?? entry?.context_window;
-		return window && window > 0 ? window : undefined;
-	};
-	const provider = catalog[providerId];
-	const direct = pick(provider?.models?.[model]);
-	if (direct) return direct;
-	for (const entry of Object.values(catalog)) {
-		const window = pick(entry?.models?.[model]);
-		if (window) return window;
-	}
-	// Legacy shape keyed directly by model id.
-	const legacy = catalog[model];
-	if (legacy && !legacy.models) {
-		const window = pick({
-			limit: undefined,
-			context_window: legacy.context_window,
-		});
-		if (window) return window;
-	}
-	return undefined;
-}
-
-/**
- * E6: resolve a model's context window, a declared provider value wins,
- * otherwise the models.dev catalog (cached; never throws; callers treat an
- * undefined result as "unknown window").
- */
-export async function resolveContextWindow(
-	model: string,
-	declared?: number,
-	providerId?: string,
-): Promise<number | undefined> {
-	if (declared) return declared;
-	try {
-		const catalog = await fetchModelsDev();
-		return modelsDevContextWindow(catalog, providerId ?? '', model);
-	} catch {
-		return undefined;
-	}
-}
-
-/** Provider config is authoritative; discovery only fills missing limits. */
-export function effectiveContextWindow(
-	declared?: number,
-	discovered?: number,
-	fallback = 128_000,
-): number {
-	return declared && declared > 0
-		? declared
-		: discovered && discovered > 0
-			? discovered
-			: fallback;
 }
 
 export function configDir(): string {

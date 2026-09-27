@@ -10,13 +10,23 @@
  */
 
 import {displayToolName, resolveToolName} from './tools';
-import {stripEchoedCommand, stripTerminalControl} from './bash';
-import {lineDiff, type RowStatus} from './row-highlight';
+import {stripEchoedCommand} from './bash';
+import type {RowStatus} from './row-highlight';
 import {tasks} from './state';
-import type {ApplyPatchDisplayChange} from './apply-patch';
+import {fence, formatOutputTail, wordWrap} from './tool-display-output';
+import type {ToolDisplayData} from './tool-display-types';
+import {formatFilePreview} from './tool-display-files';
+export {
+	PREVIEW_COLLAPSED_LINES,
+	PREVIEW_EXPANDED_LINES,
+	PREVIEW_LINE_MAX_CHARS,
+	PREVIEW_MAX_ROWS,
+	fence,
+	formatOutputTail,
+} from './tool-display-output';
+export type {ToolDisplayData} from './tool-display-types';
+export {formatFilePreview, replacementBaseLine} from './tool-display-files';
 
-export const PREVIEW_COLLAPSED_LINES = 3;
-export const PREVIEW_EXPANDED_LINES = 50;
 export const COMMAND_MAX_LINES = 3;
 /**
  * Max characters kept from ONE output line before wrapping. A single
@@ -25,7 +35,6 @@ export const COMMAND_MAX_LINES = 3;
  * `…` marker (parity: toolResultTail) so the truncation stays visible in
  * the preview's tail rows.
  */
-export const PREVIEW_LINE_MAX_CHARS = 2000;
 /**
  * Hard cap on RENDERED (wrapped) rows per preview — the backstop that
  * guarantees a huge line can never flood the transcript even when the
@@ -34,42 +43,13 @@ export const PREVIEW_LINE_MAX_CHARS = 2000;
  * long line must not grow the preview past it); expanded is the generous
  * opt-in view (up to 200 rows from 50 raw lines).
  */
-export const PREVIEW_MAX_ROWS = {
-	collapsed: PREVIEW_COLLAPSED_LINES,
-	expanded: PREVIEW_EXPANDED_LINES * 4,
-} as const;
 /**
  * Bordered-bash chrome. The command lives INSIDE the box on its own line
  * (`│ $ cmd`), so the wrap width is the box width minus the `│ ` left edge
  * and the `│` right edge.
  */
-const BOX_EDGE_WIDTH = 3;
 /** Command prompt: `│ $ ` (4 chars) — the `$` is the command indicator. */
 const COMMAND_PROMPT_WIDTH = 4;
-
-export interface ToolDisplayData {
-	name: string;
-	detail: string;
-	output: string;
-	/** Raw call arguments (file previews diff old/new from these). */
-	args?: Record<string, unknown>;
-	/** Pre-tool narration owns glyph; grouped file labels become branches. */
-	briefed?: boolean;
-	/** Task-only compact form for superseded checklist snapshots. */
-	compactTask?: boolean;
-}
-
-/** Wrap row content in a fence of the requested language + status. */
-export function fence(
-	language: string,
-	status: RowStatus,
-	content: string,
-	extra = '',
-): string {
-	const fenceChar = content.includes('```') ? '````' : '```';
-	const suffix = extra ? `:${extra}` : '';
-	return `${fenceChar}${language}:${status}${suffix}\n\n${content.replace(/\n+$/, '')}\n${fenceChar}`;
-}
 
 export function formatToolEntry(
 	tool: ToolDisplayData,
@@ -294,377 +274,6 @@ function formatSkillRow(tool: ToolDisplayData, status: RowStatus): string {
 	);
 }
 
-function textArg(
-	args: Record<string, unknown> | undefined,
-	key: string,
-): string {
-	const value = args?.[key];
-	return typeof value === 'string' ? value : '';
-}
-
-function applyPatchDisplayArg(
-	args: Record<string, unknown> | undefined,
-): ApplyPatchDisplayChange[] {
-	const value = args?._applyPatchDisplay;
-	if (!Array.isArray(value)) return [];
-	return value.filter(
-		(change): change is ApplyPatchDisplayChange =>
-			Boolean(change) &&
-			typeof change === 'object' &&
-			typeof (change as ApplyPatchDisplayChange).path === 'string' &&
-			Array.isArray((change as ApplyPatchDisplayChange).rows),
-	);
-}
-
-/**
- * File-write/edit preview (parity: nanocoder's CompactFileResult).
- * `write_file` renders a numbered, syntax-highlighted preview of the new
- * content (` ```filerow `); `string_replace`/`diff_edit` render an old→new
- * line diff with line numbers (` ```filediff `).
- */
-function formatFilePreview(
-	tool: ToolDisplayData,
-	expanded: boolean,
-	status: RowStatus,
-	width: number,
-): string {
-	const path = textArg(tool.args, 'path') || tool.detail;
-	const displayName = tool.name === 'write_file' ? 'Write' : 'Edit';
-	if (tool.name === 'diff_edit') {
-		return formatUnifiedPatchPreview(tool, expanded, status);
-	}
-	if (tool.name === 'apply_patch') {
-		return formatApplyPatchPreview(tool, expanded, status);
-	}
-	if (tool.name === 'write_file') {
-		// Only render the file preview when the tool actually EXECUTED
-		// (output starts with the success prefix). A declined/error result
-		// (e.g. `Declined by user.`) must fall back to the generic tail,
-		// otherwise the row would show the proposed content as if written.
-		if (!/^Wrote /.test(tool.output)) {
-			const tail = formatOutputTail(tool.output, expanded, width);
-			return tail
-				? `${displayName} ${path}\n${tail}`
-				: `${displayName} ${path}`;
-		}
-		const body =
-			textArg(tool.args, 'content') || stripResultPrefix(tool.output);
-		const lines = body.replace(/\n+$/, '').split('\n');
-		const visible = expanded ? lines : lines.slice(0, 50);
-		const hidden = lines.length - visible.length;
-		const numbered = visible
-			.map((line, index) => `${String(index + 1).padStart(4, ' ')} ${line}`)
-			.join('\n');
-		const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
-		const header = `✦ ${displayName} ${path}`;
-		const summary = ` ⎿ ${displayName}: ${lines.length} line${lines.length === 1 ? '' : 's'}`;
-		// Header through the `filerow` tokenizer; the numbered CODE gets its
-		// own fence with the file's REAL language so OpenTUI's built-in
-		// tree-sitter highlights it (the filerow block only carries the
-		// header + summary so the parser never sees non-code text).
-		const headerFence = fence('filerow', status, `${header}\n${summary}`);
-		const lang = languageForFile(path);
-		const codeFence = lang
-			? `${'```'}${lang}\n${numbered}\n${'```'}`
-			: numbered;
-		return `${headerFence}\n${codeFence}${footer}`;
-	}
-	// string_replace / diff_edit: old → new diff with line numbers. The
-	// legacy nanocoder result prefix (`Successfully replaced content at
-	// lines N-M`) gates the same diff path as the current `Replaced …`.
-	if (
-		!/^Replaced /.test(tool.output) &&
-		!/^Successfully replaced content at line/.test(tool.output)
-	) {
-		const tail = formatOutputTail(tool.output, expanded, width);
-		const header = `✦ ${displayName} ${path}`;
-		return tail ? `${header}\n${tail}` : header;
-	}
-	const oldStr =
-		textArg(tool.args, 'old_string') || textArg(tool.args, 'old_str') || '';
-	const newStr =
-		textArg(tool.args, 'new_string') ||
-		textArg(tool.args, 'new_str') ||
-		stripResultPrefix(tool.output);
-	// Count the REAL lines, blank lines included: the diff renderer
-	// (lineDiff) keeps interior blank lines, so the summary must count them
-	// too — filtering empties here made the summary say N while the diff
-	// rendered N+1 rows (the phantom "extra line" when the model inserts a
-	// blank line). Trailing newlines are stripped so a trailing `\n` never
-	// invents a phantom final line.
-	const oldLines = oldStr.replace(/\n+$/, '').split('\n');
-	const newLines = newStr.replace(/\n+$/, '').split('\n');
-	// STRIP REDUNDANT CONTEXT: the edit tool's old/new strings usually
-	// ANCHOR the change with identical surrounding lines. Those lines are
-	// not part of the change — rendering them as context inflated the diff
-	// (a real 3 → 4 edit showed `7 → 8` and 4 phantom "extra" rows). Diff
-	// only the MIDDLE that actually differs; the summary then reflects the
-	// true change and the rendered rows match it exactly.
-	let prefix = 0;
-	while (
-		prefix < oldLines.length &&
-		prefix < newLines.length &&
-		oldLines[prefix] === newLines[prefix]
-	) {
-		prefix++;
-	}
-	let suffix = 0;
-	while (
-		suffix < oldLines.length - prefix &&
-		suffix < newLines.length - prefix &&
-		oldLines[oldLines.length - 1 - suffix] ===
-			newLines[newLines.length - 1 - suffix]
-	) {
-		suffix++;
-	}
-	const diffOld = oldLines.slice(prefix, oldLines.length - suffix);
-	const diffNew = newLines.slice(prefix, newLines.length - suffix);
-	// DEGENERATE-STRIP GUARD: when old_string is a strict PREFIX (or suffix)
-	// of new_string — a block REPLACED by a longer block that starts with
-	// the same lines — prefix-stripping consumes the ENTIRE old block and
-	// the diff degenerates to `0 lines → N lines` with the replaced lines
-	// hidden (the model "replaced" them but the view said pure insertion).
-	// Fall back to the FULL old→new so the replacement renders as removes +
-	// adds, exactly like git/codex. Anchors are only redundant when a real
-	// change remains on BOTH sides.
-	let diffOldFinal = diffOld;
-	let diffNewFinal = diffNew;
-	let stripPrefix = prefix;
-	if (diffOld.length === 0 || diffNew.length === 0) {
-		diffOldFinal = oldLines;
-		diffNewFinal = newLines;
-		stripPrefix = 0;
-	}
-	const summary = ` ⎿ ${diffOldFinal.length} line${diffOldFinal.length === 1 ? '' : 's'} → ${diffNewFinal.length} line${diffNewFinal.length === 1 ? '' : 's'}`;
-	// Number the diff against the REAL file, not the snippet: the tool
-	// reports where the FIRST occurrence sat (`(at line N)`), and the
-	// stripped middle starts `stripPrefix` lines into that occurrence.
-	const diff = lineDiffText(
-		diffOldFinal.join('\n'),
-		diffNewFinal.join('\n'),
-		replacementBaseLine(tool.output) + stripPrefix,
-	);
-	// Cap the diff preview like the Write preview: collapsed shows the first
-	// 50 lines with a `+N more lines` footer (expand via click / ctrl+o);
-	// expanded shows the whole diff.
-	const diffLines = diff.split('\n');
-	const visibleDiff = expanded ? diffLines : diffLines.slice(0, 50);
-	const hiddenDiff = diffLines.length - visibleDiff.length;
-	const diffBody = visibleDiff.join('\n');
-	const diffFooter = hiddenDiff > 0 ? `\n  … +${hiddenDiff} more lines` : '';
-	const header = `✦ ${displayName} ${path}`;
-	// Diff rows stay in ONE `filediff` fence (the +/- markers are not valid
-	// code, so the custom tokenizer colors them + the red/green row bg).
-	return fence(
-		'filediff',
-		status,
-		`${header}\n${summary}${diffBody ? `\n${diffBody}` : ''}${diffFooter}`,
-	);
-}
-
-/** Render apply_patch changes as one multi-file, numbered DiffView. */
-function formatApplyPatchPreview(
-	tool: ToolDisplayData,
-	expanded: boolean,
-	status: RowStatus,
-): string {
-	const patch = textArg(tool.args, 'patchText').replace(/\r/g, '');
-	if (!patch || !/^Applied patch successfully\./.test(tool.output)) {
-		const tail = formatOutputTail(tool.output, expanded, 84);
-		return tail ? `✦ Edit files (failed)\n${tail}` : '✦ Edit files (failed)';
-	}
-	const changes = applyPatchDisplayArg(tool.args);
-	if (changes.length === 0) {
-		const tail = formatOutputTail(tool.output, expanded, 84);
-		return tail ? `✦ Edit files (failed)\n${tail}` : '✦ Edit files (failed)';
-	}
-	const body = changes.flatMap((change, changeIndex) => {
-		const action =
-			change.type === 'add'
-				? 'Create'
-				: change.type === 'delete'
-					? 'Delete'
-					: change.type === 'move'
-						? 'Move'
-						: 'Edit';
-		const additions = change.rows.filter(row => row.kind === 'add').length;
-		const deletions = change.rows.filter(row => row.kind === 'remove').length;
-		const prefix = tool.briefed
-			? `${changeIndex === 0 ? '✦ ' : ''}  └ `
-			: changeIndex === 0
-				? '✦ '
-				: '└ ';
-		const label =
-			`${prefix}${action} ${change.path}` +
-			`${change.targetPath ? ` → ${change.targetPath}` : ''}` +
-			` (+${additions} -${deletions})`;
-		const lineWidth = Math.max(
-			1,
-			...change.rows.map(row => String(row.line).length),
-		);
-		return [
-			label,
-			...change.rows.map(row => {
-				const sigil =
-					change.type === 'add'
-						? ' '
-						: row.kind === 'add'
-							? '+'
-							: row.kind === 'remove'
-								? '-'
-								: ' ';
-				return `    ${String(row.line).padStart(lineWidth, ' ')} ${sigil} ${row.text}`;
-			}),
-		];
-	});
-	const visible = expanded ? body : body.slice(0, 50);
-	const hidden = body.length - visible.length;
-	const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
-	return fence('filediff', status, `${visible.join('\n')}${footer}`);
-}
-
-/** Render diff_edit's unified patch as the same numbered DiffView as Edit. */
-function formatUnifiedPatchPreview(
-	tool: ToolDisplayData,
-	expanded: boolean,
-	status: RowStatus,
-): string {
-	const patch = textArg(tool.args, 'diff').replace(/\r/g, '');
-	const fallbackPath = textArg(tool.args, 'path') || tool.detail || 'patch';
-	if (!patch || !/^EXIT_CODE:\s*0\b/.test(tool.output)) {
-		const tail = formatOutputTail(tool.output, expanded, 84);
-		const header = `✦ Edit ${fallbackPath}`;
-		return tail ? `${header}\n${tail}` : header;
-	}
-
-	const lines = patch.split('\n');
-	const body: string[] = [];
-	let path = fallbackPath;
-	let oldLine = 1;
-	let newLine = 1;
-	let added = 0;
-	let removed = 0;
-	let files = 0;
-	for (const line of lines) {
-		if (line.startsWith('+++ ')) {
-			const raw = line.slice(4).trim().split(/\s+/)[0] ?? '';
-			if (raw && raw !== '/dev/null') {
-				const clean = raw.replace(/^[ab]\//, '');
-				if (files === 0) path = clean;
-				files += 1;
-			}
-			continue;
-		}
-		if (
-			line.startsWith('--- ') ||
-			line.startsWith('diff --git ') ||
-			line.startsWith('index ')
-		) {
-			continue;
-		}
-		const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-		if (hunk) {
-			oldLine = Number(hunk[1]);
-			newLine = Number(hunk[2]);
-			continue;
-		}
-		if (line.startsWith('\\ No newline at end of file')) continue;
-		if (line.startsWith('+')) {
-			body.push(`  ${String(newLine++).padStart(4, ' ')} + ${line.slice(1)}`);
-			added += 1;
-			continue;
-		}
-		if (line.startsWith('-')) {
-			body.push(`  ${String(oldLine++).padStart(4, ' ')} - ${line.slice(1)}`);
-			removed += 1;
-			continue;
-		}
-		if (line.startsWith(' ')) {
-			body.push(`  ${String(oldLine++).padStart(4, ' ')}   ${line.slice(1)}`);
-			newLine += 1;
-		}
-	}
-	if (body.length === 0) {
-		const tail = formatOutputTail(tool.output, expanded, 84);
-		return tail ? `✦ Edit ${path}\n${tail}` : `✦ Edit ${path}`;
-	}
-	const visible = expanded ? body : body.slice(0, 50);
-	const hidden = body.length - visible.length;
-	const summary =
-		` ⎿ ${removed} removed · ${added} added` +
-		(files > 1 ? ` · ${files} files` : '');
-	const footer = hidden > 0 ? `\n  … +${hidden} more lines` : '';
-	return fence(
-		'filediff',
-		status,
-		`✦ Edit ${path}\n${summary}\n${visible.join('\n')}${footer}`,
-	);
-}
-
-/** Map a file path to an OpenTUI tree-sitter language id. */
-function languageForFile(path: string): string {
-	const ext = path.split('.').pop()?.toLowerCase() ?? '';
-	if (['ts', 'tsx', 'mts', 'cts'].includes(ext)) return 'typescript';
-	if (['js', 'jsx', 'mjs', 'cjs'].includes(ext)) return 'javascript';
-	if (['md', 'mdx'].includes(ext)) return 'markdown';
-	return '';
-}
-
-/** Strip the `Wrote/Replaced …` prefix from a tool RESULT, keep the body. */
-function stripResultPrefix(output: string): string {
-	const match = /^(?:Wrote|Edited|Replaced|Deleted)[^\n]*\n?([\s\S]*)$/.exec(
-		output,
-	);
-	return match?.[1]?.replace(/^\n/, '') ?? output;
-}
-
-/**
- * Absolute 1-based line of the FIRST replaced occurrence, parsed from the
- * string_replace result (`Replaced N occurrences in <path> (at line L)`).
- * Falls back to 1 when the result predates the marker (legacy saved
- * sessions, mocks) — the old snippet-relative numbering.
- */
-export function replacementBaseLine(output: string): number {
-	const match = /^Replaced \d+ occurrences? in .*? \(at line (\d+)\)/.exec(
-		output,
-	);
-	const line = match ? Number(match[1]) : NaN;
-	return Number.isFinite(line) && line > 0 ? line : 1;
-}
-
-function lineDiffText(oldStr: string, newStr: string, baseLine = 1): string {
-	const diff = lineDiff(oldStr, newStr);
-	// The diff rows are numbered 1..N relative to the snippet; shift them so
-	// they match the REAL file position (the tool reports where the first
-	// occurrence sat). Context rows carry the old line number, which equals
-	// the new line number for unchanged lines.
-	const offset = Math.max(0, baseLine - 1);
-	// INDENT: every diff row carries a fixed 2-space container lead, so the
-	// numbered block nests under the `✦ Edit` header instead of rendering
-	// flush at column 0 (parity: tool/thought bodies sit inside their
-	// container). The number field is right-aligned in a 4-wide gutter.
-	const lead = '  ';
-	return diff
-		.map(line => {
-			const text = line.text;
-			if (line.kind === 'add') {
-				return `${lead}${String((line.newLineNo ?? 1) + offset).padStart(4, ' ')} + ${text}`;
-			}
-			if (line.kind === 'remove') {
-				return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')} - ${text}`;
-			}
-			// Context rows carry a SPACE in the sigil column so the numbers
-			// align with the +/- rows (`   3   text`).
-			return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
-		})
-		.join('\n');
-}
-
-/**
- * Diff row (git_diff): consistent with every other tool, `✦ Name(detail)`
- * header, the output under a `└` container (EXIT_CODE head + stat/patch tail)
- * with a `+N more lines` footer when the collapsed cap hides lines.
- */
 function formatDiffRow(
 	tool: ToolDisplayData,
 	status: RowStatus,
@@ -743,95 +352,4 @@ export function stripBashEcho(output: string, command: string): string {
 	}
 	const stripped = stripEchoedCommand(lines.slice(i), command);
 	return [...lines.slice(0, i), ...stripped].join('\n');
-}
-
-/**
- * Output preview: the TAIL of the output (results/errors are at the end),
- * `└   ` on the first row, `      ` on continuations, and a `+N lines`
- * footer below when the collapsed cap hides lines.
- */
-export function formatOutputTail(
-	output: string,
-	expanded: boolean,
-	width = 84,
-	/** Container prefix: `  └   ` for generic rows, `''` for the bordered box. */
-	prefix = '  └   ',
-): string {
-	// C5: error results strip the `Error: ` prefix from the visible tail.
-	const source = stripTerminalControl(output).replace(/^Error:\s*/, '');
-	const lines = source
-		.replace(/\r\n/g, '\n')
-		.replace(/\s+$/, '')
-		.split('\n')
-		.filter(line => line !== '');
-	if (lines.length === 0) return '';
-	const cap = expanded ? PREVIEW_EXPANDED_LINES : PREVIEW_COLLAPSED_LINES;
-	const tail = lines.slice(-cap);
-	const hidden = lines.length - tail.length;
-	// WRAP WITHIN THE CONTAINER: a raw output line longer than the indent
-	// width would spill past the `  └   ` edge (bash logs, URLs, test
-	// output). Pre-wrap each line so every continuation keeps the indent —
-	// the wrapped text can never escape the container.
-	const WRAP = Math.max(1, width - BOX_EDGE_WIDTH);
-	const wrappedLines: string[] = [];
-	for (const line of tail) {
-		// A single unbroken line (minified JS, giant log entry) must not
-		// wrap into hundreds of rows: keep the HEAD of the line with a
-		// trailing `…` marker (parity: toolResultTail).
-		const preview =
-			line.length > PREVIEW_LINE_MAX_CHARS
-				? `${line.slice(0, PREVIEW_LINE_MAX_CHARS)}…`
-				: line;
-		for (const piece of wordWrap(preview, WRAP)) wrappedLines.push(piece);
-	}
-	// Hard cap on RENDERED rows too — the per-line cap bounds each line, and
-	// this bounds the total even when the source is one huge blob.
-	const maxRows = expanded
-		? PREVIEW_MAX_ROWS.expanded
-		: PREVIEW_MAX_ROWS.collapsed;
-	const visibleRows = wrappedLines.slice(-maxRows);
-	const hiddenRows = wrappedLines.length - visibleRows.length;
-	const contPrefix = prefix === '  └   ' ? '      ' : '';
-	const bodyWithWrap = visibleRows
-		.map((line, index) => `${index === 0 ? prefix : contPrefix}${line}`)
-		.join('\n');
-	const footerLines = hidden + hiddenRows;
-	const footer =
-		footerLines > 0
-			? `\n… +${footerLines} more line${footerLines === 1 ? '' : 's'}`
-			: '';
-	return `${bodyWithWrap}${footer}`;
-}
-
-function wordWrap(text: string, width: number): string[] {
-	const words = text.split(/\s+/).filter(Boolean);
-	const lines: string[] = [];
-	let current = '';
-	for (const word of words) {
-		// A single word longer than the width must be HARD-SPLIT (URLs,
-		// long paths, unbroken log lines) so no line can escape the
-		// container (parity: wrapText's long-word handling).
-		if (word.length > width) {
-			if (current) {
-				lines.push(current);
-				current = '';
-			}
-			for (let i = 0; i < word.length; i += width) {
-				lines.push(word.slice(i, i + width));
-			}
-			continue;
-		}
-		if (!current) {
-			current = word;
-			continue;
-		}
-		if (current.length + 1 + word.length <= width) {
-			current += ` ${word}`;
-		} else {
-			lines.push(current);
-			current = word;
-		}
-	}
-	if (current) lines.push(current);
-	return lines;
 }
