@@ -2,6 +2,32 @@ import {describe, expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 
+test('question modal reserves wrapped custom/footer rows and follows focused options', () => {
+	const modal = readFileSync(
+		join(import.meta.dir, 'components/question-modal.tsx'),
+		'utf8',
+	);
+	expect(modal).not.toContain('Math.max(52');
+	expect(modal).toContain('cardWidth() - 2 - paddingX() * 2');
+	expect(modal).toContain("`Custom: ${custom() || 'Type your answer…'}▌`");
+	expect(modal).toContain('customRows().slice(-customHeight())');
+	expect(modal).toContain('height={visibleBodyHeight()}');
+	expect(modal).toContain('top={-bodyOffset()}');
+	expect(modal).toContain('const [editing, setEditing] = createSignal(false)');
+	expect(modal).toContain(
+		'const focused = () => !editing() && optionIndex() === index()',
+	);
+	expect(modal).toContain('if (editing()) return setEditing(false)');
+	expect(modal).toContain('Custom answer…');
+	expect(modal).toContain('focusedRow + focusedHeight - visibleBodyHeight()');
+	expect(modal.indexOf('<For each={visibleCustomRows()}>')).toBeLessThan(
+		modal.indexOf('<For each={footerRows()}>'),
+	);
+	expect(modal).toMatch(
+		/<For each=\{visibleCustomRows\(\)\}>[\s\S]*?height=\{1\}[\s\S]*?flexShrink=\{0\}[\s\S]*?wrapMode="none"/,
+	);
+});
+
 test('partial agent completions use existing wait indicator, not transcript assignment dumps', () => {
 	const app = readFileSync(join(import.meta.dir, 'app.tsx'), 'utf8');
 	const completion = app.slice(
