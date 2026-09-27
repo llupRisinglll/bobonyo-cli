@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.2.4 (2026-09-27)
+
+### Patch
+- Make custom answers an explicit editable choice and keep wrapped input, the cursor, footer, and focused options visible on narrow or short terminals.
 ## v0.2.3 (2026-09-27)
 
 ### Patch
