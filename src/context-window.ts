@@ -5,6 +5,7 @@ let modelsDevCache: {
 	data: ModelsDevCatalog;
 	at: number;
 } | null = null;
+const modelsDevRequests = new Map<string, Promise<ModelsDevCatalog>>();
 
 /** One model entry in the models.dev catalog. */
 interface ModelsDevModel {
@@ -36,11 +37,24 @@ async function fetchModelsDev(): Promise<ModelsDevCatalog> {
 	) {
 		return modelsDevCache.data;
 	}
-	const response = await fetch(url);
-	if (!response.ok) throw new Error(`models.dev responded ${response.status}`);
-	const data = (await response.json()) as ModelsDevCatalog;
-	modelsDevCache = {url, data, at: now};
-	return data;
+	const pending = modelsDevRequests.get(url);
+	if (pending) return pending;
+	// A provider catalog resolves hundreds of models concurrently. Share both
+	// the download and JSON parse instead of flooding the UI's event loop.
+	const request = (async () => {
+		const response = await fetch(url);
+		if (!response.ok)
+			throw new Error(`models.dev responded ${response.status}`);
+		const data = (await response.json()) as ModelsDevCatalog;
+		modelsDevCache = {url, data, at: Date.now()};
+		return data;
+	})();
+	modelsDevRequests.set(url, request);
+	try {
+		return await request;
+	} finally {
+		modelsDevRequests.delete(url);
+	}
 }
 
 /**

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import {createEffect, createSignal, For, on, Show} from 'solid-js';
+import {createEffect, createMemo, createSignal, For, on, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {colors} from '../theme';
@@ -172,53 +172,55 @@ export function ModelModal(props: {
 
 	/** Filtered provider groups in display order (current provider first):
 	 *  ONE group per REAL provider, all user connections merged inside. */
-	const groups = (): Array<{
-		group: ProviderGroup;
-		isCurrent: boolean;
-		models: string[];
-	}> => {
-		const sorted = groupProviders(props.providers).sort((a, b) => {
-			const aCurrent = a.connections.some(
-				connection => connection.id === props.currentProvider,
-			)
-				? 0
-				: 1;
-			const bCurrent = b.connections.some(
-				connection => connection.id === props.currentProvider,
-			)
-				? 0
-				: 1;
-			return aCurrent !== bCurrent
-				? aCurrent - bCurrent
-				: a.title.localeCompare(b.title);
-		});
-		const out: Array<{
+	const groups = createMemo(
+		(): Array<{
 			group: ProviderGroup;
 			isCurrent: boolean;
 			models: string[];
-		}> = [];
-		for (const group of sorted) {
-			const isCurrent = group.connections.some(
-				connection => connection.id === props.currentProvider,
-			);
-			const nameMatches =
-				matches(group.title) ||
-				group.connections.some(connection =>
-					matches(connection.name ?? connection.id),
+		}> => {
+			const sorted = groupProviders(props.providers).sort((a, b) => {
+				const aCurrent = a.connections.some(
+					connection => connection.id === props.currentProvider,
+				)
+					? 0
+					: 1;
+				const bCurrent = b.connections.some(
+					connection => connection.id === props.currentProvider,
+				)
+					? 0
+					: 1;
+				return aCurrent !== bCurrent
+					? aCurrent - bCurrent
+					: a.title.localeCompare(b.title);
+			});
+			const out: Array<{
+				group: ProviderGroup;
+				isCurrent: boolean;
+				models: string[];
+			}> = [];
+			for (const group of sorted) {
+				const isCurrent = group.connections.some(
+					connection => connection.id === props.currentProvider,
 				);
-			const visibleModels = group.models.filter(
-				model => nameMatches || matches(model),
-			);
-			if (query().trim() && !nameMatches && visibleModels.length === 0) {
-				continue;
+				const nameMatches =
+					matches(group.title) ||
+					group.connections.some(connection =>
+						matches(connection.name ?? connection.id),
+					);
+				const visibleModels = group.models.filter(
+					model => nameMatches || matches(model),
+				);
+				if (query().trim() && !nameMatches && visibleModels.length === 0) {
+					continue;
+				}
+				out.push({group, isCurrent, models: visibleModels});
 			}
-			out.push({group, isCurrent, models: visibleModels});
-		}
-		return out;
-	};
+			return out;
+		},
+	);
 
 	/** Display lines: inherit → spacers → provider headers → model GRID rows. */
-	const displayLines = (): DisplayLine[] => {
+	const displayLines = createMemo((): DisplayLine[] => {
 		const lines: DisplayLine[] = [];
 		if (props.inheritLabel) {
 			lines.push({kind: 'inherit'});
@@ -270,9 +272,9 @@ export function ModelModal(props: {
 		}
 		if (lines.length === 0) lines.push({kind: 'empty'});
 		return lines;
-	};
+	});
 
-	const modelCells = (): ModelCell[] => {
+	const modelCells = createMemo((): ModelCell[] => {
 		const cells: ModelCell[] = [];
 		for (const line of displayLines()) {
 			for (const cell of line.cells ?? []) {
@@ -280,7 +282,7 @@ export function ModelModal(props: {
 			}
 		}
 		return cells;
-	};
+	});
 
 	// Cursor over flattened model cells; -1 = the Inherit row.
 	const initialCursor = (): number => {
@@ -502,7 +504,11 @@ export function ModelModal(props: {
 		}
 		return 0;
 	};
-	const visibleLines = (): DisplayLine[] => {
+	const visibleLines = createMemo((): DisplayLine[] => {
+		// Only visible rows need fresh identities for the reconciler's active
+		// highlight. Cursor movement must not regroup the entire catalog or
+		// reread provider configuration from disk.
+		cursor();
 		const lines = displayLines();
 		// The scroll window matches the CARD (fit-content), so rows never
 		// render below the card edge.
@@ -512,8 +518,11 @@ export function ModelModal(props: {
 			Math.min(activeLine() - visible + 1, Math.max(0, lines.length - visible)),
 		);
 		setScrollStart(start);
-		return lines.slice(start, start + visible);
-	};
+		return lines.slice(start, start + visible).map(line => ({
+			...line,
+			cells: line.cells?.map(cell => (cell ? {...cell} : null)),
+		}));
+	});
 
 	const truncateCell = (text: string, width: number): string =>
 		text.length > width ? text.slice(0, Math.max(1, width - 1)) + '…' : text;
