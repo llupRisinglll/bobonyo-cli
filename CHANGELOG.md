@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.2.7 (2026-10-02)
+
+### Patch
+- Keep model picker navigation responsive by caching catalog layout and sharing concurrent model metadata requests.
 ## v0.2.6 (2026-09-27)
 
 ### Patch
