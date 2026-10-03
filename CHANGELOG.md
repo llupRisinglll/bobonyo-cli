@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.3.0 (2026-10-03)
+
+### Minor
+- Show supported GPT reasoning efforts, persist paid fast processing with a visible Fast indicator, and distinguish informational system notices in gold.
 ## v0.2.7 (2026-10-02)
 
 ### Patch
