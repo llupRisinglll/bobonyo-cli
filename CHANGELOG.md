@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.3.1 (2026-10-03)
+
+### Patch
+- Separate edited files with a blank row, show three unchanged lines around patch hunks with correct line numbers and omitted-range markers, keep unchanged Markdown neutral, and render one status glyph per file row.
 ## v0.3.0 (2026-10-03)
 
 ### Minor
