@@ -92,7 +92,10 @@ export function tokenizeFileDiff(
 		// one separator space, so the code's own leading indentation (tabs
 		// in real code) stays in `text` — a greedy `\s+` would swallow it
 		// and the added lines would render flush at column 0.
-		const change = line.match(/^(\s*)(\d+\s+)([-+]) (.*)$/);
+		// A context row can contain Markdown bullets (`   3   - entry`).
+		// Do not let a greedy whitespace gutter swallow its context spaces
+		// and turn that unchanged bullet into a removal.
+		const change = line.match(/^(\s*)(\d+ )([-+]) (.*)$/);
 		if (change) {
 			body.push({
 				raw: line,
@@ -394,7 +397,7 @@ export function tokenizeFileDiff(
 			if (row && row.raw === line) {
 				bodyCursor++;
 				if (row.kind === 'context') {
-					if (row.number !== undefined && row.text) {
+					if (row.number !== undefined) {
 						return contextChunks(
 							row.indent,
 							row.number,

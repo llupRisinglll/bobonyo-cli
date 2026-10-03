@@ -81,6 +81,52 @@ const testMd: MarkdownBriefRenderer = {
 	treeSitter: undefined,
 };
 describe('Edit diff rendering (indent + absolute line numbers)', () => {
+	test('unchanged Markdown bullets paint neutral beside changed entry', async () => {
+		const frame = await renderDiff(
+			3,
+			'- 09:00 MDT — Started.\n- 12:47 MDT — Reviewing.',
+			'- 09:00 MDT — Started.\n- 10:18 MDT — Updated.\n- 12:47 MDT — Reviewing.',
+		);
+		const painted = (line: (typeof frame.lines)[number]) =>
+			line.spans.map(span => span.text).join('');
+		const before = frame.lines.find(line =>
+			painted(line).includes('09:00 MDT'),
+		);
+		const addition = frame.lines.find(line =>
+			painted(line).includes('10:18 MDT'),
+		);
+		const after = frame.lines.find(line => painted(line).includes('12:47 MDT'));
+		expect(before?.spans.map(span => span.text).join('')).toContain(
+			'3   - 09:00 MDT',
+		);
+		expect(addition?.spans.map(span => span.text).join('')).toContain(
+			'4 + - 10:18 MDT',
+		);
+		expect(after?.spans.map(span => span.text).join('')).toContain(
+			'5   - 12:47 MDT',
+		);
+		const removed = colors().diffRemoved.toLowerCase();
+		const background = (span: (typeof frame.lines)[number]['spans'][number]) =>
+			span.bg &&
+			`#${[span.bg.r, span.bg.g, span.bg.b]
+				.map(value =>
+					Math.round(value * 255)
+						.toString(16)
+						.padStart(2, '0'),
+				)
+				.join('')}`;
+		expect(before?.spans.some(span => background(span) === removed)).toBe(
+			false,
+		);
+		expect(after?.spans.some(span => background(span) === removed)).toBe(false);
+	});
+	test('unbriefed Edit paints exactly one status glyph', async () => {
+		const frame = await renderDiff(2, 'old line', 'new line');
+		const header = textOf(frame, 1);
+		expect(header.trimEnd()).toBe('✦  Edit src/foo.ts');
+		expect(header.match(/✦/g)).toHaveLength(1);
+	});
+
 	test('rows indent under the header and the code lands at a FIXED column', async () => {
 		const frame = await renderDiff(
 			42,
@@ -139,7 +185,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		expect(textOf(frame, 2)).toContain(' ⎿ 2 lines → 3 lines');
 		expect(textOf(frame, 3)).toContain('7   x = 1;');
 		expect(textOf(frame, 4)).toContain('8 + x = 10;');
-		expect(textOf(frame, 5)).toContain('8   y = 2;');
+		expect(textOf(frame, 5)).toContain('9   y = 2;');
 	});
 
 	test('remove rows carry the - sigil with its trailing space too', async () => {
@@ -149,7 +195,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 		// ctx c (the removed line is never hidden as `1 → 2`).
 		expect(textOf(frame, 3)).toContain('3   a');
 		expect(textOf(frame, 4)).toContain('4 - b');
-		expect(textOf(frame, 5)).toContain('5   c');
+		expect(textOf(frame, 5)).toContain('4   c');
 		expect(textOf(frame, 4)).not.toMatch(/-b\b/);
 	});
 
@@ -291,7 +337,7 @@ describe('Edit diff rendering (indent + absolute line numbers)', () => {
 
 		expect(liveRows).toEqual(settledRows);
 		// Exactly ONE leading breakline: header at row 1, not row 2.
-		expect(liveRows[0]).toContain('✦ Edit src/foo.ts');
+		expect(liveRows[0]).toContain('✦  Edit src/foo.ts');
 	});
 
 	test('long diff rows never overflow: the terminal wrap phantom is gone', async () => {

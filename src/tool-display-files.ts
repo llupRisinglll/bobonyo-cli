@@ -117,6 +117,46 @@ export function formatFilePreview(
 		replacementBaseLine(tool.output) + stripPrefix,
 	);
 	const diffLines = diff.split('\n');
+	// The tool output includes the complete updated file. Borrow one real
+	// unchanged line on either side when the model's replacement arguments
+	// omit the surrounding file context. Never infer nonexistent EOF rows.
+	const updated = stripResultPrefix(tool.output)
+		.replace(/\n+$/, '')
+		.split('\n');
+	const start = replacementBaseLine(tool.output) + stripPrefix;
+	const firstChange = diffLines.findIndex(line => /^\s+\d+ [-+] /.test(line));
+	const lastChange = diffLines.findLastIndex(line =>
+		/^\s+\d+ [-+] /.test(line),
+	);
+	const replacementStart = replacementBaseLine(tool.output) - 1;
+	const singleReplacement = /^Replaced 1 occurrence in /.test(tool.output);
+	const updatedText = stripResultPrefix(tool.output);
+	const replacementOffset = newStr ? updatedText.indexOf(newStr) : -1;
+	const hasFullFile =
+		singleReplacement &&
+		replacementStart >= 0 &&
+		replacementOffset >= 0 &&
+		updatedText.slice(0, replacementOffset).split('\n').length - 1 ===
+			replacementStart;
+	if (firstChange >= 0 && hasFullFile) {
+		const previousLine = start - 1;
+		if (
+			previousLine > 0 &&
+			!diffLines.slice(0, firstChange).some(line => /^\s+\d+   /.test(line))
+		) {
+			const previous = updated[previousLine - 1];
+			if (previous !== undefined)
+				diffLines.unshift(contextLine(previousLine, previous));
+		}
+		const nextLine = start + diffNewFinal.length;
+		if (
+			nextLine <= updated.length &&
+			!diffLines.slice(lastChange + 1).some(line => /^\s+\d+   /.test(line))
+		) {
+			const next = updated[nextLine - 1];
+			if (next !== undefined) diffLines.push(contextLine(nextLine, next));
+		}
+	}
 	const visibleDiff = expanded ? diffLines : diffLines.slice(0, 50);
 	const hiddenDiff = diffLines.length - visibleDiff.length;
 	const diffBody = visibleDiff.join('\n');
@@ -169,8 +209,9 @@ function formatApplyPatchPreview(
 			...change.rows.map(row => String(row.line).length),
 		);
 		return [
+			...(changeIndex > 0 ? [''] : []),
 			label,
-			...change.rows.map(row => {
+			...change.rows.flatMap(row => {
 				const sigil =
 					change.type === 'add'
 						? ' '
@@ -179,7 +220,10 @@ function formatApplyPatchPreview(
 							: row.kind === 'remove'
 								? '-'
 								: ' ';
-				return `    ${String(row.line).padStart(lineWidth, ' ')} ${sigil} ${row.text}`;
+				return [
+					...(row.gapBefore ? ['    …'] : []),
+					`    ${String(row.line).padStart(lineWidth, ' ')} ${sigil} ${row.text}`,
+				];
 			}),
 		];
 	});
@@ -287,7 +331,10 @@ function lineDiffText(oldStr: string, newStr: string, baseLine = 1): string {
 			if (line.kind === 'remove') {
 				return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')} - ${text}`;
 			}
-			return `${lead}${String((line.oldLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
+			return `${lead}${String((line.newLineNo ?? 1) + offset).padStart(4, ' ')}   ${text}`;
 		})
 		.join('\n');
+}
+function contextLine(line: number, text: string): string {
+	return `  ${String(line).padStart(4, ' ')}   ${text}`;
 }

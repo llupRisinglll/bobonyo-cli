@@ -85,8 +85,9 @@ export function FileToolRow(props: {
 						<box width={TRANSCRIPT_GLYPH_GAP} />
 					</Show>
 					{/* With a brief, the row indents to the brief's text
-					    column (`✦` + the 2-col gap = 3 cols) and the header
-					    chunk's own glyph is stripped — one glyph per batch. */}
+					    column (`✦` + the 2-col gap = 3 cols). Strip the
+					    tokenized header glyph in every case: this component
+					    already owns the glyph for unbriefed rows too. */}
 					<Show when={indentContent() && !compactBriefTree()}>
 						<box width={TRANSCRIPT_CONTENT_COLUMN} />
 					</Show>
@@ -99,7 +100,7 @@ export function FileToolRow(props: {
 						<For each={props.header}>
 							{(c, index) => {
 								const text =
-									index() === 0 && (briefed() || props.batchBriefed)
+									index() === 0
 										? compactBriefTree()
 											? c.text.replace(/^[✦⚙]\s/, '')
 											: c.text.replace(/^[✦⚙]\s*/, '')

@@ -8,6 +8,11 @@ import {
 	writeFileSync,
 } from 'node:fs';
 import {dirname, extname, isAbsolute, relative, resolve} from 'node:path';
+import {
+	boundedPatchRows,
+	patchContextWindows,
+	type ResolvedDisplayChunk,
+} from './apply-patch-context';
 
 export interface PatchChunk {
 	oldLines: string[];
@@ -34,6 +39,8 @@ export interface ApplyPatchDisplayRow {
 	kind: 'context' | 'add' | 'remove';
 	line: number;
 	text: string;
+	/** An omitted unchanged range precedes this displayed hunk. */
+	gapBefore?: boolean;
 }
 
 export interface ApplyPatchDisplayChange {
@@ -412,7 +419,7 @@ function diffDisplayRows(
 	let newLine = newStart;
 	while (i < n && j < m) {
 		if (oldLines[i] === newLines[j]) {
-			rows.push({kind: 'context', line: oldLine, text: oldLines[i]!});
+			rows.push({kind: 'context', line: newLine, text: oldLines[i]!});
 			i++;
 			j++;
 			oldLine++;
@@ -464,9 +471,9 @@ export function applyPatchDisplayChanges(
 			};
 		}
 		const sourceLines = change.oldContent.replace(/\n$/, '').split('\n');
-		const rows: ApplyPatchDisplayRow[] = [];
+		if (change.oldContent === '') sourceLines.length = 0;
+		const resolvedChunks: ResolvedDisplayChunk[] = [];
 		let cursor = 0;
-		let lineDelta = 0;
 		for (const chunk of hunk.chunks) {
 			if (chunk.context) {
 				const contextIndex = findSequence(sourceLines, [chunk.context], cursor);
@@ -474,24 +481,33 @@ export function applyPatchDisplayChanges(
 			}
 			let oldLines = chunk.oldLines;
 			let newLines = chunk.newLines;
-			let start = findSequence(sourceLines, oldLines, cursor, chunk.endOfFile);
+			let start =
+				oldLines.length === 0
+					? sourceLines.length
+					: findSequence(sourceLines, oldLines, cursor, chunk.endOfFile);
 			if (start < 0 && oldLines.at(-1) === '') {
 				oldLines = oldLines.slice(0, -1);
 				if (newLines.at(-1) === '') newLines = newLines.slice(0, -1);
 				start = findSequence(sourceLines, oldLines, cursor, chunk.endOfFile);
 			}
 			if (start < 0) start = cursor;
-			rows.push(
-				...diffDisplayRows(
-					oldLines,
-					newLines,
-					start + 1,
-					start + 1 + lineDelta,
-				),
-			);
-			cursor = start + oldLines.length;
-			lineDelta += newLines.length - oldLines.length;
+			resolvedChunks.push({start, oldLines, newLines});
+			if (oldLines.length > 0) cursor = start + oldLines.length;
 		}
+		const rows = patchContextWindows(sourceLines, resolvedChunks).flatMap(
+			(window, index) => {
+				const visible = boundedPatchRows(
+					diffDisplayRows(
+						window.oldLines,
+						window.newLines,
+						window.oldStart,
+						window.newStart,
+					),
+				);
+				if (index > 0 && visible[0]) visible[0].gapBefore = true;
+				return visible;
+			},
+		);
 		return {
 			type: change.type,
 			path,
