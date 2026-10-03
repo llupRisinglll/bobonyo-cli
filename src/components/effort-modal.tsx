@@ -4,7 +4,7 @@ import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createSignal, For, Show} from 'solid-js';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
-import {EFFORT_LEVELS} from './model-modal';
+import {effortLevelsForModel} from './model-modal';
 
 /**
  * Standalone EFFORT picker (opened by bare `/effort`): choose Default (the
@@ -17,6 +17,7 @@ export function EffortModal(props: {
 	provider: string;
 	currentEffort?: string;
 	defaultEffort?: string;
+	codexAccount?: boolean;
 	onSelect: (level: string) => void;
 	onClose: () => void;
 }) {
@@ -31,11 +32,12 @@ export function EffortModal(props: {
 	const options = [
 		{
 			id: 'default',
-			label: props.defaultEffort
-				? `Default (${props.defaultEffort})`
-				: 'Default',
+			label: 'Default',
 		},
-		...EFFORT_LEVELS.map(level => ({id: level, label: level})),
+		...effortLevelsForModel(props.model, props.codexAccount).map(level => ({
+			id: level,
+			label: level,
+		})),
 	];
 	const initialIndex = props.currentEffort
 		? Math.max(
@@ -48,7 +50,10 @@ export function EffortModal(props: {
 	const cardWidth = () => Math.min(64, Math.max(52, dims().width - 8));
 	// Autofit: the card is exactly as tall as its content (13 rows), clamped
 	// to the window so a short terminal never overflows.
-	const cardHeight = Math.min(13, Math.max(10, dims().height - 2));
+	const cardHeight = Math.min(
+		options.length + 9,
+		Math.max(10, dims().height - 2),
+	);
 	const cardY = () => Math.max(2, Math.floor((dims().height - cardHeight) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>

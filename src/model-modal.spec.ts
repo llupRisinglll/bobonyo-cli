@@ -19,14 +19,15 @@ import {
 type Row = {kind: string; isCurrent?: boolean};
 
 describe('effortLevelsForModel', () => {
-	test('adds xhigh for GPT-5 and Codex models', () => {
+	test('adds xhigh only for documented models', () => {
 		expect(effortLevelsForModel('gpt-5.4')).toContain('xhigh');
-		expect(effortLevelsForModel('gpt-5-codex')).toContain('xhigh');
+		expect(effortLevelsForModel('gpt-5.3-codex')).toContain('xhigh');
+		expect(effortLevelsForModel('gpt-5')).not.toContain('xhigh');
 	});
 
 	test('adds max only for GPT-5.6', () => {
 		expect(effortLevelsForModel('gpt-5.6')).toEqual([
-			'minimal',
+			'none',
 			'low',
 			'medium',
 			'high',
@@ -36,10 +37,9 @@ describe('effortLevelsForModel', () => {
 		expect(effortLevelsForModel('gpt-4.1')).not.toContain('xhigh');
 	});
 
-	test('GPT-6 family gets the full ladder (auto-extends to new models)', () => {
-		for (const model of ['gpt-6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+	test('known GPT-6 models get max without unsupported minimal', () => {
+		for (const model of ['gpt-6-astra', 'gpt-6.1-sol']) {
 			expect(effortLevelsForModel(model)).toEqual([
-				'minimal',
 				'low',
 				'medium',
 				'high',
@@ -47,6 +47,7 @@ describe('effortLevelsForModel', () => {
 				'max',
 			]);
 		}
+		expect(effortLevelsForModel('gpt-6')).toEqual([]);
 	});
 });
 

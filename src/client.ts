@@ -27,6 +27,12 @@ import {resolveSystemPrompt, type SystemPromptStyle} from './system-prompt';
 import {PLAIN_RESPONSE_GUIDANCE} from './plain-response';
 import {renderPersistentMemory} from './memory';
 import {estimateTokens} from './tokenize';
+import {
+	fastServiceTier,
+	gptEffortForRequest,
+	knownGptEfforts,
+	validateGptEffort,
+} from './gpt-controls';
 
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
@@ -584,6 +590,10 @@ export function buildOpenAIRequestBody(
 		id: string;
 		model: string;
 		effort?: string;
+		baseUrl?: string;
+		sdkProvider?: string;
+		codexAccount?: boolean;
+		fastMode?: boolean;
 		promptCacheKey?: boolean;
 		providerOptions?: Record<string, unknown>;
 	},
@@ -592,6 +602,29 @@ export function buildOpenAIRequestBody(
 	options?: SystemPromptOptions,
 ): Record<string, unknown> {
 	const toolBlocks = openAIToolBlocks(tools);
+	const model = endpoint.model.replace(/^openai\//, '');
+	let officialOpenAI = false;
+	try {
+		const url = new URL(endpoint.baseUrl ?? '');
+		officialOpenAI =
+			url.protocol === 'https:' && url.hostname === 'api.openai.com';
+	} catch {
+		// Unknown gateways keep their own transport contract.
+	}
+	if (
+		officialOpenAI &&
+		knownGptEfforts(model) &&
+		(/gpt-.*-(?:codex|pro)(?:-|$)/.test(model) ||
+			(/^gpt-6/.test(model) &&
+				tools.length > 0 &&
+				!(
+					/^gpt-6-(?:sol|luna)(?:-|$)/.test(model) && endpoint.effort === 'none'
+				)))
+	) {
+		throw new Error(
+			`${endpoint.model} requires the Responses transport for this request. Set sdkProvider to 'responses'.`,
+		);
+	}
 	const body: Record<string, unknown> = {
 		model: endpoint.model,
 		stream: true,
@@ -630,6 +663,9 @@ export function buildOpenAIRequestBody(
 	if (endpoint.providerOptions) {
 		Object.assign(body, endpoint.providerOptions);
 	}
+	validateGptEffort(endpoint);
+	const tier = fastServiceTier(endpoint);
+	if (tier) body.service_tier = tier;
 	return body;
 }
 
@@ -643,6 +679,7 @@ export interface EndpointOverride {
 	sdkProvider?: string;
 	/** Responses wire against the ChatGPT Codex backend (codex login). */
 	codexAccount?: boolean;
+	fastMode?: boolean;
 	providerOptions?: Record<string, unknown>;
 	promptCacheKey?: boolean;
 }
@@ -692,7 +729,12 @@ export async function streamChat(
 	const isolated =
 		typeof subagentOverride === 'string'
 			? subagentOverride !== active.model
-				? {...active, model: subagentOverride}
+				? {
+						...active,
+						model: subagentOverride,
+						effort: active.modelEfforts?.[subagentOverride],
+						fastMode: undefined,
+					}
 				: undefined
 			: subagentOverride;
 	const candidates: Array<EndpointOverride | undefined> = [
@@ -799,6 +841,8 @@ async function streamOnce(
 	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const endpoint = endpointOverride ?? activeEndpoint();
+	// Reject stale fast settings even on wires that do not have a tier field.
+	fastServiceTier(endpoint);
 	// Keep durable/session history lossless, but send a bounded projection of
 	// stale tool output. This runs before wire sanitization so every provider
 	// path receives the same conservative history policy.
@@ -1551,6 +1595,20 @@ async function responsesStreamOnce(
 		Object.assign(body, endpoint.providerOptions);
 	}
 	const base = endpoint.baseUrl.replace(/\/+$/, '');
+	validateGptEffort(endpoint);
+	if (body.reasoning && typeof body.reasoning === 'object') {
+		const reasoning = body.reasoning as Record<string, unknown>;
+		if (endpoint.effort)
+			reasoning.effort = gptEffortForRequest(
+				endpoint.effort,
+				endpoint.codexAccount,
+			);
+	}
+	const tier = fastServiceTier(endpoint);
+	if (tier) body.service_tier = tier;
+	else if (endpoint.codexAccount && endpoint.fastMode === false) {
+		delete body.service_tier;
+	}
 	const url = endpoint.codexAccount
 		? `${base}/responses`
 		: `${base}/v1/responses`;

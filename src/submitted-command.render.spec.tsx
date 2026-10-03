@@ -36,9 +36,20 @@ test('submitted built-in command renders once as user text before result', async
 					{role: 'assistant', content: 'Generating goal.'},
 				]),
 		} as unknown as CommandContext);
-		// Markdown highlighting settles asynchronously after the user row.
-		await Bun.sleep(180);
-		await setup.flush();
+		// Wait for both asynchronous markdown blocks, not parser warm-up timing.
+		for (let attempt = 0; attempt < 40; attempt++) {
+			await setup.flush();
+			const painted = setup
+				.captureSpans()
+				.lines.map(line => line.spans.map(span => span.text).join(''))
+				.join('\n');
+			if (
+				painted.includes('/goal:this cover SQLite failures') &&
+				painted.includes('Generating goal.')
+			)
+				break;
+			await Bun.sleep(25);
+		}
 		const text = setup
 			.captureSpans()
 			.lines.map(line => line.spans.map(span => span.text).join(''))

@@ -281,8 +281,15 @@ export function saveConfig(config: AppConfig): void {
 }
 
 export function listProviders(): ResolvedProvider[] {
+	const effortPreferences = loadPreferences().modelEfforts ?? {};
 	return loadConfig().providers.map(provider => {
 		const {names, efforts} = normalizeModels(provider.models);
+		for (const model of names) {
+			const saved = effortPreferences[`${provider.id}\u0000${model}`];
+			if (saved === 'default') {
+				delete efforts[model];
+			} else if (saved) efforts[model] = saved;
+		}
 		return {
 			...provider,
 			apiKeyResolved: resolveApiKey(provider.apiKey),
@@ -333,8 +340,11 @@ export interface Preferences {
 	 * Per-model reasoning-effort overrides, keyed
 	 * `${providerId}\u0000${model}` (set by `/effort` and the model modal's
 	 * effort step; the status line badge and the next selection read it).
+	 * The `default` sentinel explicitly suppresses configured catalog effort.
 	 */
 	modelEfforts?: Record<string, string>;
+	/** Explicit GPT service tier, persisted like Codex's service_tier. */
+	gptServiceTier?: 'priority' | 'default';
 	/** Web-search fallback model + provider (native server-side search). */
 	webSearchModel?: string;
 	webSearchProvider?: string;

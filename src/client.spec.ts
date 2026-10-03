@@ -1,4 +1,4 @@
-import {describe, expect, test} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, test} from 'bun:test';
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -20,7 +20,14 @@ import {
 	streamChat,
 } from './client';
 import {appendMemory} from './memory';
-import {setActiveEndpoint} from './state';
+import {activeEndpoint, setActiveEndpoint} from './state';
+let originalEndpoint: ReturnType<typeof activeEndpoint>;
+beforeEach(() => {
+	originalEndpoint = activeEndpoint();
+});
+afterEach(() => {
+	setActiveEndpoint(originalEndpoint);
+});
 
 test('system prompt injects persistent memory, compaction prompt can omit Caveman', () => {
 	const originalConfig = process.env.BOBONYO_CONFIG_DIR;
@@ -585,8 +592,8 @@ describe('Responses wire (Codex / OpenAI responses)', () => {
 				name: 'Codex',
 				baseUrl: 'https://chatgpt.com/backend-api/codex',
 				apiKey: '',
-				model: 'gpt-5.5-codex',
-				models: ['gpt-5.5-codex'],
+				model: 'gpt-5.5',
+				models: ['gpt-5.5'],
 				contextWindow: 400_000,
 				sdkProvider: 'responses',
 				codexAccount: true,

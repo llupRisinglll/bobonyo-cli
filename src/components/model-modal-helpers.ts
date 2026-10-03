@@ -1,20 +1,24 @@
 import {knownPresetFor, maskSecret} from './connect-provider-modal';
+import {gptEfforts, isGptModel} from '../gpt-controls';
 
 export const EFFORT_LEVELS = [
+	'none',
 	'minimal',
 	'low',
 	'medium',
 	'high',
 	'xhigh',
 	'max',
+	'ultra',
 ] as const;
 
-export function effortLevelsForModel(model: string): string[] {
-	const levels = ['minimal', 'low', 'medium', 'high'];
-	if (/gpt-(?:5(?:\.[2-9])?|6(?:\.\d+)?)(?:-|$)|codex-max/i.test(model))
-		levels.push('xhigh');
-	if (/gpt-(?:5\.6|6(?:\.\d+)?)(?:-|$)/i.test(model)) levels.push('max');
-	return levels;
+export function effortLevelsForModel(
+	model: string,
+	codexAccount = false,
+): string[] {
+	return isGptModel(model)
+		? gptEfforts(model, codexAccount)
+		: ['minimal', 'low', 'medium', 'high'];
 }
 
 export interface ModelProvider {
@@ -22,6 +26,7 @@ export interface ModelProvider {
 	name: string;
 	baseUrl?: string;
 	apiKey?: string;
+	codexAccount?: boolean;
 	models: string[];
 	modelEfforts: Record<string, string>;
 	contextWindow?: number;

@@ -6,7 +6,8 @@
  * never into the provider context, never persisted with the session.
  */
 
-import {appendInfo} from './state';
+import {activeEndpoint, appendInfo} from './state';
+import {supportsGptFast} from './gpt-controls';
 import {loadCustomCommands, loadSkills} from './custom';
 import {isPreviewTui} from './preview';
 import {herdrAvailable} from './herdr';
@@ -124,7 +125,10 @@ export function commandNames(): string[] {
 	const commands = isPreviewTui()
 		? [...BASE_COMMAND_NAMES, ...MOCK_COMMAND_NAMES]
 		: [...BASE_COMMAND_NAMES];
-	return herdrAvailable() ? [...commands, 'herdr:fork'] : commands;
+	const supported = supportsGptFast(activeEndpoint())
+		? [...commands, 'fast']
+		: commands;
+	return herdrAvailable() ? [...supported, 'herdr:fork'] : supported;
 }
 
 /** One-line descriptions for the built-in slash commands (suggestions UI). */
@@ -150,7 +154,8 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'tool:open-prs': 'Open the captured PRs in the browser',
 	status: 'Show status details',
 	model: 'Pick a model',
-	effort: 'Reasoning effort (minimal/low/medium/high/default)',
+	effort: 'Pick supported reasoning effort for the active model',
+	fast: 'Toggle paid GPT fast processing without changing reasoning effort',
 	providers: 'List providers',
 	mode: 'Switch mode: default (sandboxed), normal, plan, auto-accept, yolo (sandbox off)',
 	settings: 'Open settings',
@@ -197,7 +202,8 @@ export const COMMAND_ARGUMENT_HINTS: Record<string, string> = {
 	loop: '<interval> <task>|list|stop <id>',
 	resume: '<session id>',
 	rename: '<name>',
-	effort: '<minimal|low|medium|high|default>',
+	effort: '<none|minimal|low|medium|high|xhigh|max|ultra|default>',
+	fast: '[on|off|status]',
 };
 
 /**
@@ -275,6 +281,7 @@ export interface CommandContext {
 	/** `/effort <minimal|low|medium|high|default>` — reasoning effort for the
 	 *  ACTIVE model (persisted per model; default clears the override). */
 	setEffort: (args: string) => void;
+	setFast?: (args: string) => void;
 	providers: () => void;
 	/** A custom command matched by name (F4): run its body as a prompt. */
 	custom: (name: string, args: string) => void;
@@ -414,7 +421,8 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 	}
 	if (
 		(BASE_COMMAND_NAMES as readonly string[]).includes(name) ||
-		name === 'herdr:fork'
+		name === 'herdr:fork' ||
+		name === 'fast'
 	) {
 		ctx.onBuiltinCommand?.(input);
 	}
@@ -484,6 +492,17 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 			return true;
 		case 'effort':
 			ctx.setEffort(args);
+			return true;
+		case 'fast':
+			if (!supportsGptFast(activeEndpoint())) {
+				appendInfo(
+					'/fast requires a supported GPT model on OpenAI API or Codex account Responses.',
+				);
+			} else if (ctx.setFast) {
+				ctx.setFast(args);
+			} else {
+				appendInfo('/fast is unavailable in this context.');
+			}
 			return true;
 		case 'providers':
 			ctx.providers();

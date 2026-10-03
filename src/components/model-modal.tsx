@@ -138,9 +138,12 @@ export function ModelModal(props: {
 	const effectiveEffort = (
 		provider: ModelProvider,
 		model: string,
-	): string | undefined =>
-		effortOverrides()[effortKey(provider.id, model)] ??
-		provider.modelEfforts[model];
+	): string | undefined => {
+		const override = effortOverrides()[effortKey(provider.id, model)];
+		return override === 'default'
+			? undefined
+			: (override ?? provider.modelEfforts[model]);
+	};
 
 	// RESPONSIVE SHELL (settings-modal parity): the card grows with the
 	// screen height; the width grows so model details can use 3 columns on
@@ -336,7 +339,10 @@ export function ModelModal(props: {
 	const [effortIndex, setEffortIndex] = createSignal(0);
 	const effortOptions = (model: string): Array<{id: string; label: string}> => [
 		{id: 'default', label: 'Default'},
-		...effortLevelsForModel(model).map(level => ({id: level, label: level})),
+		...effortLevelsForModel(
+			model,
+			providerForId(effortStep()?.providerId)?.codexAccount,
+		).map(level => ({id: level, label: level})),
 	];
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
@@ -703,7 +709,11 @@ export function ModelModal(props: {
 			const cell = currentCell();
 			if (cell) {
 				const representative = cell.connections[0]!;
-				const levels = effortLevelsForModel(cell.model);
+				const levels = effortLevelsForModel(
+					cell.model,
+					representative.codexAccount,
+				);
+				if (levels.length === 0) return true;
 				const current = effectiveEffort(representative, cell.model) ?? 'medium';
 				const base = levels.indexOf(current);
 				const start = base === -1 ? levels.indexOf('medium') : base;

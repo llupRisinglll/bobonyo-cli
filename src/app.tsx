@@ -4,6 +4,13 @@ import {join} from 'node:path';
 import {writeAgentTrajectory} from './agent-trajectory';
 import {createContextGoal} from './context-goal';
 import {recoverWorkingDirectory} from './cwd-recovery';
+import {
+	gptEfforts,
+	isGptModel,
+	knownGptEfforts,
+	restoredGptFast,
+	supportsGptFast,
+} from './gpt-controls';
 import {GraphContextStore, type GraphContextLease} from './graph-context';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
@@ -881,6 +888,10 @@ export function App() {
 					baseUrl: provider.baseUrl,
 					apiKey: provider.apiKeyResolved,
 					model: preferredModel,
+					fastMode: restoredGptFast(
+						{model: preferredModel, ...provider},
+						prefs.gptServiceTier,
+					),
 					models: catalog,
 					modelEfforts: provider.modelEfforts,
 					contextWindow: provider.contextWindow ?? 128_000,
@@ -1284,6 +1295,7 @@ export function App() {
 			// everything up to the first await runs synchronously, so the
 			// transcript/context render immediately.
 			const restoringSessionId = hookSessionId();
+			setActiveEndpoint(prev => ({...prev, fastMode: undefined}));
 			const restoreSession = (async () => {
 				// LAZY BUFFER: a resumed session with a huge transcript is
 				// capped to the bounded display window (older messages are
@@ -1424,6 +1436,7 @@ export function App() {
 					if (provider && catalog?.includes(sessionModel)) {
 						setActiveEndpoint({
 							...activeEndpoint(),
+							fastMode: undefined,
 							id: provider.id,
 							name: provider.name ?? provider.id,
 							baseUrl: provider.baseUrl,
@@ -2912,6 +2925,7 @@ export function App() {
 			setActiveEndpoint(prev => ({
 				...prev,
 				baseUrl: provider.baseUrl,
+				fastMode: undefined,
 				apiKey: resolveApiKey(provider.apiKey),
 				sdkProvider: provider.sdkProvider,
 				codexAccount: provider.codexAccount,
@@ -2952,6 +2966,7 @@ export function App() {
 			if (next) {
 				setActiveEndpoint({
 					...activeEndpoint(),
+					fastMode: undefined,
 					id: next.id,
 					name: next.name ?? next.id,
 					baseUrl: next.baseUrl,
@@ -2959,6 +2974,7 @@ export function App() {
 					model: next.models[0] ?? 'mock-model-1',
 					models: next.models,
 					modelEfforts: next.modelEfforts,
+					effort: next.modelEfforts[next.models[0] ?? 'mock-model-1'],
 					contextWindow: next.contextWindow ?? 128_000,
 					sdkProvider: next.sdkProvider,
 					codexAccount: next.codexAccount,
@@ -3212,6 +3228,7 @@ export function App() {
 				status,
 				model: switchModel,
 				setEffort: switchEffort,
+				setFast: switchFast,
 				providers: listProvidersInfo,
 				custom: runCustomCommand,
 				modeSwitch,
@@ -5730,6 +5747,13 @@ export function App() {
 		setActiveEndpoint({
 			...endpoint,
 			model: name,
+			fastMode:
+				name === endpoint.model
+					? endpoint.fastMode
+					: restoredGptFast(
+							{...endpoint, model: name},
+							loadPreferences().gptServiceTier,
+						),
 			effort: (endpoint.modelEfforts ?? {})[name],
 		});
 		savePreferences({lastProvider: endpoint.id, lastModel: name});
@@ -5741,20 +5765,40 @@ export function App() {
 	/** Apply a chosen effort (or `default`) to the ACTIVE model. */
 	const applyEffort = (level: string) => {
 		const endpoint = activeEndpoint();
+		const allowed =
+			endpoint.codexAccount && isGptModel(endpoint.model)
+				? gptEfforts(endpoint.model, true)
+				: effortLevelsForModel(endpoint.model);
+		if (
+			level !== 'default' &&
+			!allowed.includes(level) &&
+			!(
+				isGptModel(endpoint.model) &&
+				!knownGptEfforts(endpoint.model) &&
+				['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(
+					level,
+				)
+			)
+		) {
+			appendInfo(`Unsupported effort '${level}' for ${endpoint.model}.`);
+			return;
+		}
 		const effortKey = `${endpoint.id}\u0000${endpoint.model}`;
 		const prefs = loadPreferences();
 		const nextEfforts = {...(prefs.modelEfforts ?? {})};
-		if (level === 'default') delete nextEfforts[effortKey];
+		if (level === 'default') nextEfforts[effortKey] = 'default';
 		else nextEfforts[effortKey] = level;
 		savePreferences({
 			...prefs,
 			modelEfforts: nextEfforts,
 		});
-		const effort =
-			level === 'default'
-				? (endpoint.modelEfforts ?? {})[endpoint.model]
-				: level;
-		setActiveEndpoint(prev => ({...prev, effort}));
+		const effort = level === 'default' ? undefined : level;
+		setActiveEndpoint(prev => {
+			const modelEfforts = {...prev.modelEfforts};
+			if (level === 'default') delete modelEfforts[prev.model];
+			else modelEfforts[prev.model] = level;
+			return {...prev, effort, modelEfforts};
+		});
 		showToast(
 			`Effort: ${level === 'default' ? 'default' : level} · ${endpoint.model}`,
 		);
@@ -5764,7 +5808,7 @@ export function App() {
 	 * `/effort <minimal|low|medium|high|default>` — reasoning effort for the
 	 * ACTIVE model, persisted per model (keyed provider\0model) so the model
 	 * modal, the status-line badge and the next selection all agree.
-	 * `default` clears the override and falls back to the catalog effort.
+	 * `default` omits effort, including any configured catalog effort.
 	 * A BARE `/effort` opens the effort picker modal instead.
 	 */
 	const switchEffort = (args: string) => {
@@ -5775,9 +5819,23 @@ export function App() {
 			return;
 		}
 		const allowed = effortLevelsForModel(endpoint.model);
-		if (level !== 'default' && !allowed.includes(level)) {
+		const supported =
+			endpoint.codexAccount && isGptModel(endpoint.model)
+				? gptEfforts(endpoint.model, true)
+				: allowed;
+		if (
+			level !== 'default' &&
+			!supported.includes(level) &&
+			!(
+				isGptModel(endpoint.model) &&
+				!knownGptEfforts(endpoint.model) &&
+				['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(
+					level,
+				)
+			)
+		) {
 			appendInfo(
-				`Invalid effort '${args}'. Use default, ${allowed.join(', ')}.`,
+				`Invalid effort '${args}'. Use default, ${supported.join(', ')}.`,
 			);
 			return;
 		}
@@ -5828,6 +5886,7 @@ export function App() {
 			baseUrl: provider.baseUrl,
 			// RESOLVED key for the account picker's MASKED display — never
 			// the raw secret (maskSecret shows only first/last chars).
+			codexAccount: provider.codexAccount,
 			apiKey: provider.apiKeyResolved || undefined,
 			models: discoveredModels()[provider.id] ?? provider.models,
 			modelEfforts: provider.modelEfforts,
@@ -5858,6 +5917,33 @@ export function App() {
 				}
 			});
 		}
+	};
+	const switchFast = (args: string) => {
+		const endpoint = activeEndpoint();
+		if (!supportsGptFast(endpoint)) return;
+		const action = args.trim().toLowerCase();
+		if (!['', 'on', 'off', 'status'].includes(action)) {
+			appendInfo('Use /fast [on|off|status]. Fast processing costs more.');
+			return;
+		}
+		if (action === 'status') {
+			const state =
+				endpoint.fastMode === undefined
+					? 'provider default'
+					: endpoint.fastMode
+						? 'requested'
+						: 'off';
+			appendInfo(`Fast processing: ${state} · ${endpoint.model}.`);
+			return;
+		}
+		const fastMode = action === '' ? !endpoint.fastMode : action === 'on';
+		setActiveEndpoint(prev => ({...prev, fastMode}));
+		savePreferences({gptServiceTier: fastMode ? 'priority' : 'default'});
+		const state = fastMode ? 'requested (higher cost/usage)' : 'off';
+		appendInfo(
+			`Fast processing ${state} · ${endpoint.model}. ` +
+				'Reasoning effort unchanged. Provider availability and limits apply.',
+		);
 	};
 
 	/** ModelModal selection: switch provider + model (+ effort override). */
@@ -5890,15 +5976,23 @@ export function App() {
 			candidate => candidate.id === providerId,
 		);
 		if (!provider) return;
+		const previous = activeEndpoint();
+		const modelEfforts = {...provider.modelEfforts};
+		if (effort === undefined) delete modelEfforts[model];
+		else modelEfforts[model] = effort;
 		setActiveEndpoint({
-			...activeEndpoint(),
+			...previous,
 			id: provider.id,
 			name: provider.name ?? provider.id,
 			baseUrl: provider.baseUrl,
 			apiKey: provider.apiKeyResolved,
 			model,
+			fastMode: restoredGptFast(
+				{...provider, model},
+				loadPreferences().gptServiceTier,
+			),
 			models: discoveredModels()[provider.id] ?? provider.models,
-			modelEfforts: provider.modelEfforts,
+			modelEfforts,
 			contextWindow: effectiveContextWindow(
 				provider.contextWindow,
 				modelWindows()[providerId]?.[model],
@@ -5906,9 +6000,8 @@ export function App() {
 			sdkProvider: provider.sdkProvider,
 			codexAccount: provider.codexAccount,
 			providerOptions: provider.providerOptions,
-			// The modal's ←/→ effort override wins; otherwise the model's
-			// configured catalog effort applies.
-			effort: effort ?? provider.modelEfforts[model],
+			// Default omits effort and clears this model's cached catalog value.
+			effort,
 			promptCacheKey: provider.promptCacheKey,
 			alwaysAllow: provider.alwaysAllow,
 		});
@@ -5919,7 +6012,7 @@ export function App() {
 		const prefs = loadPreferences();
 		const nextEfforts = {...(prefs.modelEfforts ?? {})};
 		if (effort) nextEfforts[effortKey] = effort;
-		else delete nextEfforts[effortKey];
+		else nextEfforts[effortKey] = 'default';
 		savePreferences({
 			...prefs,
 			lastProvider: provider.id,
@@ -6397,6 +6490,7 @@ export function App() {
 			<Show when={effortOpen()}>
 				<EffortModal
 					model={activeEndpoint().model}
+					codexAccount={activeEndpoint().codexAccount}
 					provider={activeEndpoint().name}
 					currentEffort={
 						loadPreferences().modelEfforts?.[

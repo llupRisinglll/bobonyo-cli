@@ -362,6 +362,8 @@ export interface ActiveEndpoint {
 	sdkProvider?: string;
 	/** Responses wire against the ChatGPT Codex backend (codex login). */
 	codexAccount?: boolean;
+	/** Paid fast processing, scoped to the currently selected model. */
+	fastMode?: boolean;
 	providerOptions?: Record<string, unknown>;
 	promptCacheKey?: boolean;
 	alwaysAllow?: string[];

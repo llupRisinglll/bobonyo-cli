@@ -477,6 +477,14 @@ export function History(props: HistoryProps) {
 				syntaxStyle: syntaxStyle(),
 				onChunks: () => tokenizeErrorRow(token.text ?? '', colors()),
 			}),
+		// Informational system notices use gold without changing their info kind.
+		systemrow: token =>
+			new CodeRenderable(renderer as unknown as RenderContext, {
+				content: token.text ?? '',
+				filetype: 'txt',
+				syntaxStyle: syntaxStyle(),
+				onChunks: () => tokenizeWarningRow(token.text ?? '', colors()),
+			}),
 		warningrow: token =>
 			new CodeRenderable(renderer as unknown as RenderContext, {
 				content: token.text ?? '',
@@ -778,14 +786,14 @@ export function History(props: HistoryProps) {
 				)) {
 					pushBlock(row.text, row.blockKey, 'md', row.brief);
 				}
+			} else if (message.error) {
+				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else if (message.kind === 'info') {
 				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
 			} else if (message.kind === 'warning') {
 				// Warning rows (e.g. the vision-fallback indicator) render in
 				// the theme WARNING (yellow) color.
 				pushBlock(fence('warningrow', 'done', message.content));
-			} else if (message.error) {
-				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
 			} else {
 				if (message.reasoning && thinkingMode() === 'show') {
 					const thoughtKey = `thought-${i}`;
@@ -1725,7 +1733,7 @@ export function renderInfoRow(content: string, key: string): string {
 		return renderBackgroundTaskRow(content, key);
 	}
 	if (!content.startsWith('Session:   ')) {
-		return content;
+		return fence('systemrow', 'done', content);
 	}
 	// `/status` block (codex-like): render through a custom fenced row so the
 	// `model[effort]` brackets survive (the markdown/tree-sitter pipeline

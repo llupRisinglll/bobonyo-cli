@@ -30,6 +30,7 @@ import {
 	referencedImageAttachments,
 } from '../attachments';
 import {estimateTokens} from '../tokenize';
+import {effectiveGptFast} from '../gpt-controls';
 import {wrapText, wrapTextDetailed} from '../text-wrap';
 import {
 	activeEndpoint,
@@ -468,6 +469,7 @@ export function InputBox(props: {
 			// secondary (parity: `deepseek-v4-flash[medium] · ctx ~N%`).
 			model,
 			effort: effort ? `[${effort}]` : '',
+			fast: effectiveGptFast(activeEndpoint()),
 			// NON-BREAKING spaces: they paint as real cells over the border
 			// dashes, so the corner needs NO background rectangle (a plain
 			// space is a transparent cell that would let the dash show
@@ -1534,6 +1536,11 @@ export function InputBox(props: {
 						{corner().model}
 					</text>
 					<text fg={colors().secondary}>{corner().effort}</text>
+					<Show when={corner().fast}>
+						<text fg={colors().primary} attributes={bold()}>
+							{'\u00A0·\u00A0Fast'}
+						</text>
+					</Show>
 					<text fg={colors().secondary}>{corner().ctx}</text>
 				</box>
 			</box>
