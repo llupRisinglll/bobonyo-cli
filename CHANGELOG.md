@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.3.3 (2026-10-03)
+
+### Patch
+- Keep exit resume instructions visible after renderer shutdown instead of clearing them away.
 ## v0.3.2 (2026-10-03)
 
 ### Patch
