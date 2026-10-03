@@ -8,6 +8,7 @@ import {createCliRenderer, parseKeypress} from '@opentui/core';
 import {CONSOLE_TITLE, handleConsoleInput} from './console-controls';
 import {render} from '@opentui/solid';
 import {App} from './app';
+import {rendererExitSummaryOptions} from './exit-summary';
 import {cliMode, MODE_HELP} from './cli-mode';
 import {
 	KITTY_KEYBOARD_DISABLE,
@@ -122,6 +123,7 @@ if (!process.stdin.isTTY) {
 const renderer = await createCliRenderer({
 	consoleOptions: {title: CONSOLE_TITLE},
 	externalOutputMode: 'passthrough',
+	...rendererExitSummaryOptions(),
 	targetFps: 60,
 	exitOnCtrlC: false,
 	useMouse: true,

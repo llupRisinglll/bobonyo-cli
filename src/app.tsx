@@ -253,6 +253,7 @@ import {
 	recordProviderUsage,
 } from './provider-usage';
 import {buildBannerBox, hasPersistableConversation} from './banner';
+import {buildExitSummary, queueExitSummary} from './exit-summary';
 import {colors, selectTheme, setThemeName, THEMES} from './theme';
 import {TrustModal} from './components/trust-modal';
 import {QuestionModal} from './components/question-modal';
@@ -1195,10 +1196,9 @@ export function App() {
 		persist();
 		void closeMCPServers();
 		releaseHerdrAgent();
-		renderer.destroy();
 		// Goodbye screen (parity: the reference exit banner): the mascot banner
 		// WITHOUT the box border + the session / continue hints. Written
-		// SYNCHRONOUSLY, `process.exit(0)` would kill pending async writes.
+		// after OpenTUI's native teardown so final shutdown clears cannot erase it.
 		try {
 			const box = buildBannerBox({
 				titleShape: 'none',
@@ -1206,18 +1206,19 @@ export function App() {
 				permissions: modeLabel(mode()),
 				cwd: process.cwd(),
 			});
-			const created = new Date(
-				currentSession?.createdAt ?? Date.now(),
-			).toISOString();
-			const goodbye = hasPersistableConversation(messages())
-				? `\n${box}\n` +
-					`  Session   ${sessionName()} - ${created}\n` +
-					`  Continue  bobonyo --resume ${sessionId()}\n`
-				: `\n${box}\n`;
-			process.stdout.write(goodbye);
+			queueExitSummary(
+				buildExitSummary({
+					banner: box,
+					hasConversation: hasPersistableConversation(messages()),
+					sessionName: sessionName(),
+					createdAt: currentSession?.createdAt ?? Date.now(),
+					sessionId: sessionId(),
+				}),
+			);
 		} catch {
 			// best-effort goodbye
 		}
+		renderer.destroy();
 		// The FINAL exit is owned by index.tsx's renderer 'destroy' handler:
 		// it drains the terminal's pending capability responses from stdin
 		// before handing the TTY back to the shell (a synchronous exit here
