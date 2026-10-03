@@ -3,6 +3,7 @@ import {
 	colorDetailLine,
 	detailsCardHeight,
 	detailsCardWidth,
+	detailsBodyInset,
 	usageCalendarCellWidth,
 	usageGraphWidth,
 	usageVariantIndex,
@@ -105,7 +106,21 @@ describe('responsive details modal geometry', () => {
 			(_, index) => `line ${index}`,
 		).join('\n');
 		const height = detailsCardHeight(content, 40);
-		// Content box is cardHeight - 4; its border consumes 2 rows.
-		expect(height - 6).toBe(15);
+		// Balanced padded title bar consumes three rows and body padding consumes two.
+		expect(height - 5).toBe(16);
+	});
+	test('modal text inset maps to at least one terminal cell', () => {
+		expect(detailsBodyInset()).toBeGreaterThanOrEqual(1);
+	});
+	test('calendar range can use columns formerly lost to nested chrome', () => {
+		const variants = [
+			'Su ' + '· '.repeat(37),
+			'Su ' + '· '.repeat(38),
+			'Su ' + '· '.repeat(13),
+		];
+		expect(usageGraphWidth(variants[0]!, 80)).toBe(77);
+		expect(usageGraphWidth(variants[1]!, 80)).toBe(79);
+		expect(usageVariantIndex(80, variants)).toBe(0);
+		expect(usageVariantIndex(80, variants.slice(1))).toBe(1);
 	});
 });

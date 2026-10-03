@@ -86,14 +86,14 @@ export function colorDetailLine(
 /**
  * Details-card height: fits SHORT content (a 3-line tool row must not open
  * a full-screen card) but caps at the terminal height so LONG details still
- * minimize scrolling. `lines + 6` accounts for the header row, the gap, the
- * content box borders and the card padding. Pure, unit-tested.
+ * minimize scrolling. Chrome reserves a three-row padded title bar, two body
+ * padding rows, and an optional scroll counter. Tiny viewports lose margins.
  */
 export function detailsCardHeight(
 	content: string,
 	terminalHeight: number,
 ): number {
-	const available = Math.max(8, terminalHeight - 2);
+	const available = Math.max(1, terminalHeight - (terminalHeight >= 9 ? 2 : 0));
 	const lines = content.replace(/\s+$/, '').split('\n').length;
 	return Math.min(available, Math.max(6, lines + 6));
 }
@@ -127,7 +127,7 @@ export function usageVariantIndex(
 	cardWidth: number,
 	variants: string[],
 ): number {
-	const available = Math.max(1, cardWidth - 6); // card + content padding/border
+	const available = Math.max(1, cardWidth - detailsBodyInset() * 2);
 	const index = variants.findIndex(
 		variant =>
 			usageGraphWidth(
@@ -136,6 +136,11 @@ export function usageVariantIndex(
 			) <= available,
 	);
 	return index < 0 ? Math.max(0, variants.length - 1) : index;
+}
+
+/** Terminal padding uses cells rather than CSS pixels. */
+export function detailsBodyInset(): number {
+	return 1;
 }
 
 /**
@@ -191,7 +196,7 @@ export function DetailsModal(props: {
 	const cardWidth = () => detailsCardWidth(props.title, dims().width);
 	const cardHeight = () => detailsCardHeight(visibleContent(), dims().height);
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const lines = () => visibleContent().replace(/\s+$/, '').split('\n');
 	const [scroll, setScroll] = createSignal(0);
@@ -215,6 +220,33 @@ export function DetailsModal(props: {
 	const visibleContent = createMemo(
 		() => usagePages()[effectiveUsagePage()] ?? usagePages()[0] ?? '',
 	);
+	// Like the composer's border glyphs, half-block caps draw within whole cells.
+	// They provide symmetric half-cell visual insets, not fractional text layout.
+	const headerPaddingY = () => (cardHeight() >= 7 ? 1 : 0);
+	const headerHeight = () => 1 + headerPaddingY() * 2;
+	const bodyHeight = () => Math.max(0, cardHeight() - headerHeight());
+	const bodyPaddingY = () => (bodyHeight() >= 3 ? 1 : 0);
+	const contentHeight = () => Math.max(1, bodyHeight() - bodyPaddingY() * 2);
+	const bodyInset = () =>
+		Math.min(detailsBodyInset(), Math.floor(cardWidth() / 3));
+	const contentWidth = () => Math.max(1, cardWidth() - bodyInset() * 2);
+	const overflowing = () => lines().length > contentHeight();
+	const showCounter = () => overflowing() && contentHeight() >= 2;
+	const visibleRows = () => contentHeight() - (showCounter() ? 1 : 0);
+	const maxScroll = () => Math.max(0, lines().length - visibleRows());
+	const effectiveScroll = () => Math.min(scroll(), maxScroll());
+	const headerHint = () => {
+		if (contentWidth() < 10) return '';
+		if (props.title === 'Usage' && usagePages().length > 1) {
+			const page = `[${effectiveUsagePage() + 1}/${usagePages().length}]`;
+			return contentWidth() >= 68
+				? `${page} ← older · → newer · ↑/↓ scroll · Esc close`
+				: contentWidth() >= 28
+					? `${page} ←/→ · Esc`
+					: 'Esc';
+		}
+		return contentWidth() >= 48 ? '↑/↓ scroll · Esc close' : 'Esc';
+	};
 	// AUTO-CLOSE GUARD: the modal opens on the row's mouse-DOWN; the SAME
 	// click's mouse-UP lands on the backdrop and would close it instantly.
 	// Only that opening release is ignored — a time window, NOT a one-shot
@@ -251,19 +283,19 @@ export function DetailsModal(props: {
 			return;
 		}
 		if (event.name === 'up') {
-			setScroll(prev => Math.max(0, prev - 1));
+			setScroll(Math.max(0, effectiveScroll() - 1));
 			return;
 		}
 		if (event.name === 'down') {
-			setScroll(prev => Math.min(Math.max(0, lines().length - 1), prev + 1));
+			setScroll(Math.min(maxScroll(), effectiveScroll() + 1));
 			return;
 		}
 		if (event.name === 'pageup') {
-			setScroll(prev => Math.max(0, prev - 10));
+			setScroll(Math.max(0, effectiveScroll() - 10));
 			return;
 		}
 		if (event.name === 'pagedown') {
-			setScroll(prev => Math.min(Math.max(0, lines().length - 1), prev + 10));
+			setScroll(Math.min(maxScroll(), effectiveScroll() + 10));
 		}
 	});
 
@@ -299,43 +331,72 @@ export function DetailsModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={1}
-				paddingY={1}
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
+				<Show when={headerPaddingY()}>
+					<text
+						height={1}
+						flexShrink={0}
+						fg={colors().primary}
+						bg={colors().base}
+						wrapMode="none"
+					>
+						{'▄'.repeat(cardWidth())}
+					</text>
+				</Show>
+				<box
+					flexDirection="row"
+					height={1}
+					flexShrink={0}
+					backgroundColor={colors().primary}
+					overflow="hidden"
+				>
+					<box width={bodyInset()} />
+					<text
+						fg={colors().base}
+						attributes={bold()}
+						width={Math.max(
+							1,
+							contentWidth() - headerHint().length - (headerHint() ? 1 : 0),
+						)}
+						wrapMode="none"
+					>
 						{props.title || 'Tool details'}
 					</text>
-					<Show when={props.title === 'Usage' && usagePages().length > 1}>
-						<text
-							fg={colors().primary}
-							attributes={bold()}
-						>{` [${effectiveUsagePage() + 1}/${usagePages().length}] ← older · → newer `}</text>
-					</Show>
-					<box flexGrow={1} />
-					<Show when={cardWidth() >= 50}>
-						<text fg={colors().secondary} attributes={dim()}>
-							Esc close · ← older · → newer · ↑/↓ scroll
+					<Show when={headerHint()}>
+						<box width={1} />
+						<text fg={colors().base} wrapMode="none" flexShrink={0}>
+							{headerHint()}
 						</text>
 					</Show>
+					<box width={bodyInset()} />
 				</box>
-				<box height={1} />
+				<Show when={headerPaddingY()}>
+					<text
+						height={1}
+						flexShrink={0}
+						fg={colors().primary}
+						bg={colors().base}
+						wrapMode="none"
+					>
+						{'▀'.repeat(cardWidth())}
+					</text>
+				</Show>
 				<box
 					flexDirection="column"
-					height={cardHeight() - 4}
-					border
-					borderStyle="rounded"
-					borderColor={colors().secondary}
-					paddingX={1}
+					height={bodyHeight()}
+					flexShrink={0}
 					overflow="hidden"
+					paddingX={bodyInset()}
+					paddingY={bodyPaddingY()}
 				>
 					<For
 						each={lines()
-							.slice(scroll(), scroll() + (cardHeight() - 6))
+							.slice(effectiveScroll(), effectiveScroll() + visibleRows())
 							.map((line, index) => ({
 								text: line,
-								index: scroll() + index,
+								index: effectiveScroll() + index,
 							}))}
 					>
 						{line =>
@@ -355,9 +416,9 @@ export function DetailsModal(props: {
 							)
 						}
 					</For>
-					<Show when={lines().length > cardHeight() - 6}>
+					<Show when={showCounter()}>
 						<text fg={colors().secondary} attributes={dim()}>
-							{scroll() + (cardHeight() - 6)}/{lines().length}
+							{effectiveScroll() + visibleRows()}/{lines().length}
 						</text>
 					</Show>
 				</box>
