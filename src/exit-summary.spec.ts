@@ -1,10 +1,21 @@
 import {describe, expect, test} from 'bun:test';
 import {
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {
 	buildExitSummary,
 	flushExitSummary,
 	rendererExitSummaryOptions,
 	queueExitSummary,
 	takeExitSummary,
+	markRendererFinished,
 } from './exit-summary';
 
 describe('exit summary', () => {
@@ -34,5 +45,40 @@ describe('exit summary', () => {
 		const options = rendererExitSummaryOptions();
 		expect(options.clearOnShutdown).toBe(false);
 		expect(typeof options.onDestroy).toBe('function');
+	});
+
+	test('only completed renderer teardown acknowledges launcher cleanup', () => {
+		const directory = mkdtempSync(join(tmpdir(), 'bobonyo-exit-summary-'));
+		const path = join(directory, 'finished');
+		const previous = process.env.BOBONYO_RENDERER_FINISHED_FILE;
+		try {
+			process.env.BOBONYO_RENDERER_FINISHED_FILE = path;
+			const options = rendererExitSummaryOptions();
+			expect(() => statSync(path)).toThrow();
+			options.onDestroy();
+			expect(readFileSync(path, 'utf8')).toBe('renderer-finished-v1\n');
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+		} finally {
+			if (previous === undefined)
+				delete process.env.BOBONYO_RENDERER_FINISHED_FILE;
+			else process.env.BOBONYO_RENDERER_FINISHED_FILE = previous;
+			rmSync(directory, {recursive: true, force: true});
+		}
+	});
+
+	test('handshake never overwrites existing files or follows symlinks', () => {
+		const directory = mkdtempSync(join(tmpdir(), 'bobonyo-exit-summary-'));
+		try {
+			const target = join(directory, 'target');
+			const link = join(directory, 'finished');
+			writeFileSync(target, 'unchanged');
+			symlinkSync(target, link);
+			markRendererFinished(link);
+			markRendererFinished(target);
+			expect(readFileSync(target, 'utf8')).toBe('unchanged');
+			markRendererFinished(join(directory, 'missing', 'finished'));
+		} finally {
+			rmSync(directory, {recursive: true, force: true});
+		}
 	});
 });

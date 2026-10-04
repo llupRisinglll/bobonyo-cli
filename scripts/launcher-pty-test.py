@@ -25,6 +25,10 @@ from pathlib import Path
 scenario = os.environ['LAUNCHER_SCENARIO']
 record = Path(os.environ['LAUNCHER_RECORD'])
 metadata = {'pid': os.getpid(), 'cwd': os.getcwd(), 'args': sys.argv[1:]}
+handshake = os.environ.get('BOBONYO_RENDERER_FINISHED_FILE', '')
+metadata['handshake'] = handshake
+if handshake:
+    metadata['handshake_mode'] = Path(handshake).parent.stat().st_mode & 0o777
 if os.isatty(0):
     metadata['foreground'] = os.tcgetpgrp(0) == os.getpgrp()
     tty.setraw(0)
@@ -48,6 +52,18 @@ if scenario in ('exit', 'redirect-output', 'redirect-input', 'pipes'):
     record.write_text(json.dumps(metadata))
     print('fake child output', flush=True)
     sys.exit(37)
+if scenario == 'clean-exit':
+    # Match the renderer's completed teardown, followed by its goodbye summary.
+    sys.stdout.write('\x1b[?1049h\x1b[?1049l')
+    sys.stdout.flush()
+    if handshake:
+        Path(handshake).write_text('renderer-finished-v1\n')
+    print('Continue  bobonyo --resume sess_launcher_regression', flush=True)
+    sys.exit(0)
+if scenario == 'invalid-handshake':
+    if handshake:
+        Path(handshake).write_text('not-finished\n')
+    sys.exit(0)
 if scenario == 'success':
     sys.exit(0)
 while True:
@@ -132,7 +148,7 @@ def run(scenario, template):
                 number = getattr(signal, 'SIG' + scenario[8:])
                 os.kill(process.pid, number)
                 expected = 128 + number
-            elif scenario == 'success':
+            elif scenario in ('success', 'clean-exit', 'invalid-handshake'):
                 expected = 0
             else:
                 expected = 37
@@ -156,6 +172,9 @@ def run(scenario, template):
             check(process.returncode == expected,
                   f'Exit {process.returncode}, wanted {expected}: {stderr!r}')
             metadata = json.loads(record.read_text())
+            if metadata['handshake']:
+                check(metadata['handshake_mode'] == 0o700, 'Handshake directory is not private')
+                check(not Path(metadata['handshake']).parent.exists(), 'Handshake directory leaked')
             check(metadata['cwd'] == str(project), 'Launcher changed cwd')
             check(metadata['args'] == [
                 'run', '-r', str(repo / 'node_modules/@opentui/solid/scripts/preload.js'),
@@ -165,6 +184,17 @@ def run(scenario, template):
                 check(metadata['foreground'], 'Bun lost foreground terminal ownership')
                 check(termios.tcgetattr(slave) == original, 'Saved stty was not restored')
             if input_tty and output_tty:
+                if scenario != 'clean-exit':
+                    check(bytes(output).count(b'\x1b[r') == 1,
+                          'Crash/unacknowledged exit did not restore margins')
+                if scenario == 'clean-exit':
+                    summary = b'Continue  bobonyo --resume sess_launcher_regression'
+                    check(summary in output, 'Resume summary missing')
+                    after_summary = bytes(output).split(summary, 1)[1]
+                    check(b'\x1b[?1049l' not in after_summary,
+                          'Supervisor reset alternate screen after resume summary')
+                    check(b'\x1b[r' not in after_summary,
+                          'Supervisor homed cursor by resetting margins after resume summary')
                 for sequence in RESET_SEQUENCES:
                     check(bytes(output).count(sequence) == 1,
                           f'Missing or repeated cleanup sequence: {sequence!r}')

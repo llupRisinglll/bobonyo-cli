@@ -11,6 +11,19 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 describe('release launcher supervisor (isolated fake-child PTY)', () => {
+	test('real app summary survives full-PTY zsh prompt handoff', () => {
+		const result = spawnSync(
+			'python3',
+			[join(import.meta.dir, '../scripts/launcher-real-pty-test.py')],
+			{
+				encoding: 'utf8',
+				timeout: 20_000,
+			},
+		);
+		expect(result.error).toBeUndefined();
+		expect(result.stderr).toBe('');
+		expect(result.status).toBe(0);
+	}, 25_000);
 	test('build ships the executable supervisor template', () => {
 		const directory = mkdtempSync(join(tmpdir(), 'bobonyo-build-'));
 		try {
@@ -41,6 +54,8 @@ describe('release launcher supervisor (isolated fake-child PTY)', () => {
 		'kill',
 		'exit',
 		'success',
+		'clean-exit',
+		'invalid-handshake',
 		'signal-HUP',
 		'signal-INT',
 		'signal-QUIT',

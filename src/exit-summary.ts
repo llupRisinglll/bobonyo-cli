@@ -1,3 +1,5 @@
+import {writeFileSync} from 'node:fs';
+
 let pendingExitSummary = '';
 
 export function buildExitSummary(options: {
@@ -40,6 +42,23 @@ export function rendererExitSummaryOptions(): {
 } {
 	return {
 		clearOnShutdown: false,
-		onDestroy: flushExitSummary,
+		onDestroy: () => {
+			markRendererFinished();
+			flushExitSummary();
+		},
 	};
+}
+
+/** Called only after native teardown, never from a process exit/signal hook. */
+export function markRendererFinished(
+	path = process.env.BOBONYO_RENDERER_FINISHED_FILE,
+): void {
+	if (!path) return;
+	try {
+		// Exclusive creation refuses existing files/symlinks. The launcher owns
+		// the private directory and removes this constant-only marker on exit.
+		writeFileSync(path, 'renderer-finished-v1\n', {mode: 0o600, flag: 'wx'});
+	} catch {
+		// Failed handshakes retain full supervisor crash-recovery cleanup.
+	}
 }

@@ -39,20 +39,39 @@ if [[ -t 0 ]]; then
 	saved_stty="$(stty -g 2>/dev/null)" || saved_stty=''
 fi
 
+renderer_exit_dir=''
 cleanup() {
 	local status=$?
 	trap - EXIT
 	trap '' HUP INT QUIT TERM
+	local screen_restore='\033[?1049l'
+	local margins_restore='\033[r'
+	if [[ -n "$renderer_exit_dir" && -f "$renderer_exit_dir/finished" && ! -L "$renderer_exit_dir/finished" ]] &&
+		[[ "$(cat "$renderer_exit_dir/finished" 2>/dev/null)" == 'renderer-finished-v1' ]]; then
+		# Repeating DECRST 1049 can erase the post-teardown summary. Keep all
+		# other mode resets and saved stty restoration, regardless of exit status.
+		screen_restore=''
+		# DECSTBM also homes the cursor. After the summary, zsh's prompt
+		# erase-to-end (CSI J) would then wipe every summary row from home.
+		# Native teardown already restored margins before printing the summary.
+		margins_restore=''
+	fi
 	if [[ -t 0 && -t 1 ]]; then
 		# End synchronized output; disable mouse encodings/tracking, focus,
 		# bracketed paste, Kitty and modifyOtherKeys; leave the alternate screen
 		# and restore visible cursor, default style, margins and autowrap.
 		# These modes have no portable snapshot API. Restore a shell-safe baseline,
 		# not the caller's arbitrary DEC/keyboard mode stack. Do not read/drain stdin.
-		printf '\033[?2026l\033[?1000l\033[?1001l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1016l\033[?2004l\033[<u\033[=0u\033[>4;0m\033[?1049l\033[0m\033[r\033[?7h\033[0 q\033[?25h' 2>/dev/null || :
+		printf '\033[?2026l\033[?1000l\033[?1001l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1016l\033[?2004l\033[<u\033[=0u\033[>4;0m' 2>/dev/null || :
+		printf '%b' "$screen_restore" 2>/dev/null || :
+		printf '\033[0m%b\033[?7h\033[0 q\033[?25h' "$margins_restore" 2>/dev/null || :
 	fi
 	if [[ -n "$saved_stty" ]]; then
 		stty "$saved_stty" 2>/dev/null || :
+	fi
+	if [[ -n "$renderer_exit_dir" ]]; then
+		rm -f -- "$renderer_exit_dir/finished" 2>/dev/null || :
+		rmdir -- "$renderer_exit_dir" 2>/dev/null || :
 	fi
 	exit "$status"
 }
@@ -75,6 +94,14 @@ trap 'forward_signal HUP' HUP
 trap 'forward_signal INT' INT
 trap 'forward_signal QUIT' QUIT
 trap 'forward_signal TERM' TERM
+# Install traps before allocating the handshake directory so early signals
+# retain child forwarding and directory cleanup. Never trust an inherited path.
+# Exit status alone cannot prove teardown ran; this stores only a constant marker.
+renderer_exit_dir="$(mktemp -d "${TMPDIR:-/tmp}/bobonyo-renderer-exit.XXXXXXXXXX" 2>/dev/null)" || renderer_exit_dir=''
+unset BOBONYO_RENDERER_FINISHED_FILE
+if [[ -n "$renderer_exit_dir" ]]; then
+	export BOBONYO_RENDERER_FINISHED_FILE="$renderer_exit_dir/finished"
+fi
 
 # An asynchronous command lets Bash run signal traps immediately during wait.
 # With job control OFF it stays in the foreground process group. Explicit stdin
