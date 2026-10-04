@@ -4,6 +4,11 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.3.4 (2026-10-04)
+
+### Patch
+- Ensure automated releases can verify that resume instructions remain visible after exiting to zsh.
+- Keep resume instructions visible after the release launcher exits while preserving terminal recovery after crashes.
 ## v0.3.3 (2026-10-03)
 
 ### Patch
