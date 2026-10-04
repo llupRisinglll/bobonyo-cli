@@ -32,8 +32,8 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Install ripgrep for LSP fallback tests
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+      - name: Install ripgrep and zsh for integration tests
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep zsh
 
       - name: Verify
         run: |
@@ -72,8 +72,8 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.release.outputs.released == 'true'
         with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       - name: Publish to npm
