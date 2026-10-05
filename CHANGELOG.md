@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.3.5 (2026-10-05)
+
+### Patch
+- Unify modal title bars, preserve keyboard and mouse-wheel navigation in short viewports, and ensure trust confirmation honors the selected choice.
 ## v0.3.4 (2026-10-04)
 
 ### Patch
