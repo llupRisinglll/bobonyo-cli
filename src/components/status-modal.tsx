@@ -2,6 +2,7 @@
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {For} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 
 export interface StatusRow {
@@ -25,7 +26,7 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 	// (click-twice-to-close).
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
-	const cardWidth = () => Math.min(76, Math.max(52, dims().width - 8));
+	const cardWidth = () => Math.min(76, Math.max(1, dims().width - 2));
 	const cardY = () => statusCardY(dims().height, cardHeight());
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const contentWidth = () => Math.max(1, cardWidth() - 4);
@@ -35,10 +36,13 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 	const wrappedValue = (value: string): string[] =>
 		wrapStatusValue(value, valueWidth());
 	const cardHeight = () =>
-		props.rows.reduce(
-			(total, row) => total + wrappedValue(row.value).length,
-			0,
-		) + 4;
+		Math.min(
+			Math.max(1, dims().height - 2),
+			props.rows.reduce(
+				(total, row) => total + wrappedValue(row.value).length,
+				0,
+			) + 6,
+		);
 	const valueFg = (kind: StatusRow['valueFg']) => {
 		switch (kind) {
 			case 'error':
@@ -60,7 +64,7 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 		y <= cardY() + cardHeight();
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			props.onClose();
 			return;
@@ -68,9 +72,11 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 		// All other keys are owned by the modal, they must not leak to the
 		// input box / history behind it.
 		return;
-	});
+	};
+	useKeyboard(handleKey);
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -97,34 +103,40 @@ export function StatusModal(props: {rows: StatusRow[]; onClose: () => void}) {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						Status
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						Esc close
-					</text>
+				<ModalHeader
+					width={cardWidth()}
+					title={'Status'}
+					hint={'Esc close'}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
+				>
+					<box height={1} />
+					<For each={props.rows}>
+						{row => (
+							<For each={wrappedValue(row.value)}>
+								{(line, index) => (
+									<box flexDirection="row" height={1}>
+										<text width={labelWidth()} fg={colors().secondary}>
+											{index() === 0 ? `${row.label}:` : ''}
+										</text>
+										<text fg={valueFg(row.valueFg)}>{line}</text>
+									</box>
+								)}
+							</For>
+						)}
+					</For>
 				</box>
-				<box height={1} />
-				<For each={props.rows}>
-					{row => (
-						<For each={wrappedValue(row.value)}>
-							{(line, index) => (
-								<box flexDirection="row" height={1}>
-									<text width={labelWidth()} fg={colors().secondary}>
-										{index() === 0 ? `${row.label}:` : ''}
-									</text>
-									<text fg={valueFg(row.valueFg)}>{line}</text>
-								</box>
-							)}
-						</For>
-					)}
-				</For>
 			</box>
 		</box>
 	);

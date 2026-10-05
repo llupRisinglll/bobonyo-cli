@@ -196,13 +196,16 @@ function assertCustomBounded(setup: Awaited<ReturnType<typeof mountCustom>>) {
 	expect(caret).toBeGreaterThanOrEqual(0);
 	expect(footer).toBeGreaterThan(caret);
 	expect(lines.some(line => line.includes('Esc'))).toBe(true);
-	const top = lines.find(line => line.includes('╭'));
-	const bottom = lines.find(line => line.includes('╰'));
-	expect(top).toContain('╮');
-	expect(bottom).toContain('╯');
+	const title = lines.findIndex(line => line.includes('Question'));
+	expect(title).toBeGreaterThanOrEqual(0);
+	expect(lines.join('\n')).not.toMatch(/[╭╮╰╯│]/);
+	if (lines.length >= 12) {
+		expect(lines[title - 1]!.trim()).toMatch(/^▄+$/);
+		expect(lines[title + 1]!.trim()).toMatch(/^▀+$/);
+	}
 	const caretLine = lines[caret]!;
-	expect(caretLine.indexOf('▌')).toBeGreaterThan(caretLine.indexOf('│'));
-	expect(caretLine.lastIndexOf('│')).toBeGreaterThan(caretLine.indexOf('▌'));
+	expect(caretLine.indexOf('▌')).toBeGreaterThanOrEqual(0);
+	expect(caretLine.indexOf('▌')).toBeLessThan(caretLine.length);
 	return lines;
 }
 
@@ -234,9 +237,7 @@ test('87-to-52-column resize does not insert blank rows into a pasted paragraph'
 			const start = lines.findIndex(line => line.includes('Custom:'));
 			const end = lines.findIndex(line => line.includes('▌'));
 			expect(start).toBeGreaterThanOrEqual(0);
-			const answerRows = lines
-				.slice(start, end + 1)
-				.map(line => line.split('│')[1]!.trim());
+			const answerRows = lines.slice(start, end + 1).map(line => line.trim());
 			expect(answerRows).not.toContain('');
 			expect(answerRows.join(' ').replace(/\s+/g, ' ')).toBe(
 				`Custom: ${value}▌`,
@@ -254,20 +255,25 @@ test('custom answer grows on typing and shrinks after deletion without footer ov
 		setup.mockInput.pressArrow('up');
 		setup.mockInput.pressEnter();
 		await setup.flush();
-		const initial = rows(setup).filter(line => line.includes('│')).length;
+		const initial =
+			rows(setup).findIndex(line => line.includes('Enter')) -
+			rows(setup).findIndex(line => line.includes('Question'));
 		const value = 'release-'.repeat(20) + 'end';
 		await setup.mockInput.typeText(value);
 		await setup.flush();
 		const expanded = assertCustomBounded(setup);
 		expect(expanded.join('\n')).toContain('end▌');
-		expect(expanded.filter(line => line.includes('│')).length).toBeGreaterThan(
-			initial,
-		);
+		expect(
+			expanded.findIndex(line => line.includes('Enter')) -
+				expanded.findIndex(line => line.includes('Question')),
+		).toBeGreaterThan(initial);
 		for (let index = 0; index < value.length; index++)
 			setup.mockInput.pressBackspace();
 		await setup.flush();
+		const contracted = assertCustomBounded(setup);
 		expect(
-			assertCustomBounded(setup).filter(line => line.includes('│')).length,
+			contracted.findIndex(line => line.includes('Enter')) -
+				contracted.findIndex(line => line.includes('Question')),
 		).toBe(initial);
 	} finally {
 		setup.renderer.destroy();

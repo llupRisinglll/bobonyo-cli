@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/solid */
+import {ModalHeader, modalWheel} from './modal-header';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
@@ -330,6 +331,9 @@ export function SettingsPanel(props: {
 	focus: () => 'search' | 'list';
 	hovered: () => number;
 	setHovered: (index: number) => void;
+	/** Bounded row budget supplied by the modal; other panel hosts stay unchanged. */
+	visibleRows?: () => number;
+	compact?: () => boolean;
 }) {
 	// The OpenTUI reconciler's <For> only re-renders items when the `each`
 	// array REFERENCE changes, signals read inside the children (selection,
@@ -343,6 +347,21 @@ export function SettingsPanel(props: {
 			}),
 		),
 	);
+	const rowStart = () =>
+		props.visibleRows
+			? Math.max(
+					0,
+					Math.min(
+						settingsIndex() - props.visibleRows() + 1,
+						rows().length - props.visibleRows(),
+					),
+				)
+			: 0;
+	const visibleRows = () =>
+		rows().slice(
+			rowStart(),
+			props.visibleRows ? rowStart() + props.visibleRows() : undefined,
+		);
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
 	// Active-row palette: info tint + guaranteed-readable foreground (no
@@ -384,17 +403,18 @@ export function SettingsPanel(props: {
 		});
 	});
 	return (
-		<box flexDirection="column">
+		<box flexDirection="column" minHeight={0}>
 			{/* Search box (ABOVE the tabs): rounded border, ⌕ prefix. */}
 			<box
-				border
 				borderStyle="rounded"
 				borderColor={
 					props.focus() === 'search' ? colors().info : colors().secondary
 				}
 				paddingX={1}
 				flexDirection="row"
-				height={3}
+				height={props.compact?.() ? 1 : 3}
+				flexShrink={0}
+				border={props.compact?.() ? false : true}
 			>
 				<text fg={colors().secondary}>⌕ </text>
 				<Show
@@ -404,7 +424,7 @@ export function SettingsPanel(props: {
 					<text fg={colors().secondary}>Search settings…</text>
 				</Show>
 			</box>
-			<box height={1} />
+			<box height={props.compact?.() ? 0 : 1} flexShrink={0} />
 			<box flexDirection="row" height={1}>
 				<For each={tabs()}>
 					{item => {
@@ -433,8 +453,8 @@ export function SettingsPanel(props: {
 					}}
 				</For>
 			</box>
-			<box height={1} />
-			<For each={rows()}>
+			<box height={props.compact?.() ? 0 : 1} flexShrink={0} />
+			<For each={visibleRows()}>
 				{(item, index) => {
 					const {row, selected, hovered} = item;
 					// HOVER and ARROW navigation render IDENTICALLY,
@@ -448,14 +468,15 @@ export function SettingsPanel(props: {
 						<box
 							flexDirection="row"
 							height={1}
+							flexShrink={0}
 							backgroundColor={active ? activeRow().bg : undefined}
 							{...({
-								onMouseUp: () => setSettingsIndex(index()),
+								onMouseUp: () => setSettingsIndex(index() + rowStart()),
 								// Hovering IS navigating: the highlight follows the
 								// mouse exactly like ↑/↓.
 								onMouseMove: () => {
-									props.setHovered(index());
-									setSettingsIndex(index());
+									props.setHovered(index() + rowStart());
+									setSettingsIndex(index() + rowStart());
 								},
 								onMouseOut: () => props.setHovered(-1),
 							} as any)}
@@ -463,7 +484,10 @@ export function SettingsPanel(props: {
 							<text
 								fg={active ? activeRow().fg : colors().text}
 								attributes={active ? bold() : undefined}
-								width={22}
+								width={Math.max(
+									22,
+									...rows().map(item => item.row.label.length + 2),
+								)}
 							>
 								{active ? '❯ ' : '  '}
 								{row.label}
@@ -476,11 +500,17 @@ export function SettingsPanel(props: {
 					);
 				}}
 			</For>
-			<box height={1} />
+			<box height={props.compact?.() ? 0 : 1} flexShrink={0} />
 			<Show when={rows().length === 0}>
 				<text fg={colors().secondary}>No settings match "{props.query()}"</text>
 			</Show>
-			<text fg={colors().secondary} attributes={dim()}>
+			<text
+				height={1}
+				flexShrink={0}
+				wrapMode="none"
+				fg={colors().secondary}
+				attributes={dim()}
+			>
 				↑/↓ select · Enter edit · Tab focus · Esc close
 			</text>
 		</box>
@@ -520,12 +550,12 @@ export function SettingsModal(props: {
 	const [optionIndex, setOptionIndex] = createSignal(0);
 	const bold = () => createTextAttributes({bold: true});
 	const dim = () => createTextAttributes({dim: true});
-	const cardWidth = () => Math.min(84, Math.max(56, dims().width - 4));
+	const cardWidth = () => Math.min(84, Math.max(1, dims().width - 2));
 	// Vertically CENTER the card (parity: the reference centers its dialogs);
 	// with a short list the old quarter-height anchor floated it near the
 	// top of the screen.
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const filtered = createMemo(() =>
 		SETTINGS_TABS.map((_, tab) => filterRows(settingsRows(tab), query())),
@@ -552,7 +582,7 @@ export function SettingsModal(props: {
 		if (ev.shift && /^[a-z]$/.test(char)) return char.toUpperCase();
 		return char;
 	};
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			if (editing()) {
 				setEditing(null);
@@ -665,11 +695,23 @@ export function SettingsModal(props: {
 			setQuery(prev => prev + char);
 			setFocus('search');
 		}
-	});
+	};
+	useKeyboard(handleKey);
 	// Card height: search box (3) + gap + tabs (1) + gap + rows + footer (1)
 	// + footer gap + card padding (2).
 	const cardHeight = () =>
-		3 + 1 + 1 + 1 + Math.max(1, activeRows().length) + 1 + 1 + 2;
+		Math.min(
+			Math.max(1, dims().height - 2),
+			3 + 1 + 1 + 1 + Math.max(1, activeRows().length) + 1 + 1 + 4,
+		);
+	const headerHeight = () => (dims().height >= 9 ? 3 : 1);
+	const bodyPadding = () => (cardHeight() >= 14 ? 1 : 0);
+	const bodyHeight = () =>
+		Math.max(1, cardHeight() - headerHeight() - bodyPadding() * 2);
+	const compact = () => bodyHeight() < 10;
+	const visibleRows = () => Math.max(1, bodyHeight() - (compact() ? 3 : 8));
+	const optionStart = () =>
+		Math.max(0, optionIndex() - Math.max(1, bodyHeight() - 1) + 1);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
 		x <= cardX() + cardWidth() &&
@@ -677,6 +719,7 @@ export function SettingsModal(props: {
 		y <= cardY() + cardHeight();
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -703,67 +746,95 @@ export function SettingsModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
+				overflow="hidden"
 			>
-				<Show
-					when={editing()}
-					fallback={
-						<SettingsPanel
-							onEdit={props.onEdit}
-							query={query}
-							setQuery={setQuery}
-							focus={focus}
-							hovered={hoveredRow}
-							setHovered={setHoveredRow}
-						/>
-					}
+				<ModalHeader
+					width={cardWidth()}
+					title={editing()?.label ?? 'Settings'}
+					hint={editing() ? 'Esc back' : 'Esc close'}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={bodyPadding()}
 				>
-					{/* CLEAN option-selector card (parity: the reference), only the
+					<Show
+						when={editing()}
+						fallback={
+							<SettingsPanel
+								onEdit={props.onEdit}
+								query={query}
+								setQuery={setQuery}
+								focus={focus}
+								hovered={hoveredRow}
+								setHovered={setHoveredRow}
+								visibleRows={visibleRows}
+								compact={compact}
+							/>
+						}
+					>
+						{/* CLEAN option-selector card (parity: the reference), only the
 					    options and ONE hint line; no repeated label/footers. */}
-					<box flexDirection="row" height={1}>
-						<text fg={colors().primary} attributes={bold()}>
-							{editing()?.label}
-						</text>
-						<box flexGrow={1} />
-						<text fg={colors().secondary} attributes={dim()}>
-							Esc back
-						</text>
-					</box>
-					<box height={1} />
-					<For each={SETTING_OPTIONS[editing()?.key ?? ''] ?? []}>
-						{(option, index) => (
-							<box
-								flexDirection="row"
-								height={1}
-								backgroundColor={
-									optionIndex() === index() ? colors().info : undefined
-								}
-								{...({
-									onMouseUp: () => {
-										setOptionIndex(index());
-										props.onApply(editing()?.key ?? '', option);
-										setEditing(null);
-									},
-									onMouseMove: () => setOptionIndex(index()),
-								} as any)}
-							>
-								<text
-									fg={optionIndex() === index() ? colors().base : colors().text}
-									attributes={optionIndex() === index() ? bold() : undefined}
+
+						<For
+							each={(SETTING_OPTIONS[editing()?.key ?? ''] ?? []).slice(
+								optionStart(),
+								optionStart() + Math.max(1, bodyHeight() - 1),
+							)}
+						>
+							{(option, index) => (
+								<box
+									flexDirection="row"
+									height={1}
+									backgroundColor={
+										optionIndex() === index() + optionStart()
+											? colors().info
+											: undefined
+									}
+									{...({
+										onMouseUp: () => {
+											setOptionIndex(index() + optionStart());
+											props.onApply(editing()?.key ?? '', option);
+											setEditing(null);
+										},
+										onMouseMove: () => setOptionIndex(index() + optionStart()),
+									} as any)}
 								>
-									{optionIndex() === index() ? '❯ ' : '  '}
-									{option}
-								</text>
-							</box>
-						)}
-					</For>
-					<box height={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						↑/↓ select · Enter apply · Esc back
-					</text>
-				</Show>
+									<text
+										fg={
+											optionIndex() === index() + optionStart()
+												? colors().base
+												: colors().text
+										}
+										attributes={
+											optionIndex() === index() + optionStart()
+												? bold()
+												: undefined
+										}
+									>
+										{optionIndex() === index() + optionStart() ? '❯ ' : '  '}
+										{option}
+									</text>
+								</box>
+							)}
+						</For>
+						<text
+							height={1}
+							flexShrink={0}
+							wrapMode="none"
+							fg={colors().secondary}
+							attributes={dim()}
+						>
+							↑/↓ select · Enter apply · Esc back
+						</text>
+					</Show>
+				</box>
 			</box>
 		</box>
 	);

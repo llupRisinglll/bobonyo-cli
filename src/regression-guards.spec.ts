@@ -1,6 +1,63 @@
 import {describe, expect, test} from 'bun:test';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
+test('trust confirmation follows selection and short pickers follow focused rows', () => {
+	const trust = readFileSync(
+		join(import.meta.dir, 'components/trust-modal.tsx'),
+		'utf8',
+	);
+	expect(trust).toContain('confirm(choice())');
+	expect(trust).toContain('<scrollbox');
+	expect(trust).toContain('height={explanationHeight()}');
+	expect(trust).toContain('event.stopPropagation()');
+	const settings = readFileSync(
+		join(import.meta.dir, 'components/settings-panel.tsx'),
+		'utf8',
+	);
+	expect(settings).toContain('<For each={visibleRows()}>');
+	expect(settings).toContain('index() + rowStart()');
+	const effort = readFileSync(
+		join(import.meta.dir, 'components/effort-modal.tsx'),
+		'utf8',
+	);
+	expect(effort).toMatch(
+		/options\s*\.slice\(start\(\), start\(\) \+ visibleCount\(\)\)/,
+	);
+});
+test('headed modals use one full-width half-cell header and isolated wheel navigation', () => {
+	const read = (name: string) =>
+		readFileSync(join(import.meta.dir, 'components', name), 'utf8');
+	const header = read('modal-header.tsx');
+	expect(header).toContain("'▄'.repeat(props.width)");
+	expect(header).toContain("'▀'.repeat(props.width)");
+	expect(header).toContain('backgroundColor={color()}');
+	expect(header).toContain('fg={colors().base}');
+	expect(header).toContain('event.stopPropagation()');
+	for (const name of [
+		'details-modal',
+		'background-jobs-modal',
+		'settings-list-modal',
+		'agents-modal',
+		'commands-modal',
+		'status-modal',
+		'model-modal',
+		'connect-provider-modal',
+		'resume-modal',
+		'effort-modal',
+		'settings-panel',
+		'question-modal',
+		'trust-modal',
+		'usage-reset-modal',
+	]) {
+		const modal = read(`${name}.tsx`);
+		expect(modal).toContain('<ModalHeader');
+		expect(modal).toContain('onMouseScroll');
+	}
+	const monitor = read('background-jobs-modal.tsx');
+	expect(monitor).toContain('if (detailAgent()) return');
+	expect(monitor).toContain('event.stopPropagation()');
+	expect(read('trust-modal.tsx')).toContain('color={colors().warning}');
+});
 
 test('question modal reserves wrapped custom/footer rows and follows focused options', () => {
 	const modal = readFileSync(
@@ -8,7 +65,7 @@ test('question modal reserves wrapped custom/footer rows and follows focused opt
 		'utf8',
 	);
 	expect(modal).not.toContain('Math.max(52');
-	expect(modal).toContain('cardWidth() - 2 - paddingX() * 2');
+	expect(modal).toContain('cardWidth() - paddingX() * 2');
 	expect(modal).toContain("`Custom: ${custom() || 'Type your answer…'}▌`");
 	expect(modal).toContain('customRows().slice(-customHeight())');
 	expect(modal).toContain('height={visibleBodyHeight()}');
@@ -406,7 +463,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		// The long footer hint wraps to 2 lines on narrow cards; the card
 		// must reserve the real wrapped height or the hint renders outside.
 		expect(modal).toMatch(/const footerLines = \(\): number =>/);
-		expect(modal).toMatch(/wrapText\(footerHint, cardWidth\(\) - 6\)/);
+		expect(modal).toMatch(
+			/wrapText\(footerHint, Math\.max\(1, cardWidth\(\) - 6\)\)/,
+		);
 		expect(modal).toMatch(/capped \+ 10 \+ footerLines\(\)/);
 	});
 
@@ -522,7 +581,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('the provider modal auto-widens and tiles on big screens', () => {
 		const modal = read('./components/connect-provider-modal.tsx');
 		expect(modal).toMatch(
-			/Math\.min\(120, Math\.max\(60, dims\(\)\.width - 4\)\)/,
+			/Math\.min\(120, Math\.max\(1, dims\(\)\.width - 2\)\)/,
 		);
 		expect(modal).toMatch(/providerColumns\(cardWidth\(\)\)/);
 		expect(modal).toMatch(/visibleGridRows\(\)/);
@@ -533,7 +592,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(/case 'manage':/);
 		// The footer hint reserves its REAL wrapped height (narrow cards
 		// wrap it; a 1-line estimate left it below the card edge).
-		expect(modal).toMatch(/viewContentLines\(\) \+ 7 \+ footerLines\(\)/);
+		expect(modal).toMatch(/viewContentLines\(\) \+ 9 \+ footerLines\(\)/);
 		expect(modal).toMatch(/const footerLines = \(\): number =>/);
 	});
 
@@ -842,8 +901,9 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	test('resume modal isolates its keys like the other modals', () => {
 		const resume = read('./components/resume-modal.tsx');
 		expect(resume).toMatch(
-			/useKeyboard\(event => \{[\s\S]{0,80}event\.preventDefault\(\);/,
+			/const handleKey[\s\S]{0,120}event\.preventDefault\(\);/,
 		);
+		expect(resume).toContain('useKeyboard(handleKey)');
 	});
 
 	test('/undo is conversation-only and /rewind owns file restoration', () => {

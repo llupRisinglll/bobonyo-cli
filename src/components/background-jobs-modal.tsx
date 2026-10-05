@@ -18,10 +18,11 @@ import {subagentDisplayMessages} from '../subagent-transcript';
 import {formatSubagentCompactTail} from '../subagent-tail';
 import {formatGoal, type SessionGoal} from '../goal-loop';
 import {agentDisplayLabels} from '../agent-label';
+import {ModalHeader} from './modal-header';
 
 const JOB_TAIL_LINES = 4;
 const AGENT_TAIL_LINES = 4;
-const LIST_CHROME_ROWS = 4;
+const LIST_CHROME_ROWS = 6;
 type ActivityTab = 'jobs' | 'agents' | 'goal';
 
 /** Last N output rows for the compact job list. */
@@ -60,7 +61,8 @@ export function BackgroundJobsModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	const active = () => activeRowPalette(colors());
 	const availableWidth = () => Math.max(1, dims().width - 2);
-	const availableHeight = () => Math.max(1, dims().height - 2);
+	const availableHeight = () =>
+		Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0));
 	const listCardWidth = () => Math.min(110, availableWidth());
 	const detailContentLines = () =>
 		detailAgent()
@@ -74,7 +76,7 @@ export function BackgroundJobsModal(props: {
 				: Math.min(availableHeight(), Math.max(1, detailContentLines() + 5))
 			: Math.max(1, Math.min(availableHeight(), 34));
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -131,7 +133,10 @@ export function BackgroundJobsModal(props: {
 		const start = listStart(agents().length, count);
 		return agents().slice(start, start + count);
 	});
-	const detailVisibleLines = () => Math.max(1, cardHeight() - 8);
+	const headerHeight = () => (dims().height >= 9 ? 3 : 1);
+	const bodyPadding = () => (dims().height >= 9 ? 1 : 0);
+	const detailVisibleLines = () =>
+		Math.max(1, cardHeight() - headerHeight() - bodyPadding() * 2 - 4);
 	const detailLines = createMemo(() =>
 		backgroundJobDetailWindow(
 			detailTask()?.output ?? [],
@@ -139,7 +144,7 @@ export function BackgroundJobsModal(props: {
 			detailOffset(),
 		),
 	);
-	const detailHistoryWidth = () => Math.max(1, cardWidth() - 8);
+	const detailHistoryWidth = () => Math.max(1, cardWidth() - 2);
 	const scrollDetail = (direction: 'up' | 'down', pages = false): void => {
 		const delta = pages ? detailVisibleLines() : 1;
 		setDetailOffset(value =>
@@ -309,370 +314,410 @@ export function BackgroundJobsModal(props: {
 				height={cardHeight()}
 				backgroundColor={colors().base}
 				overflow="hidden"
-				paddingX={2}
-				paddingY={1}
 				flexDirection="column"
 				{...({
-					onMouseScroll: (event: {scroll?: {direction?: string}}) => {
+					onMouseScroll: (event: {
+						scroll?: {direction?: string};
+						stopPropagation: () => void;
+					}) => {
+						event.stopPropagation();
+						// Embedded History already handled its native wheel event.
+						if (detailAgent()) return;
 						const direction = event.scroll?.direction;
-						if (direction === 'up' || direction === 'down')
-							scrollDetail(direction);
+						if (direction !== 'up' && direction !== 'down') return;
+						if (detailId()) scrollDetail(direction);
+						else {
+							const count =
+								tab() === 'agents'
+									? agents().length
+									: tab() === 'jobs'
+										? jobs().length
+										: 0;
+							setSelected(value =>
+								Math.max(
+									0,
+									Math.min(
+										Math.max(0, count - 1),
+										value + (direction === 'down' ? 1 : -1),
+									),
+								),
+							);
+						}
 					},
 				} as any)}
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						{detailId()
+				<ModalHeader
+					width={cardWidth()}
+					caps={dims().height >= 9}
+					title={
+						detailId()
 							? detailAgent()
 								? 'Subagent details'
 								: 'Background job details'
-							: `Process monitor [${tab() === 'jobs' ? '*jobs*' : 'jobs'} | ${tab() === 'agents' ? '*agents*' : 'agents'} | ${tab() === 'goal' ? '*goal*' : 'goal'}]`}
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						{detailId()
+							: `Process monitor [${tab() === 'jobs' ? '*jobs*' : 'jobs'} | ${tab() === 'agents' ? '*agents*' : 'agents'} | ${tab() === 'goal' ? '*goal*' : 'goal'}]`
+					}
+					hint={
+						detailId()
 							? '↑/↓ history · End live · Esc back'
 							: tab() === 'agents' && agents().length > 0
 								? 'x cancel selected · c cancel all · Esc close'
 								: tab() === 'goal'
 									? 'Esc close'
-									: '↑/↓ select · Enter details · Esc close'}
-					</text>
-				</box>
+									: '↑/↓ select · Enter details · Esc close'
+					}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={1}
+					paddingY={bodyPadding()}
+				>
+					<Show when={!detailId()}>
+						<box height={1} flexDirection="row">
+							<box
+								height={1}
+								paddingX={1}
+								backgroundColor={tab() === 'jobs' ? colors().info : undefined}
+							>
+								<text
+									fg={tab() === 'jobs' ? colors().base : colors().secondary}
+									attributes={tab() === 'jobs' ? bold() : dim()}
+								>{`Jobs (${jobs().length})`}</text>
+							</box>
+							<box width={1} />
+							<box
+								height={1}
+								paddingX={1}
+								backgroundColor={tab() === 'agents' ? colors().info : undefined}
+							>
+								<text
+									fg={tab() === 'agents' ? colors().base : colors().secondary}
+									attributes={tab() === 'agents' ? bold() : dim()}
+								>{`Agents (${runningAgentCount()})`}</text>
+							</box>
+							<box width={1} />
+							<box
+								height={1}
+								paddingX={1}
+								backgroundColor={tab() === 'goal' ? colors().info : undefined}
+							>
+								<text
+									fg={tab() === 'goal' ? colors().base : colors().secondary}
+									attributes={tab() === 'goal' ? bold() : dim()}
+								>{`Goal (${props.goal?.status === 'active' ? 'active' : 'none'})`}</text>
+							</box>
+						</box>
+					</Show>
 
-				<Show when={!detailId()}>
-					<box height={1} flexDirection="row">
-						<box
-							height={1}
-							paddingX={1}
-							backgroundColor={tab() === 'jobs' ? colors().info : undefined}
-						>
-							<text
-								fg={tab() === 'jobs' ? colors().base : colors().secondary}
-								attributes={tab() === 'jobs' ? bold() : dim()}
-							>{`Jobs (${jobs().length})`}</text>
-						</box>
-						<box width={1} />
-						<box
-							height={1}
-							paddingX={1}
-							backgroundColor={tab() === 'agents' ? colors().info : undefined}
-						>
-							<text
-								fg={tab() === 'agents' ? colors().base : colors().secondary}
-								attributes={tab() === 'agents' ? bold() : dim()}
-							>{`Agents (${runningAgentCount()})`}</text>
-						</box>
-						<box width={1} />
-						<box
-							height={1}
-							paddingX={1}
-							backgroundColor={tab() === 'goal' ? colors().info : undefined}
-						>
-							<text
-								fg={tab() === 'goal' ? colors().base : colors().secondary}
-								attributes={tab() === 'goal' ? bold() : dim()}
-							>{`Goal (${props.goal?.status === 'active' ? 'active' : 'none'})`}</text>
-						</box>
-					</box>
-				</Show>
-
-				<Show when={detailTask()}>
-					{task => (
-						<box flexDirection="column" flexGrow={1} minHeight={0}>
-							{/* One BashToolRow-style box owns BOTH command and live
+					<Show when={detailTask()}>
+						{task => (
+							<box flexDirection="column" flexGrow={1} minHeight={0}>
+								{/* One BashToolRow-style box owns BOTH command and live
 							    output. Separate boxes made output look detached. */}
-							<box
-								width="100%"
-								flexDirection="column"
-								flexGrow={1}
-								minHeight={0}
-								overflow="hidden"
-								border
-								borderStyle="rounded"
-								borderColor={colors().secondary}
-								paddingX={1}
-							>
-								<box flexDirection="row">
-									<text fg={colors().secondary}>$ </text>
-									<text>
-										<For each={commandSegments(task())}>
-											{chunk => (
-												<span
-													style={{
-														fg: chunk.fg as never,
-														attributes: chunk.attributes,
-													}}
-												>
-													{chunk.text.replace(/^\$\s*/, '')}
-												</span>
-											)}
-										</For>
-									</text>
-								</box>
-								<box height={1} />
-								<For each={detailLines()}>
-									{line => <text fg={colors().text}>{line}</text>}
-								</For>
-								<Show when={detailLines().length === 0}>
-									<text fg={colors().secondary} attributes={dim()}>
-										Waiting for output…
-									</text>
-								</Show>
-								<box flexGrow={1} />
-								<text fg={colors().secondary} attributes={dim()}>
-									{detailOffset() === 0
-										? `LIVE · ${task().output.length} lines`
-										: `${detailOffset()} lines behind live tail`}
-								</text>
-							</box>
-						</box>
-					)}
-				</Show>
-
-				<Show when={detailAgent()}>
-					{agent => (
-						<box width="100%" flexDirection="column" flexGrow={1} minHeight={0}>
-							<box
-								width="100%"
-								flexDirection="column"
-								flexGrow={1}
-								minHeight={0}
-								overflow="hidden"
-								border
-								borderStyle="rounded"
-								borderColor={colors().secondary}
-								paddingX={1}
-							>
-								<text fg={colors().primary} attributes={bold()}>
-									{`agent:${agent().name}(${agent().description}) is ${agent().status === 'running' ? 'running' : agent().status}`}
-								</text>
-								<History
-									embedded
-									width={detailHistoryWidth()}
-									height={Math.max(1, cardHeight() - 7)}
-									messages={agentMessages}
-									running={() => detailAgent()?.status === 'running'}
-									streaming={() => detailAgent()?.streaming ?? ''}
-									reasoning={() => ''}
-									liveOutputs={() => ({})}
-									activeAgentRuns={() => []}
-								/>
-							</box>
-						</box>
-					)}
-				</Show>
-				<Show when={!detailId() && tab() === 'jobs'}>
-					<Show
-						when={jobs().length > 0}
-						fallback={
-							<text fg={colors().secondary} attributes={dim()}>
-								No background jobs.
-							</text>
-						}
-					>
-						<For each={visibleJobs()}>
-							{task => {
-								const index = () =>
-									jobs().findIndex(item => item.id === task.id);
-								const selectedRow = () => index() === selected();
-								return (
-									<box
-										flexDirection="column"
-										backgroundColor={selectedRow() ? active().bg : undefined}
-										paddingX={1}
-										{...({
-											onMouseUp: () => {
-												setSelected(index());
-												setDetailId(task.id);
-												setDetailOffset(0);
-											},
-										} as any)}
-									>
+								<box
+									width="100%"
+									flexDirection="column"
+									flexGrow={1}
+									minHeight={0}
+									overflow="hidden"
+								>
+									<box flexDirection="row">
+										<text fg={colors().secondary}>$ </text>
 										<text>
-											<span
-												style={{
-													fg: selectedRow()
-														? (active().fg as never)
-														: (colors().secondary as never),
-												}}
-											>
-												{selectedRow() ? '❯ ' : '  '}
-												{glyphBlinkOn(spinnerFrame()) ? '✦ ' : '  '}
-											</span>
-											<For each={commandSegments(task)}>
+											<For each={commandSegments(task())}>
 												{chunk => (
 													<span
 														style={{
-															fg: selectedRow()
-																? (active().fg as never)
-																: (chunk.fg as never),
+															fg: chunk.fg as never,
 															attributes: chunk.attributes,
 														}}
 													>
-														{chunk.text}
+														{chunk.text.replace(/^\$\s*/, '')}
 													</span>
 												)}
 											</For>
 										</text>
-										<For each={backgroundJobTail(task.output)}>
-											{line => (
+									</box>
+									<box height={1} />
+									<For each={detailLines()}>
+										{line => <text fg={colors().text}>{line}</text>}
+									</For>
+									<Show when={detailLines().length === 0}>
+										<text fg={colors().secondary} attributes={dim()}>
+											Waiting for output…
+										</text>
+									</Show>
+									<box flexGrow={1} />
+									<text fg={colors().secondary} attributes={dim()}>
+										{detailOffset() === 0
+											? `LIVE · ${task().output.length} lines`
+											: `${detailOffset()} lines behind live tail`}
+									</text>
+								</box>
+							</box>
+						)}
+					</Show>
+
+					<Show when={detailAgent()}>
+						{agent => (
+							<box
+								width="100%"
+								flexDirection="column"
+								flexGrow={1}
+								minHeight={0}
+							>
+								<box
+									width="100%"
+									flexDirection="column"
+									flexGrow={1}
+									minHeight={0}
+									overflow="hidden"
+								>
+									<text
+										height={1}
+										flexShrink={0}
+										wrapMode="none"
+										fg={colors().primary}
+										attributes={bold()}
+									>
+										{`agent:${agent().name}(${agent().description}) is ${agent().status === 'running' ? 'running' : agent().status}`}
+									</text>
+									<History
+										embedded
+										width={detailHistoryWidth()}
+										height={Math.max(
+											1,
+											cardHeight() - headerHeight() - bodyPadding() * 2 - 1,
+										)}
+										messages={agentMessages}
+										running={() => detailAgent()?.status === 'running'}
+										streaming={() => detailAgent()?.streaming ?? ''}
+										reasoning={() => ''}
+										liveOutputs={() => ({})}
+										activeAgentRuns={() => []}
+									/>
+								</box>
+							</box>
+						)}
+					</Show>
+					<Show when={!detailId() && tab() === 'jobs'}>
+						<Show
+							when={jobs().length > 0}
+							fallback={
+								<text fg={colors().secondary} attributes={dim()}>
+									No background jobs.
+								</text>
+							}
+						>
+							<For each={visibleJobs()}>
+								{task => {
+									const index = () =>
+										jobs().findIndex(item => item.id === task.id);
+									const selectedRow = () => index() === selected();
+									return (
+										<box
+											flexDirection="column"
+											backgroundColor={selectedRow() ? active().bg : undefined}
+											paddingX={1}
+											{...({
+												onMouseUp: () => {
+													setSelected(index());
+													setDetailId(task.id);
+													setDetailOffset(0);
+												},
+											} as any)}
+										>
+											<text>
+												<span
+													style={{
+														fg: selectedRow()
+															? (active().fg as never)
+															: (colors().secondary as never),
+													}}
+												>
+													{selectedRow() ? '❯ ' : '  '}
+													{glyphBlinkOn(spinnerFrame()) ? '✦ ' : '  '}
+												</span>
+												<For each={commandSegments(task)}>
+													{chunk => (
+														<span
+															style={{
+																fg: selectedRow()
+																	? (active().fg as never)
+																	: (chunk.fg as never),
+																attributes: chunk.attributes,
+															}}
+														>
+															{chunk.text}
+														</span>
+													)}
+												</For>
+											</text>
+											<For each={backgroundJobTail(task.output)}>
+												{line => (
+													<text
+														fg={
+															selectedRow() ? active().fg : colors().secondary
+														}
+														attributes={dim()}
+													>
+														{'    ' + line}
+													</text>
+												)}
+											</For>
+											<Show when={task.output.length === 0}>
 												<text
 													fg={selectedRow() ? active().fg : colors().secondary}
 													attributes={dim()}
 												>
-													{'    ' + line}
+													Waiting for output…
 												</text>
-											)}
-										</For>
-										<Show when={task.output.length === 0}>
-											<text
-												fg={selectedRow() ? active().fg : colors().secondary}
-												attributes={dim()}
-											>
-												Waiting for output…
-											</text>
-										</Show>
-										<box height={1} />
-									</box>
-								);
-							}}
-						</For>
+											</Show>
+											<box height={1} />
+										</box>
+									);
+								}}
+							</For>
+						</Show>
 					</Show>
-				</Show>
 
-				<Show when={!detailId() && tab() === 'agents'}>
-					<Show
-						when={agents().length > 0}
-						fallback={
-							<text fg={colors().secondary} attributes={dim()}>
-								No subagents found.
-							</text>
-						}
-					>
-						<For each={visibleAgents()}>
-							{run => {
-								const index = () =>
-									agents().findIndex(item => item.id === run.id);
-								const selectedRow = () => index() === selected();
-								const tail = formatSubagentCompactTail(
-									run.output,
-									AGENT_TAIL_LINES,
-									Math.max(20, cardWidth() - 14),
-								);
-								const label =
-									agentLabels()[index()] ?? run.displayLabel ?? run.description;
-								const seg = liveRowSegments(
-									`✦ Ran agent:${run.name}(${label}) ${
-										run.status === 'running' ? 'running' : 'interrupted'
-									}\n${tail}`,
-									'agentrow',
-									'running',
-									colors(),
-									cardWidth() - 8,
-								);
-								return (
-									<box
-										height={listRowsPerAgent}
-										flexDirection="column"
-										backgroundColor={selectedRow() ? active().bg : undefined}
-										paddingX={1}
-										{...({
-											onMouseUp: () => {
-												setSelected(index());
-												setDetailId(run.id);
-												setDetailOffset(0);
-											},
-										} as any)}
-									>
-										<text>
-											<span
-												style={{
-													fg: selectedRow()
-														? (active().fg as never)
-														: (colors().secondary as never),
-												}}
-											>
-												{selectedRow() ? '❯ ' : '  '}
-												{run.status === 'running' &&
-												glyphBlinkOn(spinnerFrame())
-													? '✦ '
-													: '  '}
-											</span>
-											<For each={seg.header}>
-												{chunk => (
-													<span
-														style={{
-															fg: selectedRow()
-																? (active().fg as never)
-																: (chunk.fg as never),
-															attributes: chunk.attributes,
-														}}
-													>
-														{chunk.text}
-													</span>
+					<Show when={!detailId() && tab() === 'agents'}>
+						<Show
+							when={agents().length > 0}
+							fallback={
+								<text fg={colors().secondary} attributes={dim()}>
+									No subagents found.
+								</text>
+							}
+						>
+							<For each={visibleAgents()}>
+								{run => {
+									const index = () =>
+										agents().findIndex(item => item.id === run.id);
+									const selectedRow = () => index() === selected();
+									const tail = formatSubagentCompactTail(
+										run.output,
+										AGENT_TAIL_LINES,
+										Math.max(20, cardWidth() - 14),
+									);
+									const label =
+										agentLabels()[index()] ??
+										run.displayLabel ??
+										run.description;
+									const seg = liveRowSegments(
+										`✦ Ran agent:${run.name}(${label}) ${
+											run.status === 'running' ? 'running' : 'interrupted'
+										}\n${tail}`,
+										'agentrow',
+										'running',
+										colors(),
+										cardWidth() - 8,
+									);
+									return (
+										<box
+											height={listRowsPerAgent}
+											flexDirection="column"
+											backgroundColor={selectedRow() ? active().bg : undefined}
+											paddingX={1}
+											{...({
+												onMouseUp: () => {
+													setSelected(index());
+													setDetailId(run.id);
+													setDetailOffset(0);
+												},
+											} as any)}
+										>
+											<text>
+												<span
+													style={{
+														fg: selectedRow()
+															? (active().fg as never)
+															: (colors().secondary as never),
+													}}
+												>
+													{selectedRow() ? '❯ ' : '  '}
+													{run.status === 'running' &&
+													glyphBlinkOn(spinnerFrame())
+														? '✦ '
+														: '  '}
+												</span>
+												<For each={seg.header}>
+													{chunk => (
+														<span
+															style={{
+																fg: selectedRow()
+																	? (active().fg as never)
+																	: (chunk.fg as never),
+																attributes: chunk.attributes,
+															}}
+														>
+															{chunk.text}
+														</span>
+													)}
+												</For>
+											</text>
+											<For each={seg.body.slice(0, AGENT_TAIL_LINES)}>
+												{line => (
+													<text>
+														<For each={line}>
+															{chunk => (
+																<span
+																	style={{
+																		fg: selectedRow()
+																			? (active().fg as never)
+																			: (chunk.fg as never),
+																		attributes: chunk.attributes,
+																	}}
+																>
+																	{chunk.text}
+																</span>
+															)}
+														</For>
+													</text>
 												)}
 											</For>
-										</text>
-										<For each={seg.body.slice(0, AGENT_TAIL_LINES)}>
-											{line => (
-												<text>
-													<For each={line}>
-														{chunk => (
-															<span
-																style={{
-																	fg: selectedRow()
-																		? (active().fg as never)
-																		: (chunk.fg as never),
-																	attributes: chunk.attributes,
-																}}
-															>
-																{chunk.text}
-															</span>
-														)}
-													</For>
-												</text>
-											)}
-										</For>
-										<box height={1} />
-									</box>
-								);
-							}}
-						</For>
+											<box height={1} />
+										</box>
+									);
+								}}
+							</For>
+						</Show>
 					</Show>
-				</Show>
 
-				<Show when={!detailId() && tab() === 'goal'}>
-					<Show
-						when={props.goal}
-						fallback={
-							<text fg={colors().secondary} attributes={dim()}>
-								No active goal.
-							</text>
-						}
-					>
-						{goal => (
-							<box
-								width="100%"
-								flexDirection="column"
-								border
-								borderStyle="rounded"
-								borderColor={colors().secondary}
-								paddingX={1}
-							>
-								<text fg={colors().primary} attributes={bold()}>
-									Long-running goal
-								</text>
-								<box height={1} />
-								<text fg={colors().text}>{formatGoal(goal())}</text>
-								<box height={1} />
+					<Show when={!detailId() && tab() === 'goal'}>
+						<Show
+							when={props.goal}
+							fallback={
 								<text fg={colors().secondary} attributes={dim()}>
-									/goal pause · /goal clear
+									No active goal.
 								</text>
-							</box>
-						)}
+							}
+						>
+							{goal => (
+								<box
+									width="100%"
+									flexDirection="column"
+									border
+									borderStyle="rounded"
+									borderColor={colors().secondary}
+									paddingX={1}
+								>
+									<text fg={colors().primary} attributes={bold()}>
+										Long-running goal
+									</text>
+									<box height={1} />
+									<text fg={colors().text}>{formatGoal(goal())}</text>
+									<box height={1} />
+									<text fg={colors().secondary} attributes={dim()}>
+										/goal pause · /goal clear
+									</text>
+								</box>
+							)}
+						</Show>
 					</Show>
-				</Show>
+				</box>
 			</box>
 		</box>
 	);

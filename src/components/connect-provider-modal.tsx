@@ -2,6 +2,7 @@
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -487,7 +488,7 @@ export function ConnectProviderModal(props: {
 		}
 	};
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		const current = view();
 		if (current.kind === 'pick') {
 			if (event.name === 'escape') {
@@ -629,13 +630,14 @@ export function ConnectProviderModal(props: {
 			setInput(prev => prev + char);
 		}
 		return true;
-	});
+	};
+	useKeyboard(handleKey);
 
 	// RESPONSIVE SHELL: the card auto-WIDENS on big screens (up to 120) so
 	// the provider options can tile into more columns, and the HEIGHT
 	// autofits to the current view — the picker fits its rows, prompt/method
 	// steps stay compact, and short terminals cap at the window and scroll.
-	const cardWidth = () => Math.min(120, Math.max(60, dims().width - 4));
+	const cardWidth = () => Math.min(120, Math.max(1, dims().width - 2));
 	const columns = () => providerColumns(cardWidth());
 	const cellWidth = () => Math.floor((cardWidth() - 4) / columns());
 	const listVisible = () => Math.max(4, Math.min(60, dims().height - 9));
@@ -663,15 +665,15 @@ export function ConnectProviderModal(props: {
 			view().kind === 'pick'
 				? '↑↓←→ navigate · Enter choose · Esc close'
 				: 'Enter submit · Esc back';
-		return Math.max(1, wrapText(hint, cardWidth() - 6).length);
+		return Math.max(1, wrapText(hint, Math.max(1, cardWidth() - 6)).length);
 	};
 	const cardHeight = (): number =>
 		Math.min(
-			dims().height - 2,
-			Math.max(10, viewContentLines() + 7 + footerLines()),
+			Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)),
+			Math.max(10, viewContentLines() + 9 + footerLines()),
 		);
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -696,7 +698,7 @@ export function ConnectProviderModal(props: {
 		// listVisible budget that would clip rows below the card edge.
 		const visibleRows = Math.max(
 			1,
-			Math.floor((cardHeight() - 7 - footerLines()) / 2),
+			Math.floor((cardHeight() - 9 - footerLines()) / 2),
 		);
 		const selectedRow = Math.min(Math.floor(index() / cols), totalRows - 1);
 		const startRow = Math.max(
@@ -779,6 +781,7 @@ export function ConnectProviderModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -805,188 +808,195 @@ export function ConnectProviderModal(props: {
 				width={cardWidth()}
 				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
 				flexDirection="column"
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						{title()}
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						{view().kind === 'pick' ? 'Esc close' : 'Esc back'}
-					</text>
-				</box>
-				<box height={1} />
-				<Show
-					when={view().kind === 'pick'}
-					fallback={
-						<Show
-							when={
-								view().kind === 'methods' ||
-								view().kind === 'chatgpt' ||
-								view().kind === 'manage'
-							}
-							fallback={
-								<PromptField
-									value={input}
-									error={error}
-									secret={
-										view().kind === 'apikey' || view().kind === 'custom-key'
-									}
-									placeholder={promptDescription()}
-								/>
-							}
-						>
+				<ModalHeader
+					width={cardWidth()}
+					title={title()}
+					hint={view().kind === 'pick' ? 'Esc close' : 'Esc back'}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
+				>
+					<box height={1} />
+					<Show
+						when={view().kind === 'pick'}
+						fallback={
 							<Show
-								when={view().kind === 'manage'}
+								when={
+									view().kind === 'methods' ||
+									view().kind === 'chatgpt' ||
+									view().kind === 'manage'
+								}
 								fallback={
-									<Show
-										when={view().kind === 'methods'}
-										fallback={
-											<ChatgptView
-												authTick={authTick()}
-												authSummary={codexAuthSummary(auth())}
-												loggedIn={hasCodexChatgptAuth(auth())}
-												onCheckAgain={() => setAuthTick(tick => tick + 1)}
-											/>
+									<PromptField
+										value={input}
+										error={error}
+										secret={
+											view().kind === 'apikey' || view().kind === 'custom-key'
 										}
-									>
-										<MethodList
-											methods={selectedPreset().authMethods ?? []}
-											index={methodIndex}
-											onMove={setMethodIndex}
-											onSelect={chosen => {
-												if (chosen === 0) push({kind: 'chatgpt'});
-												else {
-													setInput('');
-													push({kind: 'apikey'});
-												}
-											}}
-										/>
-									</Show>
+										placeholder={promptDescription()}
+									/>
 								}
 							>
 								<Show
-									when={confirmingDelete() === null}
+									when={view().kind === 'manage'}
 									fallback={
-										<box flexDirection="column">
-											<text fg={colors().warning} attributes={bold()}>
-												Delete provider
-											</text>
-											<box height={1} />
-											<text fg={colors().text}>
-												Delete "{confirmingDelete()}"? This cannot be undone.
-											</text>
-											<box height={1} />
-											<text fg={colors().secondary} attributes={dim()}>
-												(y) delete · (n) cancel
-											</text>
-										</box>
+										<Show
+											when={view().kind === 'methods'}
+											fallback={
+												<ChatgptView
+													authTick={authTick()}
+													authSummary={codexAuthSummary(auth())}
+													loggedIn={hasCodexChatgptAuth(auth())}
+													onCheckAgain={() => setAuthTick(tick => tick + 1)}
+												/>
+											}
+										>
+											<MethodList
+												methods={selectedPreset().authMethods ?? []}
+												index={methodIndex}
+												onMove={setMethodIndex}
+												onSelect={chosen => {
+													if (chosen === 0) push({kind: 'chatgpt'});
+													else {
+														setInput('');
+														push({kind: 'apikey'});
+													}
+												}}
+											/>
+										</Show>
 									}
 								>
-									<ManageList
-										presetTitle={managePreset().title}
-										rows={manageRows()}
-										index={manageIndex}
-										onMove={setManageIndex}
-										onSelect={activateManage}
-									/>
+									<Show
+										when={confirmingDelete() === null}
+										fallback={
+											<box flexDirection="column">
+												<text fg={colors().warning} attributes={bold()}>
+													Delete provider
+												</text>
+												<box height={1} />
+												<text fg={colors().text}>
+													Delete "{confirmingDelete()}"? This cannot be undone.
+												</text>
+												<box height={1} />
+												<text fg={colors().secondary} attributes={dim()}>
+													(y) delete · (n) cancel
+												</text>
+											</box>
+										}
+									>
+										<ManageList
+											presetTitle={managePreset().title}
+											rows={manageRows()}
+											index={manageIndex}
+											onMove={setManageIndex}
+											onSelect={activateManage}
+										/>
+									</Show>
 								</Show>
 							</Show>
-						</Show>
-					}
-				>
-					<box height={1}>
-						<text fg={colors().secondary} attributes={dim()}>
-							⌕ {query() || 'search providers…'}
-						</text>
-					</box>
-					<box height={1} />
-					<Show
-						when={gridItems().length > 0}
-						fallback={
-							<text fg={colors().secondary} attributes={dim()}>
-								No providers match "{query()}"
-							</text>
 						}
 					>
-						{/* Responsive provider grid: 1 column on narrow cards,
+						<box height={1}>
+							<text fg={colors().secondary} attributes={dim()}>
+								⌕ {query() || 'search providers…'}
+							</text>
+						</box>
+						<box height={1} />
+						<Show
+							when={gridItems().length > 0}
+							fallback={
+								<text fg={colors().secondary} attributes={dim()}>
+									No providers match "{query()}"
+								</text>
+							}
+						>
+							{/* Responsive provider grid: 1 column on narrow cards,
 						    2 on medium, 3 on wide (providerColumns). */}
-						<For each={visibleGridRows()}>
-							{entry => (
-								<box flexDirection="row" height={2}>
-									<For each={entry.cells}>
-										{(cell, colIndex) => {
-											if (!cell?.preset) {
-												return <box width={cellWidth()} height={2} />;
-											}
-											const active = pickerSelection(cell);
-											const gridPosition = entry.row * columns() + colIndex();
-											return (
-												<box
-													width={cellWidth()}
-													flexDirection="column"
-													height={2}
-													backgroundColor={active ? activeRow().bg : undefined}
-													{...({
-														onMouseMove: () => setIndex(gridPosition),
-														onMouseUp: () => {
-															if (cell.kind === 'custom') {
-																push({kind: 'custom-base'});
-															} else if (cell.preset) {
-																setSelectedPreset(cell.preset);
-																setPresetAuth('api');
-																setInput('');
-																if (cell.preset.authMethods?.length) {
-																	push({kind: 'methods'});
-																} else {
-																	push({kind: 'apikey'});
+							<For each={visibleGridRows()}>
+								{entry => (
+									<box flexDirection="row" height={2}>
+										<For each={entry.cells}>
+											{(cell, colIndex) => {
+												if (!cell?.preset) {
+													return <box width={cellWidth()} height={2} />;
+												}
+												const active = pickerSelection(cell);
+												const gridPosition = entry.row * columns() + colIndex();
+												return (
+													<box
+														width={cellWidth()}
+														flexDirection="column"
+														height={2}
+														backgroundColor={
+															active ? activeRow().bg : undefined
+														}
+														{...({
+															onMouseMove: () => setIndex(gridPosition),
+															onMouseUp: () => {
+																if (cell.kind === 'custom') {
+																	push({kind: 'custom-base'});
+																} else if (cell.preset) {
+																	setSelectedPreset(cell.preset);
+																	setPresetAuth('api');
+																	setInput('');
+																	if (cell.preset.authMethods?.length) {
+																		push({kind: 'methods'});
+																	} else {
+																		push({kind: 'apikey'});
+																	}
 																}
-															}
-														},
-													} as any)}
-												>
-													<box flexDirection="row" height={1}>
-														<text
-															fg={active ? activeRow().fg : colors().text}
-															attributes={bold()}
-														>
-															{active ? '❯ ' : '  '}
-															{truncateCell(
-																cell.preset.title,
-																Math.max(6, cellWidth() - 14),
-															)}
-														</text>
-														<box flexGrow={1} />
-														<Show when={cell.count && cell.count > 0}>
-															<text fg={colors().success} attributes={dim()}>
-																{cell.count} connected
+															},
+														} as any)}
+													>
+														<box flexDirection="row" height={1}>
+															<text
+																fg={active ? activeRow().fg : colors().text}
+																attributes={bold()}
+															>
+																{active ? '❯ ' : '  '}
+																{truncateCell(
+																	cell.preset.title,
+																	Math.max(6, cellWidth() - 14),
+																)}
 															</text>
-														</Show>
+															<box flexGrow={1} />
+															<Show when={cell.count && cell.count > 0}>
+																<text fg={colors().success} attributes={dim()}>
+																	{cell.count} connected
+																</text>
+															</Show>
+														</box>
+														<box height={1} paddingLeft={2}>
+															<text fg={colors().secondary} attributes={dim()}>
+																{truncateCell(
+																	cell.preset.description ?? 'Custom provider',
+																	Math.max(8, cellWidth() - 4),
+																)}
+															</text>
+														</box>
 													</box>
-													<box height={1} paddingLeft={2}>
-														<text fg={colors().secondary} attributes={dim()}>
-															{truncateCell(
-																cell.preset.description ?? 'Custom provider',
-																Math.max(8, cellWidth() - 4),
-															)}
-														</text>
-													</box>
-												</box>
-											);
-										}}
-									</For>
-								</box>
-							)}
-						</For>
+												);
+											}}
+										</For>
+									</box>
+								)}
+							</For>
+						</Show>
+						<box flexGrow={1} />
+						<text fg={colors().secondary} attributes={dim()}>
+							↑↓←→ navigate · Enter choose · Esc close
+						</text>
 					</Show>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						↑↓←→ navigate · Enter choose · Esc close
-					</text>
-				</Show>
+				</box>
 			</box>
 		</box>
 	);

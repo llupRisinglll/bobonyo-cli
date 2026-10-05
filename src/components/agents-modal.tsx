@@ -3,6 +3,7 @@ import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
 import {loadPreferences} from '../config';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -55,10 +56,11 @@ export function AgentsModal(props: {
 	});
 	const mountedAt = Date.now();
 	const isOpeningRelease = () => Date.now() - mountedAt < 400;
-	const cardWidth = () => Math.min(84, Math.max(60, dims().width - 6));
-	const cardHeight = () => Math.min(24, Math.max(10, dims().height - 2));
+	const cardWidth = () => Math.min(84, Math.max(1, dims().width - 2));
+	const cardHeight = () =>
+		Math.min(24, Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)));
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const entries = createMemo<AgentEntry[]>(() => {
 		version();
@@ -111,7 +113,7 @@ export function AgentsModal(props: {
 		queueMicrotask(() => setModelAgent(entry));
 	};
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (detail() || modelAgent()) return;
 		if (confirmingDelete()) {
 			if (event.name.toLowerCase() === 'y') {
@@ -172,7 +174,8 @@ export function AgentsModal(props: {
 			setQuery(prev => prev + char);
 			setIndex(0);
 		}
-	});
+	};
+	useKeyboard(handleKey);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
 		x <= cardX() + cardWidth() &&
@@ -225,6 +228,7 @@ export function AgentsModal(props: {
 				}
 			>
 				<box
+					onMouseScroll={modalWheel(handleKey)}
 					position="absolute"
 					left={0}
 					top={0}
@@ -248,84 +252,92 @@ export function AgentsModal(props: {
 				>
 					<box
 						width={cardWidth()}
+						height={cardHeight()}
 						backgroundColor={colors().base}
-						paddingX={2}
-						paddingY={1}
+						overflow="hidden"
 					>
-						<Show
-							when={!confirmingDelete()}
-							fallback={
-								<box flexDirection="column">
-									<text fg={colors().warning} attributes={bold()}>
-										Delete agent
-									</text>
-									<box height={1} />
-									<text fg={colors().text}>
-										Delete "{confirmingDelete()?.label}"? This removes its
-										markdown file and cannot be undone.
-									</text>
-									<box height={1} />
-									<text fg={colors().secondary} attributes={dim()}>
-										(y) delete · (n) cancel
-									</text>
-								</box>
-							}
+						<ModalHeader
+							width={cardWidth()}
+							title={confirmingDelete() ? 'Delete agent' : 'Agents'}
+							hint={`⌕ ${query() || 'search…'}`}
+							caps={dims().height >= 9}
+						/>
+						<box
+							flexDirection="column"
+							flexGrow={1}
+							minHeight={0}
+							overflow="hidden"
+							paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+							paddingY={dims().height >= 9 ? 1 : 0}
 						>
-							<box flexDirection="row" height={1}>
-								<text fg={colors().primary} attributes={bold()}>
-									Agents
-								</text>
-								<box flexGrow={1} />
-								<text fg={colors().secondary} attributes={dim()}>
-									⌕ {query() || 'search…'}
-								</text>
-							</box>
-							<box height={1} />
-							<For
-								each={entries().map((entry, idx) => ({
-									entry,
-									active: idx === index(),
-								}))}
-							>
-								{({entry, active}) => (
-									<box
-										flexDirection="row"
-										height={1}
-										backgroundColor={active ? activeRow().bg : undefined}
-										{...({
-											onMouseMove: () => setIndex(entries().indexOf(entry)),
-											onMouseUp: () => setModelAgent(entry),
-										} as any)}
-									>
-										<text
-											fg={active ? activeRow().fg : colors().text}
-											attributes={bold()}
-										>
-											{active ? '❯ ' : '  '}
-											{entry.label}
+							<Show
+								when={!confirmingDelete()}
+								fallback={
+									<box flexDirection="column">
+										<text fg={colors().text}>
+											Delete "{confirmingDelete()?.label}"? This removes its
+											markdown file and cannot be undone.
 										</text>
-										<text fg={active ? activeRow().fg : colors().secondary}>
-											{' '}
-											· {entry.model ?? 'inherit'}
-										</text>
-										<box flexGrow={1} />
+										<box height={1} />
 										<text fg={colors().secondary} attributes={dim()}>
-											{entry.source}
+											(y) delete · (n) cancel
 										</text>
 									</box>
-								)}
-							</For>
-							<Show when={entries().length === 0}>
+								}
+							>
+								<box height={1} />
+								<For
+									each={entries()
+										.slice(
+											Math.max(0, index() - Math.max(1, cardHeight() - 9) + 1),
+											Math.max(0, index() - Math.max(1, cardHeight() - 9) + 1) +
+												Math.max(1, cardHeight() - 9),
+										)
+										.map(entry => ({
+											entry,
+											active: entries().indexOf(entry) === index(),
+										}))}
+								>
+									{({entry, active}) => (
+										<box
+											flexDirection="row"
+											height={1}
+											backgroundColor={active ? activeRow().bg : undefined}
+											{...({
+												onMouseMove: () => setIndex(entries().indexOf(entry)),
+												onMouseUp: () => setModelAgent(entry),
+											} as any)}
+										>
+											<text
+												fg={active ? activeRow().fg : colors().text}
+												attributes={bold()}
+											>
+												{active ? '❯ ' : '  '}
+												{entry.label}
+											</text>
+											<text fg={active ? activeRow().fg : colors().secondary}>
+												{' '}
+												· {entry.model ?? 'inherit'}
+											</text>
+											<box flexGrow={1} />
+											<text fg={colors().secondary} attributes={dim()}>
+												{entry.source}
+											</text>
+										</box>
+									)}
+								</For>
+								<Show when={entries().length === 0}>
+									<text fg={colors().secondary} attributes={dim()}>
+										No agents match.
+									</text>
+								</Show>
+								<box height={1} />
 								<text fg={colors().secondary} attributes={dim()}>
-									No agents match.
+									↑/↓ select · Enter model · V view prompt · D delete custom ·
+									Esc close
 								</text>
 							</Show>
-							<box height={1} />
-							<text fg={colors().secondary} attributes={dim()}>
-								↑/↓ select · Enter model · V view prompt · D delete custom · Esc
-								close
-							</text>
-						</Show>
+						</box>
 					</box>
 				</box>
 			</Show>

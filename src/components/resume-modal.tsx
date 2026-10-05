@@ -2,6 +2,7 @@
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -137,23 +138,23 @@ export function ResumeModal(props: {
 	const dim = () => createTextAttributes({dim: true});
 	// Active-row palette: info tint + guaranteed-readable foreground.
 	const activeRow = () => activeRowPalette(colors());
-	const cardWidth = () => Math.min(72, Math.max(52, dims().width - 6));
+	const cardWidth = () => Math.min(72, Math.max(1, dims().width - 2));
 	// Bound the card to the screen and CENTER it vertically (the previous
 	// quarter-height placement overflowed on short terminals). FIT-CONTENT:
 	// the card is exactly the session list height + chrome, capped by the
 	// window (a few sessions shrink the card, a long list scrolls).
 	const cardHeight = () => {
-		const available = Math.max(8, dims().height - 2);
+		const available = Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0));
 		const lineCount = (row: Row): number =>
 			row.kind === 'session' &&
 			(row.session.lastMessage ?? row.session.firstMessage ?? '').trim()
 				? 2
 				: 1;
 		const content = allRows().reduce((sum, row) => sum + lineCount(row), 0);
-		return Math.min(26, Math.max(10, Math.min(content + 10, available)));
+		return Math.min(available, 26, Math.max(10, content + 10));
 	};
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const listVisible = () => Math.max(3, cardHeight() - 10);
 
@@ -253,7 +254,7 @@ export function ResumeModal(props: {
 		if (first !== -1 && rowIndex() !== first) setRowIndex(first);
 	});
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		// Same modal isolation as every other modal: the global handlers in
 		// App/History/InputBox already preventDefault while the modal is
 		// open; this keeps the history scrollbox from acting on modal keys.
@@ -292,7 +293,8 @@ export function ResumeModal(props: {
 			setQuery(prev => prev + char);
 			setRowIndex(0);
 		}
-	});
+	};
+	useKeyboard(handleKey);
 
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -302,6 +304,7 @@ export function ResumeModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -326,155 +329,163 @@ export function ResumeModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={2}
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						Resume session
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						Esc close
-					</text>
-				</box>
-				<box height={1} />
-				{/* opencode-style title spacing: a comfortable gap before the
-				    search field. */}
-				<box height={1} />
+				<ModalHeader
+					width={cardWidth()}
+					title={'Resume session'}
+					hint={'Esc close'}
+					caps={dims().height >= 9}
+				/>
 				<box
-					border
-					borderStyle="rounded"
-					borderColor={colors().secondary}
-					paddingX={1}
-					flexDirection="row"
-					height={3}
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
 				>
-					<text fg={colors().secondary}>⌕ </text>
-					<Show
-						when={query().length === 0}
-						fallback={<text fg={colors().text}>{query()}▌</text>}
+					<box height={1} />
+					{/* opencode-style title spacing: a comfortable gap before the
+				    search field. */}
+					<box height={1} />
+					<box
+						border
+						borderStyle="rounded"
+						borderColor={colors().secondary}
+						paddingX={1}
+						flexDirection="row"
+						height={3}
 					>
-						<text fg={colors().secondary}>Type to filter…</text>
-					</Show>
-				</box>
-				<box height={1} />
-				{/* SCOPE indicator: current folder by default, Ctrl+A toggles
+						<text fg={colors().secondary}>⌕ </text>
+						<Show
+							when={query().length === 0}
+							fallback={<text fg={colors().text}>{query()}▌</text>}
+						>
+							<text fg={colors().secondary}>Type to filter…</text>
+						</Show>
+					</box>
+					<box height={1} />
+					{/* SCOPE indicator: current folder by default, Ctrl+A toggles
 				    to ALL conversations. */}
-				<Show
-					when={!showAll()}
-					fallback={
+					<Show
+						when={!showAll()}
+						fallback={
+							<text fg={colors().secondary} attributes={dim()}>
+								Showing all conversations · Ctrl+A: this folder
+							</text>
+						}
+					>
 						<text fg={colors().secondary} attributes={dim()}>
-							Showing all conversations · Ctrl+A: this folder
+							Showing conversations in {props.cwd} · Ctrl+A: all
 						</text>
-					}
-				>
-					<text fg={colors().secondary} attributes={dim()}>
-						Showing conversations in {props.cwd} · Ctrl+A: all
-					</text>
-				</Show>
-				<box height={1} />
-				<For each={visibleItems()}>
-					{item => {
-						const row = item.row;
-						if (row.kind === 'empty') {
-							return (
-								<text fg={colors().secondary} attributes={dim()}>
-									No sessions match "{query()}"
-								</text>
-							);
-						}
-						if (row.kind === 'header') {
-							return (
-								<box flexDirection="row" height={1}>
-									<text fg={colors().primary} attributes={bold()}>
-										{'  '}
-										{row.label}
+					</Show>
+					<box height={1} />
+					<For each={visibleItems()}>
+						{item => {
+							const row = item.row;
+							if (row.kind === 'empty') {
+								return (
+									<text fg={colors().secondary} attributes={dim()}>
+										No sessions match "{query()}"
 									</text>
-								</box>
-							);
-						}
-						if (row.kind === 'spacer') {
-							return <box height={1} />;
-						}
-						const reason = (
-							row.session.lastMessage ??
-							row.session.firstMessage ??
-							''
-						).trim();
-						return (
-							<box
-								flexDirection="column"
-								height={reason ? 2 : 1}
-								backgroundColor={item.active ? activeRow().bg : undefined}
-								{...({
-									onMouseUp: () => props.onResume(row.session.id),
-									onMouseMove: () =>
-										setRowIndex(
-											allRows().findIndex(
-												r =>
-													r.kind === 'session' &&
-													r.session.id === row.session.id,
+								);
+							}
+							if (row.kind === 'header') {
+								return (
+									<box flexDirection="row" height={1}>
+										<text fg={colors().primary} attributes={bold()}>
+											{'  '}
+											{row.label}
+										</text>
+									</box>
+								);
+							}
+							if (row.kind === 'spacer') {
+								return <box height={1} />;
+							}
+							const reason = (
+								row.session.lastMessage ??
+								row.session.firstMessage ??
+								''
+							).trim();
+							return (
+								<box
+									flexDirection="column"
+									height={reason ? 2 : 1}
+									backgroundColor={item.active ? activeRow().bg : undefined}
+									{...({
+										onMouseUp: () => props.onResume(row.session.id),
+										onMouseMove: () =>
+											setRowIndex(
+												allRows().findIndex(
+													r =>
+														r.kind === 'session' &&
+														r.session.id === row.session.id,
+												),
 											),
-										),
-								} as any)}
-							>
-								{/* TITLE line: `session_id: conversation_name`
+									} as any)}
+								>
+									{/* TITLE line: `session_id: conversation_name`
 								    (name omitted when still the default "New
 								    conversation") + flexGrow + "how long
 								    ago" on ONE row. */}
-								<box flexDirection="row">
-									<text
-										fg={item.active ? activeRow().fg : colors().text}
-										attributes={item.active ? bold() : undefined}
-									>
-										{item.active ? '❯ ' : '  '}
-										{sessionLabel(row.session).slice(0, 48)}
-									</text>
-									<Show when={row.session.model}>
+									<box flexDirection="row">
+										<text
+											fg={item.active ? activeRow().fg : colors().text}
+											attributes={item.active ? bold() : undefined}
+										>
+											{item.active ? '❯ ' : '  '}
+											{sessionLabel(row.session).slice(0, 48)}
+										</text>
+										<Show when={row.session.model}>
+											<text
+												fg={item.active ? activeRow().fg : colors().secondary}
+												attributes={dim()}
+											>
+												{' · '}
+												{row.session.model}
+												{row.session.provider
+													? ` · ${row.session.provider}`
+													: ''}
+											</text>
+										</Show>
+										<box flexGrow={1} />
 										<text
 											fg={item.active ? activeRow().fg : colors().secondary}
-											attributes={dim()}
+											attributes={item.active ? bold() : dim()}
 										>
-											{' · '}
-											{row.session.model}
-											{row.session.provider ? ` · ${row.session.provider}` : ''}
+											{relativeTime(
+												row.session.updatedAt ?? row.session.createdAt,
+											)}
 										</text>
-									</Show>
-									<box flexGrow={1} />
-									<text
-										fg={item.active ? activeRow().fg : colors().secondary}
-										attributes={item.active ? bold() : dim()}
-									>
-										{relativeTime(
-											row.session.updatedAt ?? row.session.createdAt,
-										)}
-									</text>
-								</box>
-								{/* The LAST PROMPT sits BELOW the title with a
+									</box>
+									{/* The LAST PROMPT sits BELOW the title with a
 								    ` └ ` branch, secondary (dimmed) — same
 								    color rule as the other optional lines. */}
-								{reason ? (
-									<text
-										fg={item.active ? activeRow().fg : colors().secondary}
-										attributes={item.active ? bold() : dim()}
-									>
-										{' └ '}
-										{reason.slice(0, 44)}
-									</text>
-								) : (
-									<></>
-								)}
-							</box>
-						);
-					}}
-				</For>
-				<box height={1} />
-				<text fg={colors().secondary} attributes={dim()}>
-					↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} ·
-					Esc close
-				</text>
+									{reason ? (
+										<text
+											fg={item.active ? activeRow().fg : colors().secondary}
+											attributes={item.active ? bold() : dim()}
+										>
+											{' └ '}
+											{reason.slice(0, 44)}
+										</text>
+									) : (
+										<></>
+									)}
+								</box>
+							);
+						}}
+					</For>
+					<box height={1} />
+					<text fg={colors().secondary} attributes={dim()}>
+						↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} ·
+						Esc close
+					</text>
+				</box>
 			</box>
 		</box>
 	);

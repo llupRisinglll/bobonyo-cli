@@ -1,11 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -52,22 +49,21 @@ export function CommandsModal(props: {
 
 	const [index, setIndex] = createSignal(0);
 
-	const cardWidth = () => Math.min(100, Math.max(72, dims().width - 6));
+	const cardWidth = () => Math.min(100, Math.max(1, dims().width - 2));
 	// RESPONSIVE: use nearly the whole terminal height (headers + search +
 	// footer + padding ≈ 7 rows of chrome), capped only by the screen.
-	const listVisible = () =>
-		Math.max(6, Math.min(60, dims().height - 9));
+	const listVisible = () => Math.max(1, Math.min(60, dims().height - 11));
 	// FIT-CONTENT: the card is exactly the command list height + chrome,
 	// capped by the window (short lists shrink the card, long ones scroll).
 	const contentLines = () =>
 		rows().reduce((sum, row) => sum + rowLines(row), 0);
 	const cardHeight = () =>
 		Math.min(
-			dims().height - 2,
-			Math.max(10, Math.min(contentLines(), listVisible()) + 7),
+			Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)),
+			Math.max(10, Math.min(contentLines(), listVisible()) + 9),
 		);
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const descWidth = () => Math.max(30, cardWidth() - 34);
 
@@ -111,7 +107,9 @@ export function CommandsModal(props: {
 				{kind: 'custom', entries: all.filter(e => e.kind === 'custom')},
 				{kind: 'skill', entries: all.filter(e => e.kind === 'skill')},
 			].filter(
-				(group): group is {kind: CommandEntry['kind']; entries: CommandEntry[]} =>
+				(
+					group,
+				): group is {kind: CommandEntry['kind']; entries: CommandEntry[]} =>
 					group.entries.length > 0,
 			);
 		const flat: Array<{
@@ -122,21 +120,30 @@ export function CommandsModal(props: {
 		for (const group of groups) {
 			flat.push({header: group.kind});
 			for (const entry of group.entries) {
-				flat.push({entry, wrapped: wrapDescription(entry.description, descWidth())});
+				flat.push({
+					entry,
+					wrapped: wrapDescription(entry.description, descWidth()),
+				});
 			}
 		}
 		return flat;
 	});
 	/** Header = 1 line; entry = 1 + (description wrap up to 2 lines). */
-	const rowLines = (
-		row: {header?: string; entry?: CommandEntry; wrapped?: string[]},
-	): number => row.header ? 1 : Math.max(1, Math.min(2, row.wrapped?.length ?? 1));
+	const rowLines = (row: {
+		header?: string;
+		entry?: CommandEntry;
+		wrapped?: string[];
+	}): number =>
+		row.header ? 1 : Math.max(1, Math.min(2, row.wrapped?.length ?? 1));
 
 	const scrollStart = () => {
 		// Walk backward from the SELECTED row until the window fits
 		// the CARD (headers 1 line, entries 1-2 lines), so the selection is
 		// always visible and the window never renders below the card edge.
-		const windowBudget = cardHeight() - 7;
+		const windowBudget = Math.max(
+			1,
+			cardHeight() - (dims().height >= 9 ? 9 : 5),
+		);
 		let start = index();
 		let lines = 0;
 		while (start > 0 && lines < windowBudget) {
@@ -159,14 +166,18 @@ export function CommandsModal(props: {
 		for (let i = start; i < all.length; i++) {
 			const row = all[i]!;
 			const rl = rowLines(row);
-			if (out.length > 0 && lines + rl > cardHeight() - 7) break;
+			if (
+				out.length > 0 &&
+				lines + rl > Math.max(1, cardHeight() - (dims().height >= 9 ? 9 : 5))
+			)
+				break;
 			out.push(row);
 			lines += rl;
 		}
 		return out;
 	});
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			if (query()) setQuery('');
 			else props.onClose();
@@ -203,7 +214,8 @@ export function CommandsModal(props: {
 			setQuery(prev => prev + char);
 			setIndex(0);
 		}
-	});
+	};
+	useKeyboard(handleKey);
 
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -213,6 +225,7 @@ export function CommandsModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -237,109 +250,108 @@ export function CommandsModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						Commands
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						{entries().length} commands · ↑/↓ + Enter insert · Esc close
-					</text>
-				</box>
-				<box height={1} />
-				<box height={1}>
-					<text fg={colors().secondary} attributes={dim()}>
-						⌕ {query() || 'search…'}
-					</text>
-				</box>
-				<box height={1} />
-				<For each={visibleRows()}>
-					{(row, i) => {
-						const rowIndex = i() + scrollStart();
-						return row.header ? (
-							<box height={1} paddingLeft={1}>
-								<text fg={colors().secondary} attributes={bold()}>
-									{row.header === 'built-in'
-										? 'Built-in'
-										: row.header === 'skill'
-											? 'Skills'
-											: 'Custom'}
-								</text>
-							</box>
-						) : (
-							<box
-								flexDirection="column"
-								height={rowLines(row)}
-								backgroundColor={
-									rowIndex === index()
-										? activeRow().bg
-										: undefined
-								}
-								{...({
-									onMouseMove: () => setIndex(rowIndex),
-									onMouseUp: () =>
-										props.onInsert(`/${row.entry!.name} `),
-								} as any)}
-							>
-								<box flexDirection="row" height={1}>
-									<text
-										width={2}
-										fg={
-											rowIndex === index()
-												? activeRow().fg
-												: colors().secondary
-										}
-									>
-										{rowIndex === index() ? '❯ ' : '  '}
-									</text>
-									<text
-										width={30}
-										fg={
-											rowIndex === index()
-												? activeRow().fg
-												: colors().text
-										}
-										attributes={bold()}
-									>
-										/{row.entry!.name}
-									</text>
-									<text
-										fg={
-											rowIndex === index()
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={dim()}
-									>
-										{row.wrapped?.[0] ?? ''}
+				<ModalHeader
+					width={cardWidth()}
+					title={'Commands'}
+					hint={` ${entries().length} commands · Esc close`}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
+				>
+					<box height={dims().height >= 9 ? 1 : 0} />
+					<box height={1}>
+						<text fg={colors().secondary} attributes={dim()}>
+							⌕ {query() || 'search…'}
+						</text>
+					</box>
+					<box height={dims().height >= 9 ? 1 : 0} />
+					<For each={visibleRows()}>
+						{(row, i) => {
+							const rowIndex = i() + scrollStart();
+							return row.header ? (
+								<box height={1} paddingLeft={1}>
+									<text fg={colors().secondary} attributes={bold()}>
+										{row.header === 'built-in'
+											? 'Built-in'
+											: row.header === 'skill'
+												? 'Skills'
+												: 'Custom'}
 									</text>
 								</box>
-								<Show when={(row.wrapped?.length ?? 1) > 1}>
-									<text
-										fg={
-											rowIndex === index()
-												? activeRow().fg
-												: colors().secondary
-										}
-										attributes={dim()}
-									>
-										{' '.repeat(32)}
-										{row.wrapped?.[1] ?? ''}
-									</text>
-								</Show>
-							</box>
-						);
-					}}
-				</For>
-				<Show when={entries().length === 0}>
-					<text fg={colors().secondary} attributes={dim()}>
-						No commands match.
-					</text>
-				</Show>
+							) : (
+								<box
+									flexDirection="column"
+									height={rowLines(row)}
+									backgroundColor={
+										rowIndex === index() ? activeRow().bg : undefined
+									}
+									{...({
+										onMouseMove: () => setIndex(rowIndex),
+										onMouseUp: () => props.onInsert(`/${row.entry!.name} `),
+									} as any)}
+								>
+									<box flexDirection="row" height={1}>
+										<text
+											width={2}
+											fg={
+												rowIndex === index()
+													? activeRow().fg
+													: colors().secondary
+											}
+										>
+											{rowIndex === index() ? '❯ ' : '  '}
+										</text>
+										<text
+											width={30}
+											fg={rowIndex === index() ? activeRow().fg : colors().text}
+											attributes={bold()}
+										>
+											/{row.entry!.name}
+										</text>
+										<text
+											fg={
+												rowIndex === index()
+													? activeRow().fg
+													: colors().secondary
+											}
+											attributes={dim()}
+										>
+											{row.wrapped?.[0] ?? ''}
+										</text>
+									</box>
+									<Show when={(row.wrapped?.length ?? 1) > 1}>
+										<text
+											fg={
+												rowIndex === index()
+													? activeRow().fg
+													: colors().secondary
+											}
+											attributes={dim()}
+										>
+											{' '.repeat(32)}
+											{row.wrapped?.[1] ?? ''}
+										</text>
+									</Show>
+								</box>
+							);
+						}}
+					</For>
+					<Show when={entries().length === 0}>
+						<text fg={colors().secondary} attributes={dim()}>
+							No commands match.
+						</text>
+					</Show>
+				</box>
 			</box>
 		</box>
 	);

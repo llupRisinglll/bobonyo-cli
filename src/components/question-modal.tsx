@@ -6,6 +6,7 @@ import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
 import {wrapQuestionText} from './question-modal-wrap';
+import {ModalHeader, modalWheel} from './modal-header';
 
 export interface QuestionOption {
 	label: string;
@@ -36,8 +37,8 @@ export function QuestionModal(props: {
 		Math.max(1, Math.min(82, dims().width - (dims().width >= 60 ? 8 : 2)));
 	const paddingX = () => (cardWidth() >= 16 ? 2 : 0);
 	const paddingY = () => (dims().height >= 12 ? 1 : 0);
-	// Both border columns and both horizontal padding insets consume cells.
-	const contentWidth = () => Math.max(1, cardWidth() - 2 - paddingX() * 2);
+	const headerHeight = () => (dims().height >= 12 ? 3 : 1);
+	const contentWidth = () => Math.max(1, cardWidth() - paddingX() * 2);
 	const questionRows = createMemo(() =>
 		wrapQuestionText(props.question, contentWidth()),
 	);
@@ -69,7 +70,7 @@ export function QuestionModal(props: {
 			0,
 		);
 	const customFocused = () => !editing() && index() === options().length;
-	const bodyHeight = () => optionRows() + questionRows().length + 5;
+	const bodyHeight = () => optionRows() + questionRows().length + 3;
 	const cardHeight = () =>
 		Math.max(
 			1,
@@ -78,12 +79,15 @@ export function QuestionModal(props: {
 				bodyHeight() +
 					customRows().length +
 					footerRows().length +
-					2 +
+					headerHeight() +
 					paddingY() * 2,
 			),
 		);
 	const availableHeight = () =>
-		Math.max(0, cardHeight() - 2 - paddingY() * 2 - footerRows().length);
+		Math.max(
+			0,
+			cardHeight() - headerHeight() - paddingY() * 2 - footerRows().length,
+		);
 	const customHeight = () =>
 		Math.min(
 			customRows().length,
@@ -100,7 +104,7 @@ export function QuestionModal(props: {
 		if (editing()) return 0;
 		const focusedRow =
 			questionRows().length +
-			3 +
+			1 +
 			options()
 				.slice(0, index())
 				.reduce((total, option) => total + (option.description ? 2 : 1), 0);
@@ -143,7 +147,7 @@ export function QuestionModal(props: {
 		setEditing(true);
 		setCustom(value => value + new TextDecoder().decode(event.bytes));
 	});
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		event.preventDefault();
 		if (event.name === 'escape') {
 			if (editing()) return setEditing(false);
@@ -184,9 +188,11 @@ export function QuestionModal(props: {
 			return true;
 		}
 		return true;
-	});
+	};
+	useKeyboard(handleKey);
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -201,150 +207,149 @@ export function QuestionModal(props: {
 				width={cardWidth()}
 				height={cardHeight()}
 				backgroundColor={colors().base}
-				border
-				borderStyle="rounded"
-				borderColor={colors().primary}
-				paddingX={paddingX()}
-				paddingY={paddingY()}
 				flexDirection="column"
 				flexShrink={0}
 				overflow="hidden"
 			>
+				<ModalHeader
+					width={cardWidth()}
+					title={props.header || 'Question'}
+					caps={headerHeight() === 3}
+				/>
 				<box
-					height={visibleBodyHeight()}
-					flexShrink={0}
-					overflow="hidden"
 					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					paddingX={paddingX()}
+					paddingY={paddingY()}
 				>
 					<box
-						position="absolute"
-						top={-bodyOffset()}
-						width={contentWidth()}
-						height={bodyHeight()}
+						height={visibleBodyHeight()}
 						flexShrink={0}
+						overflow="hidden"
 						flexDirection="column"
 					>
-						<text
-							height={1}
-							wrapMode="none"
-							fg={colors().primary}
-							attributes={bold()}
-						>
-							{props.header || 'Question'}
-						</text>
-						<box height={1} />
-						<For each={questionRows()}>
-							{line => (
-								<text height={1} wrapMode="none" fg={colors().text}>
-									{line || ' '}
-								</text>
-							)}
-						</For>
-						<box height={1} />
-						<For each={options()}>
-							{(option, optionIndex) => {
-								const focused = () => !editing() && optionIndex() === index();
-								const checked = () => selected().has(optionIndex());
-								return (
-									<box
-										height={option.description ? 2 : 1}
-										flexDirection="column"
-										backgroundColor={focused() ? active().bg : undefined}
-										{...({
-											onMouseMove: () => {
-												if (editing()) return;
-												setIndex(optionIndex());
-											},
-											onMouseUp: () => {
-												if (editing()) return;
-												setIndex(optionIndex());
-												if (props.multiple) toggleCurrent();
-												else props.onAnswer(option.label);
-											},
-										} as any)}
-									>
-										<box height={1} flexDirection="row">
-											<text
-												width={4}
-												fg={focused() ? active().fg : colors().secondary}
-											>
-												{props.multiple
-													? checked()
-														? '[x]'
-														: '[ ]'
-													: focused()
-														? '❯'
-														: ' '}
-											</text>
-											<text fg={focused() ? active().fg : colors().text}>
-												{option.label}
-											</text>
-										</box>
-										<Show when={option.description}>
-											<text
-												fg={focused() ? active().fg : colors().secondary}
-												attributes={dim()}
-											>
-												{'    ' + option.description}
-											</text>
-										</Show>
-									</box>
-								);
-							}}
-						</For>
 						<box
-							height={1}
-							flexDirection="row"
-							backgroundColor={customFocused() ? active().bg : undefined}
-							onMouseMove={() => {
-								if (!editing()) setIndex(options().length);
-							}}
-							onMouseUp={() => {
-								setIndex(options().length);
-								setEditing(true);
-							}}
+							position="absolute"
+							top={-bodyOffset()}
+							width={contentWidth()}
+							height={bodyHeight()}
+							flexShrink={0}
+							flexDirection="column"
 						>
-							<text
-								width={4}
-								fg={customFocused() ? active().fg : colors().secondary}
+							<For each={questionRows()}>
+								{line => (
+									<text height={1} wrapMode="none" fg={colors().text}>
+										{line || ' '}
+									</text>
+								)}
+							</For>
+							<box height={1} />
+							<For each={options()}>
+								{(option, optionIndex) => {
+									const focused = () => !editing() && optionIndex() === index();
+									const checked = () => selected().has(optionIndex());
+									return (
+										<box
+											height={option.description ? 2 : 1}
+											flexDirection="column"
+											backgroundColor={focused() ? active().bg : undefined}
+											{...({
+												onMouseMove: () => {
+													if (editing()) return;
+													setIndex(optionIndex());
+												},
+												onMouseUp: () => {
+													if (editing()) return;
+													setIndex(optionIndex());
+													if (props.multiple) toggleCurrent();
+													else props.onAnswer(option.label);
+												},
+											} as any)}
+										>
+											<box height={1} flexDirection="row">
+												<text
+													width={4}
+													fg={focused() ? active().fg : colors().secondary}
+												>
+													{props.multiple
+														? checked()
+															? '[x]'
+															: '[ ]'
+														: focused()
+															? '❯'
+															: ' '}
+												</text>
+												<text fg={focused() ? active().fg : colors().text}>
+													{option.label}
+												</text>
+											</box>
+											<Show when={option.description}>
+												<text
+													fg={focused() ? active().fg : colors().secondary}
+													attributes={dim()}
+												>
+													{'    ' + option.description}
+												</text>
+											</Show>
+										</box>
+									);
+								}}
+							</For>
+							<box
+								height={1}
+								flexDirection="row"
+								backgroundColor={customFocused() ? active().bg : undefined}
+								onMouseMove={() => {
+									if (!editing()) setIndex(options().length);
+								}}
+								onMouseUp={() => {
+									setIndex(options().length);
+									setEditing(true);
+								}}
 							>
-								{customFocused() ? '❯' : ' '}
-							</text>
-							<text
-								wrapMode="none"
-								fg={customFocused() ? active().fg : colors().text}
-							>
-								Custom answer…
-							</text>
+								<text
+									width={4}
+									fg={customFocused() ? active().fg : colors().secondary}
+								>
+									{customFocused() ? '❯' : ' '}
+								</text>
+								<text
+									wrapMode="none"
+									fg={customFocused() ? active().fg : colors().text}
+								>
+									Custom answer…
+								</text>
+							</box>
+							<box height={1} />
 						</box>
-						<box height={1} />
 					</box>
+					<For each={visibleCustomRows()}>
+						{line => (
+							<text
+								height={1}
+								flexShrink={0}
+								wrapMode="none"
+								fg={custom() ? colors().primary : colors().secondary}
+							>
+								{line || ' '}
+							</text>
+						)}
+					</For>
+					<For each={footerRows()}>
+						{line => (
+							<text
+								height={1}
+								flexShrink={0}
+								wrapMode="none"
+								fg={colors().secondary}
+								attributes={dim()}
+							>
+								{line}
+							</text>
+						)}
+					</For>
 				</box>
-				<For each={visibleCustomRows()}>
-					{line => (
-						<text
-							height={1}
-							flexShrink={0}
-							wrapMode="none"
-							fg={custom() ? colors().primary : colors().secondary}
-						>
-							{line || ' '}
-						</text>
-					)}
-				</For>
-				<For each={footerRows()}>
-					{line => (
-						<text
-							height={1}
-							flexShrink={0}
-							wrapMode="none"
-							fg={colors().secondary}
-							attributes={dim()}
-						>
-							{line}
-						</text>
-					)}
-				</For>
 			</box>
 		</box>
 	);

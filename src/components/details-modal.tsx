@@ -2,6 +2,7 @@
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors, type Colors} from '../theme';
 
 export interface DetailSegment {
@@ -260,7 +261,7 @@ export function DetailsModal(props: {
 	const colorLine = (line: string) =>
 		colorDetailLine(line, colors(), {bold, dim});
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			props.onClose();
 			return;
@@ -297,7 +298,8 @@ export function DetailsModal(props: {
 		if (event.name === 'pagedown') {
 			setScroll(Math.min(maxScroll(), effectiveScroll() + 10));
 		}
-	});
+	};
+	useKeyboard(handleKey);
 
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -307,6 +309,7 @@ export function DetailsModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -334,55 +337,12 @@ export function DetailsModal(props: {
 				height={cardHeight()}
 				backgroundColor={colors().base}
 			>
-				<Show when={headerPaddingY()}>
-					<text
-						height={1}
-						flexShrink={0}
-						fg={colors().primary}
-						bg={colors().base}
-						wrapMode="none"
-					>
-						{'▄'.repeat(cardWidth())}
-					</text>
-				</Show>
-				<box
-					flexDirection="row"
-					height={1}
-					flexShrink={0}
-					backgroundColor={colors().primary}
-					overflow="hidden"
-				>
-					<box width={bodyInset()} />
-					<text
-						fg={colors().base}
-						attributes={bold()}
-						width={Math.max(
-							1,
-							contentWidth() - headerHint().length - (headerHint() ? 1 : 0),
-						)}
-						wrapMode="none"
-					>
-						{props.title || 'Tool details'}
-					</text>
-					<Show when={headerHint()}>
-						<box width={1} />
-						<text fg={colors().base} wrapMode="none" flexShrink={0}>
-							{headerHint()}
-						</text>
-					</Show>
-					<box width={bodyInset()} />
-				</box>
-				<Show when={headerPaddingY()}>
-					<text
-						height={1}
-						flexShrink={0}
-						fg={colors().primary}
-						bg={colors().base}
-						wrapMode="none"
-					>
-						{'▀'.repeat(cardWidth())}
-					</text>
-				</Show>
+				<ModalHeader
+					width={cardWidth()}
+					title={props.title || 'Tool details'}
+					hint={headerHint()}
+					caps={Boolean(headerPaddingY())}
+				/>
 				<box
 					flexDirection="column"
 					height={bodyHeight()}

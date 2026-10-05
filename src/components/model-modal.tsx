@@ -2,6 +2,7 @@
 import {createEffect, createMemo, createSignal, For, on, Show} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -148,7 +149,7 @@ export function ModelModal(props: {
 	// RESPONSIVE SHELL (settings-modal parity): the card grows with the
 	// screen height; the width grows so model details can use 3 columns on
 	// big terminals, 2 on small ones.
-	const cardWidth = () => Math.min(120, Math.max(60, dims().width - 4));
+	const cardWidth = () => Math.min(120, Math.max(1, dims().width - 2));
 	const listVisible = () => Math.max(3, Math.min(60, dims().height - 9));
 	// FIT-CONTENT: the card is exactly the model-list height + chrome, capped
 	// by the window — a short catalog shrinks the card, a huge one fills the
@@ -158,16 +159,16 @@ export function ModelModal(props: {
 	const footerHint =
 		'Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect (list) · Esc close';
 	const footerLines = (): number =>
-		Math.max(1, wrapText(footerHint, cardWidth() - 6).length);
+		Math.max(1, wrapText(footerHint, Math.max(1, cardWidth() - 6)).length);
 	const cardHeight = (): number => {
 		const capped = Math.min(displayLines().length, listVisible());
 		return Math.min(
-			dims().height - 2,
+			Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)),
 			Math.max(10, capped + 10 + footerLines()),
 		);
 	};
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const modelColumns = () =>
 		cardWidth() >= 100 ? 3 : cardWidth() >= 58 ? 2 : 1;
@@ -557,7 +558,7 @@ export function ModelModal(props: {
 		}),
 	);
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			if (connectionStep()) setConnectionStep(null);
 			else if (tierStep()) setTierStep(null);
@@ -755,7 +756,8 @@ export function ModelModal(props: {
 			setQuery(prev => prev + char);
 		}
 		return true;
-	});
+	};
+	useKeyboard(handleKey);
 
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -774,6 +776,7 @@ export function ModelModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -800,167 +803,267 @@ export function ModelModal(props: {
 				width={cardWidth()}
 				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={2}
+				overflow="hidden"
 			>
-				<Show
-					when={
-						effortStep() === null &&
-						tierStep() === null &&
-						confirming() === null &&
-						connectionStep() === null
-					}
-					fallback={
-						<Show
-							when={connectionStep() !== null}
-							fallback={
-								<Show
-									when={tierStep() !== null}
-									fallback={
-										<Show
-											when={effortStep() !== null}
-											fallback={
-												<box flexDirection="column">
-													<text fg={colors().primary} attributes={bold()}>
-														Switch model
-													</text>
-													<box height={1} />
-													<text fg={colors().warning}>
-														Switching to "
-														{modelWithProvider(
-															confirming()?.model ?? '',
-															providerForId(confirming()?.providerId),
-														)}
-														" will RESEND the entire conversation to the new
-														model and take additional usage.
-													</text>
-													<box height={1} />
-													<text fg={colors().secondary} attributes={dim()}>
-														(y) continue · (n) cancel
-													</text>
-												</box>
-											}
-										>
-											{/* opencode-style effort step: choose
+				<ModalHeader
+					width={cardWidth()}
+					title={props.title ?? 'Select a Model'}
+					hint={'Esc close'}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
+				>
+					<Show
+						when={
+							effortStep() === null &&
+							tierStep() === null &&
+							confirming() === null &&
+							connectionStep() === null
+						}
+						fallback={
+							<Show
+								when={connectionStep() !== null}
+								fallback={
+									<Show
+										when={tierStep() !== null}
+										fallback={
+											<Show
+												when={effortStep() !== null}
+												fallback={
+													<box flexDirection="column">
+														<text fg={colors().primary} attributes={bold()}>
+															Switch model
+														</text>
+														<box height={1} />
+														<text fg={colors().warning}>
+															Switching to "
+															{modelWithProvider(
+																confirming()?.model ?? '',
+																providerForId(confirming()?.providerId),
+															)}
+															" will RESEND the entire conversation to the new
+															model and take additional usage.
+														</text>
+														<box height={1} />
+														<text fg={colors().secondary} attributes={dim()}>
+															(y) continue · (n) cancel
+														</text>
+													</box>
+												}
+											>
+												{/* opencode-style effort step: choose
 									    Default or a reasoning tier for THIS
 									    model before switching. */}
-											<box flexDirection="column">
-												<text fg={colors().primary} attributes={bold()}>
-													Select effort
-												</text>
-												<box height={1} />
-												<text fg={colors().text}>
-													{modelWithProvider(
-														effortStep()?.model ?? '',
-														providerForId(effortStep()?.providerId),
-													)}
-												</text>
-												<box height={1} />
-												<For
-													each={(() => {
-														const sel = effortIndex();
-														return effortOptions(effortStep()?.model ?? '').map(
-															(option, idx) => ({
+												<box flexDirection="column">
+													<text fg={colors().primary} attributes={bold()}>
+														Select effort
+													</text>
+													<box height={1} />
+													<text fg={colors().text}>
+														{modelWithProvider(
+															effortStep()?.model ?? '',
+															providerForId(effortStep()?.providerId),
+														)}
+													</text>
+													<box height={1} />
+													<For
+														each={(() => {
+															const sel = effortIndex();
+															return effortOptions(
+																effortStep()?.model ?? '',
+															).map((option, idx) => ({
 																option,
 																active: idx === sel,
-															}),
-														);
-													})()}
-												>
-													{({option, active}) => (
-														<box
-															flexDirection="row"
-															height={1}
-															backgroundColor={
-																active ? activeRow().bg : undefined
-															}
-															{...({
-																onMouseMove: () =>
-																	setEffortIndex(
-																		effortOptions(
-																			effortStep()?.model ?? '',
-																		).indexOf(option),
-																	),
-																onMouseUp: () => {
-																	const step = effortStep();
-																	if (!step) return;
-																	setEffortStep(null);
-																	const target = {
-																		providerId: step.providerId,
-																		model: step.model,
-																		effort:
-																			option.id === 'default'
-																				? undefined
-																				: option.id,
-																	};
-																	if (
-																		props.hasMessages &&
-																		!step.accountSwitch
-																	) {
-																		setConfirming(target);
-																	} else {
-																		props.onSelect(
-																			target.providerId,
-																			target.model,
-																			target.effort,
-																		);
-																	}
-																},
-															} as any)}
-														>
-															<text
-																fg={active ? activeRow().fg : colors().text}
-																attributes={active ? bold() : undefined}
+															}));
+														})()}
+													>
+														{({option, active}) => (
+															<box
+																flexDirection="row"
+																height={1}
+																backgroundColor={
+																	active ? activeRow().bg : undefined
+																}
+																{...({
+																	onMouseMove: () =>
+																		setEffortIndex(
+																			effortOptions(
+																				effortStep()?.model ?? '',
+																			).indexOf(option),
+																		),
+																	onMouseUp: () => {
+																		const step = effortStep();
+																		if (!step) return;
+																		setEffortStep(null);
+																		const target = {
+																			providerId: step.providerId,
+																			model: step.model,
+																			effort:
+																				option.id === 'default'
+																					? undefined
+																					: option.id,
+																		};
+																		if (
+																			props.hasMessages &&
+																			!step.accountSwitch
+																		) {
+																			setConfirming(target);
+																		} else {
+																			props.onSelect(
+																				target.providerId,
+																				target.model,
+																				target.effort,
+																			);
+																		}
+																	},
+																} as any)}
 															>
-																{active ? '❯ ' : '  '}
-																{option.id === 'default'
-																	? effortDefaultLabel()
-																	: option.label}
-															</text>
-														</box>
-													)}
-												</For>
-												<box height={1} />
-												<text fg={colors().secondary} attributes={dim()}>
-													↑/↓ select · Enter choose · Esc back
-													{props.hasMessages
-														? ' · will resend the conversation'
-														: ''}
-												</text>
-											</box>
-										</Show>
-									}
-								>
-									{/* OPENCODE TIER STEP: Zen vs Go — the two share
+																<text
+																	fg={active ? activeRow().fg : colors().text}
+																	attributes={active ? bold() : undefined}
+																>
+																	{active ? '❯ ' : '  '}
+																	{option.id === 'default'
+																		? effortDefaultLabel()
+																		: option.label}
+																</text>
+															</box>
+														)}
+													</For>
+													<box height={1} />
+													<text fg={colors().secondary} attributes={dim()}>
+														↑/↓ select · Enter choose · Esc back
+														{props.hasMessages
+															? ' · will resend the conversation'
+															: ''}
+													</text>
+												</box>
+											</Show>
+										}
+									>
+										{/* OPENCODE TIER STEP: Zen vs Go — the two share
 									    ONE opencode.ai API key (only the endpoint
 									    differs), so the tier is chosen BEFORE the
 									    named connection. */}
-									<box flexDirection="column">
-										<text fg={colors().primary} attributes={bold()}>
-											Select tier
-										</text>
-										<box height={1} />
-										<text fg={colors().text}>{tierStep()?.model ?? ''}</text>
-										<box height={1} />
-										<For
-											each={(() => {
-												const sel = tierIndex();
-												return tierOptions().map((option, idx) => ({
-													option,
-													active: idx === sel,
-												}));
-											})()}
-										>
-											{({option, active}) => (
+										<box flexDirection="column">
+											<text fg={colors().primary} attributes={bold()}>
+												Select tier
+											</text>
+											<box height={1} />
+											<text fg={colors().text}>{tierStep()?.model ?? ''}</text>
+											<box height={1} />
+											<For
+												each={(() => {
+													const sel = tierIndex();
+													return tierOptions().map((option, idx) => ({
+														option,
+														active: idx === sel,
+													}));
+												})()}
+											>
+												{({option, active}) => (
+													<box
+														flexDirection="row"
+														height={1}
+														backgroundColor={
+															active ? activeRow().bg : undefined
+														}
+														{...({
+															onMouseMove: () =>
+																setTierIndex(tierOptions().indexOf(option)),
+															onMouseUp: () =>
+																chooseTier(tierOptions().indexOf(option)),
+														} as any)}
+													>
+														<text
+															fg={active ? activeRow().fg : colors().text}
+															attributes={active ? bold() : undefined}
+														>
+															{active ? '❯ ' : '  '}
+															{option.label}
+														</text>
+														<box flexGrow={1} />
+														<text fg={colors().secondary} attributes={dim()}>
+															{option.detail}
+														</text>
+													</box>
+												)}
+											</For>
+											<box height={1} />
+											<text fg={colors().secondary} attributes={dim()}>
+												↑/↓ select · Enter choose · Esc back
+											</text>
+										</box>
+									</Show>
+								}
+							>
+								{/* ACCOUNT PICKER: the model is chosen, pick which
+							    connection (e.g. brian vs mika) to use. */}
+								<box flexDirection="column">
+									<text fg={colors().primary} attributes={bold()}>
+										Select provider
+									</text>
+									<box height={1} />
+									<text fg={colors().text}>
+										{connectionStep()?.model ?? ''}
+									</text>
+									<box height={1} />
+									<For
+										each={(() => {
+											const step = connectionStep();
+											const sel = connectionIndex();
+											return step
+												? step.connections.map((connection, idx) => ({
+														connection,
+														active: idx === sel,
+													}))
+												: [];
+										})()}
+									>
+										{({connection, active}) => {
+											// OpenCode rows lead with the USER-GIVEN
+											// name (multiple API keys per endpoint —
+											// the choice is which named provider),
+											// the tier + endpoint ride the detail
+											// line. Other providers keep the
+											// user-given name as before.
+											const row = connectionPickerRow(connection);
+											return (
 												<box
 													flexDirection="row"
 													height={1}
 													backgroundColor={active ? activeRow().bg : undefined}
 													{...({
 														onMouseMove: () =>
-															setTierIndex(tierOptions().indexOf(option)),
-														onMouseUp: () =>
-															chooseTier(tierOptions().indexOf(option)),
+															setConnectionIndex(
+																connectionStep()?.connections.indexOf(
+																	connection,
+																) ?? 0,
+															),
+														onMouseUp: () => {
+															const step = connectionStep();
+															if (!step) return;
+															const chosen = connection;
+															setConnectionStep(null);
+															const current = providerForId(
+																props.currentProvider,
+															);
+															const sameGroup = sameProviderGroup(
+																chosen,
+																current,
+															);
+															startEffort(
+																chosen,
+																step.model,
+																sameGroup && current?.id !== chosen.id,
+															);
+														},
 													} as any)}
 												>
 													<text
@@ -968,280 +1071,189 @@ export function ModelModal(props: {
 														attributes={active ? bold() : undefined}
 													>
 														{active ? '❯ ' : '  '}
-														{option.label}
+														{row.label}
 													</text>
 													<box flexGrow={1} />
 													<text fg={colors().secondary} attributes={dim()}>
-														{option.detail}
+														{row.detail}
 													</text>
-												</box>
-											)}
-										</For>
-										<box height={1} />
-										<text fg={colors().secondary} attributes={dim()}>
-											↑/↓ select · Enter choose · Esc back
-										</text>
-									</box>
-								</Show>
-							}
-						>
-							{/* ACCOUNT PICKER: the model is chosen, pick which
-							    connection (e.g. brian vs mika) to use. */}
-							<box flexDirection="column">
-								<text fg={colors().primary} attributes={bold()}>
-									Select provider
-								</text>
-								<box height={1} />
-								<text fg={colors().text}>{connectionStep()?.model ?? ''}</text>
-								<box height={1} />
-								<For
-									each={(() => {
-										const step = connectionStep();
-										const sel = connectionIndex();
-										return step
-											? step.connections.map((connection, idx) => ({
-													connection,
-													active: idx === sel,
-												}))
-											: [];
-									})()}
-								>
-									{({connection, active}) => {
-										// OpenCode rows lead with the USER-GIVEN
-										// name (multiple API keys per endpoint —
-										// the choice is which named provider),
-										// the tier + endpoint ride the detail
-										// line. Other providers keep the
-										// user-given name as before.
-										const row = connectionPickerRow(connection);
-										return (
-											<box
-												flexDirection="row"
-												height={1}
-												backgroundColor={active ? activeRow().bg : undefined}
-												{...({
-													onMouseMove: () =>
-														setConnectionIndex(
-															connectionStep()?.connections.indexOf(
-																connection,
-															) ?? 0,
-														),
-													onMouseUp: () => {
-														const step = connectionStep();
-														if (!step) return;
-														const chosen = connection;
-														setConnectionStep(null);
-														const current = providerForId(
-															props.currentProvider,
-														);
-														const sameGroup = sameProviderGroup(
-															chosen,
-															current,
-														);
-														startEffort(
-															chosen,
-															step.model,
-															sameGroup && current?.id !== chosen.id,
-														);
-													},
-												} as any)}
-											>
-												<text
-													fg={active ? activeRow().fg : colors().text}
-													attributes={active ? bold() : undefined}
-												>
-													{active ? '❯ ' : '  '}
-													{row.label}
-												</text>
-												<box flexGrow={1} />
-												<text fg={colors().secondary} attributes={dim()}>
-													{row.detail}
-												</text>
-											</box>
-										);
-									}}
-								</For>
-								<box height={1} />
-								<text fg={colors().secondary} attributes={dim()}>
-									↑/↓ select · Enter choose · Esc back
-								</text>
-							</box>
-						</Show>
-					}
-				>
-					<box flexDirection="row" height={1}>
-						<text fg={colors().primary} attributes={bold()}>
-							{props.title ?? 'Select a Model'}
-						</text>
-						<box flexGrow={1} />
-						<text fg={colors().secondary} attributes={dim()}>
-							Esc close
-						</text>
-					</box>
-					<box height={1} />
-					<box height={1} />
-					<box
-						border
-						borderStyle="rounded"
-						borderColor={colors().secondary}
-						paddingX={1}
-						flexDirection="row"
-						height={3}
-					>
-						<text fg={colors().secondary}>⌕ </text>
-						<Show
-							when={query().length === 0}
-							fallback={<text fg={colors().text}>{query()}▌</text>}
-						>
-							<text fg={colors().secondary}>Type to filter…</text>
-						</Show>
-					</box>
-					<box height={1} />
-					<For each={visibleLines()}>
-						{line => {
-							if (line.kind === 'empty') {
-								return (
-									<text fg={colors().secondary} attributes={dim()}>
-										No models match "{query()}"
-									</text>
-								);
-							}
-							if (line.kind === 'spacer') {
-								return <box height={1} />;
-							}
-							if (line.kind === 'inherit') {
-								const active = cursor() === -1;
-								return (
-									<box
-										flexDirection="row"
-										height={1}
-										backgroundColor={active ? activeRow().bg : undefined}
-										{...({
-											onMouseUp: () => props.onInherit?.(),
-										} as any)}
-									>
-										<text
-											fg={active ? activeRow().fg : colors().text}
-											attributes={active ? bold() : undefined}
-										>
-											{active ? '❯ ' : '  '}
-											{props.inheritLabel}
-										</text>
-									</box>
-								);
-							}
-							if (line.kind === 'provider') {
-								// The merged OpenCode group lists its TIERS
-								// (Zen / Go) instead of the raw connection
-								// names — they share one account, the tier is
-								// the meaningful distinction. Other groups keep
-								// the user-given names (brian, mika).
-								const isOpenCode = line.provider
-									? providerGroupKey(line.provider) === 'opencode'
-									: false;
-								const names = isOpenCode
-									? [
-											...new Set(
-												(line.connections ?? []).map(openCodeTierLabel),
-											),
-										].join(', ')
-									: (line.connections ?? [])
-											.map(connection => connection.name || connection.id)
-											.join(', ');
-								const title = line.provider
-									? providerGroupKey(line.provider) === 'opencode'
-										? 'OpenCode'
-										: providerDisplayName(line.provider)
-									: '';
-								return (
-									<box flexDirection="row" height={1}>
-										<text fg={colors().primary} attributes={bold()}>
-											{'  '}
-											{title}
-										</text>
-										{names ? (
-											<text fg={colors().secondary} attributes={dim()}>
-												{' - '}
-												{names}
-											</text>
-										) : (
-											<></>
-										)}
-										{line.isCurrent ? (
-											<text fg={colors().secondary} attributes={dim()}>
-												{' '}
-												(current)
-											</text>
-										) : (
-											<></>
-										)}
-									</box>
-								);
-							}
-							// Model DETAILS grid row: every cell is one model.
-							return (
-								<box flexDirection="row" height={1}>
-									<For each={line.cells}>
-										{(cell, colIndex) => {
-											if (!cell) {
-												return <box width={cellWidth()} height={1} />;
-											}
-											const active = cursor() === cell.index;
-											const size = cell.contextSize;
-											const effortBadge =
-												active && cell.shownEffort
-													? `[${cell.shownEffort}]`
-													: '';
-											const nameWidth = Math.max(
-												6,
-												cellWidth() -
-													4 -
-													(size ? size.length + 1 : 0) -
-													(effortBadge ? effortBadge.length : 0),
-											);
-											return (
-												<box
-													width={cellWidth()}
-													flexDirection="row"
-													height={1}
-													backgroundColor={active ? activeRow().bg : undefined}
-													{...({
-														onMouseMove: () => setCursor(cell.index),
-														onMouseUp: () => selectCell(cell),
-													} as any)}
-												>
-													<text
-														fg={active ? activeRow().fg : colors().text}
-														attributes={active ? bold() : undefined}
-													>
-														{active ? '❯ ' : '  '}
-														{truncateCell(cell.model, nameWidth)}
-													</text>
-													<Show when={active && cell.shownEffort}>
-														<text fg={activeRow().fg} attributes={dim()}>
-															[{cell.shownEffort}]
-														</text>
-													</Show>
-													<Show when={size}>
-														<text fg={colors().secondary} attributes={dim()}>
-															{' '}
-															{size}
-														</text>
-													</Show>
 												</box>
 											);
 										}}
 									</For>
+									<box height={1} />
+									<text fg={colors().secondary} attributes={dim()}>
+										↑/↓ select · Enter choose · Esc back
+									</text>
 								</box>
-							);
-						}}
-					</For>
-					<box height={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect
-						(list) · Esc close
-					</text>
-				</Show>
+							</Show>
+						}
+					>
+						<box
+							border
+							borderStyle="rounded"
+							borderColor={colors().secondary}
+							paddingX={1}
+							flexDirection="row"
+							height={3}
+						>
+							<text fg={colors().secondary}>⌕ </text>
+							<Show
+								when={query().length === 0}
+								fallback={<text fg={colors().text}>{query()}▌</text>}
+							>
+								<text fg={colors().secondary}>Type to filter…</text>
+							</Show>
+						</box>
+						<box height={1} />
+						<For each={visibleLines()}>
+							{line => {
+								if (line.kind === 'empty') {
+									return (
+										<text fg={colors().secondary} attributes={dim()}>
+											No models match "{query()}"
+										</text>
+									);
+								}
+								if (line.kind === 'spacer') {
+									return <box height={1} />;
+								}
+								if (line.kind === 'inherit') {
+									const active = cursor() === -1;
+									return (
+										<box
+											flexDirection="row"
+											height={1}
+											backgroundColor={active ? activeRow().bg : undefined}
+											{...({
+												onMouseUp: () => props.onInherit?.(),
+											} as any)}
+										>
+											<text
+												fg={active ? activeRow().fg : colors().text}
+												attributes={active ? bold() : undefined}
+											>
+												{active ? '❯ ' : '  '}
+												{props.inheritLabel}
+											</text>
+										</box>
+									);
+								}
+								if (line.kind === 'provider') {
+									// The merged OpenCode group lists its TIERS
+									// (Zen / Go) instead of the raw connection
+									// names — they share one account, the tier is
+									// the meaningful distinction. Other groups keep
+									// the user-given names (brian, mika).
+									const isOpenCode = line.provider
+										? providerGroupKey(line.provider) === 'opencode'
+										: false;
+									const names = isOpenCode
+										? [
+												...new Set(
+													(line.connections ?? []).map(openCodeTierLabel),
+												),
+											].join(', ')
+										: (line.connections ?? [])
+												.map(connection => connection.name || connection.id)
+												.join(', ');
+									const title = line.provider
+										? providerGroupKey(line.provider) === 'opencode'
+											? 'OpenCode'
+											: providerDisplayName(line.provider)
+										: '';
+									return (
+										<box flexDirection="row" height={1}>
+											<text fg={colors().primary} attributes={bold()}>
+												{'  '}
+												{title}
+											</text>
+											{names ? (
+												<text fg={colors().secondary} attributes={dim()}>
+													{' - '}
+													{names}
+												</text>
+											) : (
+												<></>
+											)}
+											{line.isCurrent ? (
+												<text fg={colors().secondary} attributes={dim()}>
+													{' '}
+													(current)
+												</text>
+											) : (
+												<></>
+											)}
+										</box>
+									);
+								}
+								// Model DETAILS grid row: every cell is one model.
+								return (
+									<box flexDirection="row" height={1}>
+										<For each={line.cells}>
+											{(cell, colIndex) => {
+												if (!cell) {
+													return <box width={cellWidth()} height={1} />;
+												}
+												const active = cursor() === cell.index;
+												const size = cell.contextSize;
+												const effortBadge =
+													active && cell.shownEffort
+														? `[${cell.shownEffort}]`
+														: '';
+												const nameWidth = Math.max(
+													6,
+													cellWidth() -
+														4 -
+														(size ? size.length + 1 : 0) -
+														(effortBadge ? effortBadge.length : 0),
+												);
+												return (
+													<box
+														width={cellWidth()}
+														flexDirection="row"
+														height={1}
+														backgroundColor={
+															active ? activeRow().bg : undefined
+														}
+														{...({
+															onMouseMove: () => setCursor(cell.index),
+															onMouseUp: () => selectCell(cell),
+														} as any)}
+													>
+														<text
+															fg={active ? activeRow().fg : colors().text}
+															attributes={active ? bold() : undefined}
+														>
+															{active ? '❯ ' : '  '}
+															{truncateCell(cell.model, nameWidth)}
+														</text>
+														<Show when={active && cell.shownEffort}>
+															<text fg={activeRow().fg} attributes={dim()}>
+																[{cell.shownEffort}]
+															</text>
+														</Show>
+														<Show when={size}>
+															<text fg={colors().secondary} attributes={dim()}>
+																{' '}
+																{size}
+															</text>
+														</Show>
+													</box>
+												);
+											}}
+										</For>
+									</box>
+								);
+							}}
+						</For>
+						<box height={1} />
+						<text fg={colors().secondary} attributes={dim()}>
+							Tab search/list · ↑↓←→ move · E effort · Enter choose · C connect
+							(list) · Esc close
+						</text>
+					</Show>
+				</box>
 			</box>
 		</box>
 	);

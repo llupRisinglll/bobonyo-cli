@@ -2,6 +2,7 @@
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, useTerminalDimensions} from '@opentui/solid';
 import {createSignal, For, Show} from 'solid-js';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {effortLevelsForModel} from './model-modal';
@@ -47,22 +48,42 @@ export function EffortModal(props: {
 		: 0;
 	const [index, setIndex] = createSignal(initialIndex);
 
-	const cardWidth = () => Math.min(64, Math.max(52, dims().width - 8));
+	const cardWidth = () => Math.min(64, Math.max(1, dims().width - 2));
 	// Autofit: the card is exactly as tall as its content (13 rows), clamped
 	// to the window so a short terminal never overflows.
-	const cardHeight = Math.min(
-		options.length + 9,
-		Math.max(10, dims().height - 2),
-	);
-	const cardY = () => Math.max(2, Math.floor((dims().height - cardHeight) / 2));
+	const cardHeight = () =>
+		Math.min(
+			options.length + 11,
+			Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)),
+		);
+	const headerHeight = () => (dims().height >= 9 ? 3 : 1);
+	const paddingY = () => (cardHeight() >= 12 ? 1 : 0);
+	const showContext = () => cardHeight() - headerHeight() >= 5;
+	const showFooter = () => cardHeight() >= 12;
+	const visibleCount = () =>
+		Math.max(
+			1,
+			cardHeight() -
+				headerHeight() -
+				paddingY() * 2 -
+				(showContext() ? 2 : 0) -
+				(showFooter() ? 1 : 0),
+		);
+	const start = () =>
+		Math.max(
+			0,
+			Math.min(index() - visibleCount() + 1, options.length - visibleCount()),
+		);
+	const cardY = () =>
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
 		x <= cardX() + cardWidth() &&
 		y >= cardY() &&
-		y <= cardY() + cardHeight;
+		y <= cardY() + cardHeight();
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'up' || event.name === 'down') {
 			setIndex(prev => {
 				const next = event.name === 'down' ? prev + 1 : prev - 1;
@@ -79,10 +100,12 @@ export function EffortModal(props: {
 			return true;
 		}
 		return true;
-	});
+	};
+	useKeyboard(handleKey);
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -107,60 +130,83 @@ export function EffortModal(props: {
 		>
 			<box
 				width={cardWidth()}
-				height={cardHeight}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
 				flexDirection="column"
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						Select effort
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						Esc close
-					</text>
-				</box>
-				<box height={1} />
-				<text fg={colors().text}>{props.model}</text>
-				<text fg={colors().secondary} attributes={dim()}>
-					{props.provider}
-				</text>
-				<box height={1} />
-				<For
-					each={(() => {
-						const sel = index();
-						return options.map((option, idx) => ({
-							option,
-							active: idx === sel,
-						}));
-					})()}
+				<ModalHeader
+					width={cardWidth()}
+					title={'Select effort'}
+					hint={'Esc close'}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={paddingY()}
 				>
-					{({option, active}) => (
-						<box
-							flexDirection="row"
+					<Show when={showContext()}>
+						<text height={1} flexShrink={0} wrapMode="none" fg={colors().text}>
+							{props.model}
+						</text>
+						<text
 							height={1}
-							backgroundColor={active ? activeRow().bg : undefined}
-							{...({
-								onMouseMove: () => setIndex(options.indexOf(option)),
-								onMouseUp: () => props.onSelect(option.id),
-							} as any)}
+							flexShrink={0}
+							wrapMode="none"
+							fg={colors().secondary}
+							attributes={dim()}
 						>
-							<text
-								fg={active ? activeRow().fg : colors().text}
-								attributes={active ? bold() : undefined}
+							{props.provider}
+						</text>
+					</Show>
+					<For
+						each={(() => {
+							const sel = index();
+							return options
+								.slice(start(), start() + visibleCount())
+								.map(option => ({
+									option,
+									active: options.indexOf(option) === sel,
+								}));
+						})()}
+					>
+						{({option, active}) => (
+							<box
+								flexDirection="row"
+								height={1}
+								flexShrink={0}
+								backgroundColor={active ? activeRow().bg : undefined}
+								{...({
+									onMouseMove: () => setIndex(options.indexOf(option)),
+									onMouseUp: () => props.onSelect(option.id),
+								} as any)}
 							>
-								{active ? '❯ ' : '  '}
-								{option.label}
-							</text>
-						</box>
-					)}
-				</For>
-				<box height={1} />
-				<text fg={colors().secondary} attributes={dim()}>
-					↑/↓ select · Enter choose · Esc close
-				</text>
+								<text
+									fg={active ? activeRow().fg : colors().text}
+									attributes={active ? bold() : undefined}
+								>
+									{active ? '❯ ' : '  '}
+									{option.label}
+								</text>
+							</box>
+						)}
+					</For>
+					<Show when={showFooter()}>
+						<text
+							height={1}
+							flexShrink={0}
+							wrapMode="none"
+							fg={colors().secondary}
+							attributes={dim()}
+						>
+							↑/↓ select · Enter choose · Esc close
+						</text>
+					</Show>
+				</box>
 			</box>
 		</box>
 	);

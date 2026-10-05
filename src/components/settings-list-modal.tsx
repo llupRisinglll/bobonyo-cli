@@ -1,11 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {
-	useKeyboard,
-	usePaste,
-	useTerminalDimensions,
-} from '@opentui/solid';
+import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {createMemo, createSignal, For, Show} from 'solid-js';
+import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
@@ -90,12 +87,11 @@ export function SettingsListModal(props: {
 	usePaste((event: {bytes: Uint8Array}) => {
 		setQuery(prev => prev + new TextDecoder().decode(event.bytes));
 	});
-	const cardWidth = () => Math.min(88, Math.max(62, dims().width - 4));
+	const cardWidth = () => Math.min(88, Math.max(1, dims().width - 2));
 	// RESPONSIVE: use as much vertical space as the terminal gives us
 	// (header 1 + search 1 + gaps 2 + footer 1 + padding 2 ≈ 7 rows of
 	// chrome), capped so the card never overflows the screen.
-	const listVisible = () =>
-		Math.max(3, Math.min(60, dims().height - 9));
+	const listVisible = () => Math.max(1, Math.min(60, dims().height - 11));
 	// FIT-CONTENT: the card is exactly the filtered list height + chrome,
 	// capped by the window (a short list shrinks the card, a long one fills
 	// the screen and scrolls).
@@ -103,13 +99,13 @@ export function SettingsListModal(props: {
 		filtered().reduce((sum, row) => sum + rowLineCount(row, descWidth()), 0);
 	const cardHeight = () =>
 		Math.min(
-			dims().height - 2,
-			Math.max(10, Math.min(contentLines(), listVisible()) + 7),
+			Math.max(1, dims().height - (dims().height >= 9 ? 2 : 0)),
+			Math.max(10, Math.min(contentLines(), listVisible()) + 9),
 		);
 	const descWidth = () => Math.max(20, cardWidth() - 8);
 	// VERTICALLY CENTERED: (screen height − card height) / 2, never off-screen.
 	const cardY = () =>
-		Math.max(1, Math.floor((dims().height - cardHeight()) / 2));
+		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
 
 	const filtered = createMemo(() => {
@@ -125,19 +121,26 @@ export function SettingsListModal(props: {
 		for (let i = start; i < rows.length; i++) {
 			const rowLines = rowLineCount(rows[i]!, descWidth());
 			// The window matches the CARD, so rows never render below it.
-			if (count > 0 && lines + rowLines > cardHeight() - 7) break;
+			if (
+				count > 0 &&
+				lines + rowLines >
+					Math.max(1, cardHeight() - (dims().height >= 9 ? 9 : 5))
+			)
+				break;
 			count += 1;
 			lines += rowLines;
 		}
 		return count > 0
 			? rows.slice(start, start + count)
-			: [rows[start] ?? null].filter((row): row is SettingsListRow => Boolean(row));
+			: [rows[start] ?? null].filter((row): row is SettingsListRow =>
+					Boolean(row),
+				);
 	});
 	/** Pre-wrapped descriptions so the render and the height agree. */
 	const wrapped = (row: SettingsListRow): string[] =>
 		wrapDescription(row.value ?? '', descWidth());
 
-	useKeyboard(event => {
+	const handleKey: Parameters<typeof useKeyboard>[0] = event => {
 		if (event.name === 'escape') {
 			if (query()) setQuery('');
 			else props.onClose();
@@ -179,7 +182,8 @@ export function SettingsListModal(props: {
 			setQuery(prev => prev + char);
 			setIndex(0);
 		}
-	});
+	};
+	useKeyboard(handleKey);
 
 	const insideCard = (x: number, y: number): boolean =>
 		x >= cardX() &&
@@ -189,6 +193,7 @@ export function SettingsListModal(props: {
 
 	return (
 		<box
+			onMouseScroll={modalWheel(handleKey)}
 			position="absolute"
 			left={0}
 			top={0}
@@ -213,88 +218,94 @@ export function SettingsListModal(props: {
 		>
 			<box
 				width={cardWidth()}
+				height={cardHeight()}
 				backgroundColor={colors().base}
-				paddingX={2}
-				paddingY={1}
+				overflow="hidden"
 			>
-				<box flexDirection="row" height={1}>
-					<text fg={colors().primary} attributes={bold()}>
-						{props.title}
-					</text>
-					<box flexGrow={1} />
-					<text fg={colors().secondary} attributes={dim()}>
-						{filtered().length} item{filtered().length === 1 ? '' : 's'} · Esc close
-					</text>
-				</box>
-				<box height={1} />
-				<box height={1}>
-					<text fg={colors().secondary} attributes={dim()}>
-						⌕ {query() || 'search…'}
-					</text>
-				</box>
-				<box height={1} />
-				<For each={visible()}>
-					{(row, i) => (
-						<box
-							flexDirection="column"
-							height={rowLineCount(row, descWidth())}
-							backgroundColor={
-								index() === i() + scrollStart()
-									? activeRow().bg
-									: undefined
-							}
-							{...({
-								onMouseMove: () => setIndex(i() + scrollStart()),
-								onMouseUp: () => {
-									if (row.providerId) {
-										props.onEditProvider?.(row.providerId);
-										return;
-									}
-									if (row.insert) {
-										props.onInsert?.(row.insert);
-										return;
-									}
-									if (row.onActivate) row.onActivate();
-								},
-							} as any)}
-						>
-							<box flexDirection="row" height={1}>
-								<text
-									fg={
-										index() === i() + scrollStart()
-											? activeRow().fg
-											: colors().text
-									}
-									attributes={bold()}
-								>
-									{index() === i() + scrollStart() ? '❯ ' : '  '}
-									{row.label}
-								</text>
-								<box flexGrow={1} />
-								<Show when={row.activateHint && index() === i() + scrollStart()}>
-									<text fg={colors().primary} attributes={dim()}>
-										{row.activateHint}
+				<ModalHeader
+					width={cardWidth()}
+					title={props.title}
+					hint={` ${filtered().length} items · Esc close`}
+					caps={dims().height >= 9}
+				/>
+				<box
+					flexDirection="column"
+					flexGrow={1}
+					minHeight={0}
+					overflow="hidden"
+					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
+					paddingY={dims().height >= 9 ? 1 : 0}
+				>
+					<box height={dims().height >= 9 ? 1 : 0} />
+					<box height={1}>
+						<text fg={colors().secondary} attributes={dim()}>
+							⌕ {query() || 'search…'}
+						</text>
+					</box>
+					<box height={dims().height >= 9 ? 1 : 0} />
+					<For each={visible()}>
+						{(row, i) => (
+							<box
+								flexDirection="column"
+								height={rowLineCount(row, descWidth())}
+								backgroundColor={
+									index() === i() + scrollStart() ? activeRow().bg : undefined
+								}
+								{...({
+									onMouseMove: () => setIndex(i() + scrollStart()),
+									onMouseUp: () => {
+										if (row.providerId) {
+											props.onEditProvider?.(row.providerId);
+											return;
+										}
+										if (row.insert) {
+											props.onInsert?.(row.insert);
+											return;
+										}
+										if (row.onActivate) row.onActivate();
+									},
+								} as any)}
+							>
+								<box flexDirection="row" height={1}>
+									<text
+										fg={
+											index() === i() + scrollStart()
+												? activeRow().fg
+												: colors().text
+										}
+										attributes={bold()}
+									>
+										{index() === i() + scrollStart() ? '❯ ' : '  '}
+										{row.label}
 									</text>
+									<box flexGrow={1} />
+									<Show
+										when={row.activateHint && index() === i() + scrollStart()}
+									>
+										<text fg={colors().primary} attributes={dim()}>
+											{row.activateHint}
+										</text>
+									</Show>
+								</box>
+								<Show when={row.value}>
+									<For each={wrapped(row)}>
+										{line => (
+											<text fg={colors().secondary} attributes={dim()}>
+												{'  '}
+												{line}
+											</text>
+										)}
+									</For>
 								</Show>
 							</box>
-							<Show when={row.value}>
-								<For each={wrapped(row)}>
-									{(line) => (
-										<text fg={colors().secondary} attributes={dim()}>
-											{'  '}
-											{line}
-										</text>
-									)}
-								</For>
-							</Show>
-						</box>
-					)}
-				</For>
+						)}
+					</For>
 					<Show when={filtered().length === 0}>
 						<text fg={colors().secondary} attributes={dim()}>
 							No matches.
 						</text>
 					</Show>
+				</box>
 			</box>
 		</box>
 	);

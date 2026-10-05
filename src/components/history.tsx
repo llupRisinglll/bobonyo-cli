@@ -575,6 +575,11 @@ export function History(props: HistoryProps) {
 			scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
 			return true;
 		}
+		if (props.embedded && (event.name === 'up' || event.name === 'down')) {
+			event.preventDefault();
+			scrollRef?.scrollBy({x: 0, y: event.name === 'up' ? -1 : 1});
+			return true;
+		}
 		if (event.name === 'pagedown') {
 			scrollRef?.scrollBy({x: 0, y: 1}, 'viewport');
 			return true;
