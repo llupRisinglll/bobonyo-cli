@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.1 (2026-10-05)
+
+### Patch
+- Keep task checklist updates in the rich checklist layout instead of falling back to compact raw tool output.
 ## v0.4.0 (2026-10-05)
 
 ### Minor
