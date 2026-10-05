@@ -21,6 +21,14 @@ export function steeringSnapshot(queue: PendingWorkItem[]): PendingWorkItem[] {
 	return queue.slice(0, boundary < 0 ? queue.length : boundary);
 }
 
+/** Explicit chat outranks a stale autonomous/task final response. */
+export function queuedSteeringSupersedesSystemTurn(
+	systemTurn: boolean,
+	queue: PendingWorkItem[],
+): boolean {
+	return systemTurn && steeringSnapshot(queue).length > 0;
+}
+
 /** Snapshot once, deliver serially, and acknowledge only completed deliveries. */
 export async function deliverQueuedSteering(
 	queue: PendingWorkItem[],

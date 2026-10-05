@@ -131,6 +131,7 @@ import {createDebouncedFlush} from './debounced-flush';
 import {
 	canDeliverQueuedSteering,
 	deliverQueuedSteering,
+	queuedSteeringSupersedesSystemTurn,
 	steeringSnapshot,
 } from './queued-steering';
 import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
@@ -3879,6 +3880,19 @@ export function App() {
 							];
 							continue;
 						}
+					}
+
+					if (
+						queuedSteeringSupersedesSystemTurn(systemTurn, pendingQueue()) &&
+						result.toolCalls.length === 0
+					) {
+						// User direction queued during an autonomous/task response owns the
+						// next provider call. Drop stale final reasoning instead of persisting
+						// another blocked answer or letting it stop goal continuation first.
+						setStreaming('');
+						setReasoning('');
+						recordTurnUsage(result.usage);
+						break;
 					}
 
 					if (result.toolCalls.length === 0) {

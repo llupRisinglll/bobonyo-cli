@@ -5,6 +5,7 @@ import {dequeuePendingWork} from './background-notification';
 import {
 	canDeliverQueuedSteering,
 	deliverQueuedSteering,
+	queuedSteeringSupersedesSystemTurn,
 	steeringSnapshot,
 } from './queued-steering';
 
@@ -80,6 +81,21 @@ describe('text-only turn scheduling with queued steering', () => {
 			delivery.match(/if \(!canDeliverPendingPrompts\(\)\) return false;/g),
 		).toHaveLength(2);
 	});
+	test('application discards stale system replies before final-response handling', () => {
+		const supersession = appSource.indexOf(
+			'queuedSteeringSupersedesSystemTurn(systemTurn, pendingQueue())',
+		);
+		const finalResponse = appSource.indexOf(
+			'if (result.toolCalls.length === 0) {',
+			supersession,
+		);
+		expect(supersession).toBeGreaterThan(0);
+		expect(finalResponse).toBeGreaterThan(supersession);
+		const guard = appSource.slice(supersession, finalResponse);
+		expect(guard).toContain("setStreaming('')");
+		expect(guard).toContain("setReasoning('')");
+		expect(guard).toContain('break;');
+	});
 	test('aborted turns cannot consume steering', () => {
 		expect(
 			canDeliverQueuedSteering({
@@ -112,6 +128,27 @@ describe('text-only turn scheduling with queued steering', () => {
 });
 
 describe('queued provider-boundary steering', () => {
+	test('explicit chat supersedes stale autonomous final reasoning', () => {
+		expect(
+			queuedSteeringSupersedesSystemTurn(true, [
+				{value: 'please do that now'},
+				{value: 'continue old reasoning', source: 'goal'},
+			]),
+		).toBe(true);
+		expect(
+			queuedSteeringSupersedesSystemTurn(false, [
+				{value: 'ordinary mid-turn steering'},
+			]),
+		).toBe(false);
+		for (const barrier of [
+			{value: 'later', delivery: 'after-current' as const},
+			{value: 'completion', source: 'task' as const},
+			{value: '/status'},
+		]) {
+			expect(queuedSteeringSupersedesSystemTurn(true, [barrier])).toBe(false);
+		}
+	});
+
 	test('deferred follow-ups form a steering boundary even after their agents settle', () => {
 		const first: PendingWorkItem = {value: 'now', delivery: 'steer'};
 		const deferred: PendingWorkItem = {
