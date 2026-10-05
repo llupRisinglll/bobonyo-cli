@@ -4,6 +4,12 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.2 (2026-10-05)
+
+### Patch
+- Open the resume picker immediately with a loader while session files load in the background.
+- Stabilize question-modal keyboard regression coverage under slower CI rendering.
+- Keep task updates and task listings rendered as the latest rich checklist in chat history.
 ## v0.4.1 (2026-10-05)
 
 ### Patch
