@@ -141,7 +141,9 @@ export function loadSkills(): Skill[] {
 	// never reaches into another agent's private config folder.
 	const builtinHerdr = builtinHerdrSkill();
 	if (builtinHerdr) skills.set(builtinHerdr.name.toLowerCase(), builtinHerdr);
-	const builtin = cavemanMode() ? builtinCavemanSkill() : null;
+	// Keep the skill available while automatic prompt injection is disabled.
+	// `/caveman` is the opt-in path, not evidence that Caveman is already on.
+	const builtin = builtinCavemanSkill();
 	if (builtin) skills.set(builtin.name.toLowerCase(), builtin);
 	for (const skill of builtinSkills()) {
 		if (!skills.has(skill.name.toLowerCase()))

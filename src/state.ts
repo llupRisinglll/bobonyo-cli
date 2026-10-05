@@ -544,9 +544,10 @@ export const [thinkingMode, setThinkingMode] =
 /**
  * Built-in caveman communication mode: when ON, the bundled caveman skill
  * body is injected into the stable system prompt (settings.json
- * `cavemanMode`). Defaults ON; the Settings → Behavior toggle turns it off.
+ * `cavemanMode`). Defaults OFF; users can enable it from Settings or with
+ * the bundled `/caveman` skill.
  */
-export const [cavemanMode, setCavemanMode] = createSignal(true);
+export const [cavemanMode, setCavemanMode] = createSignal(false);
 /**
  * Resume working-directory mode (codex `ResumeCwdMode` parity, settings.json
  * `resumeCwd`): `session` restores the session's recorded cwd (keeps the

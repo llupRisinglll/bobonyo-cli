@@ -256,14 +256,14 @@ describe('harness cache invariants (OpenAI-compatible)', () => {
 		expect(prompt).not.toContain('respond terse like smart caveman');
 	});
 
-	test('the system prompt mandates a pre-tool text line', () => {
-		// The pre-tool BRIEF is a hard UX rule: the model must write one
-		// short line before a tool call (rendered above the tool box).
-		// Guarding it in the STABLE prompt keeps the rule from silently
-		// regressing out of the cache head.
+	test('the system prompt requests conversational batch progress updates', () => {
+		// Keep useful narration without forcing a robotic line before every
+		// individual call. Tool descriptions can still require their own brief.
 		const prompt = buildSystemPrompt('full');
-		expect(prompt).toMatch(/FIRST write one short line/i);
-		expect(prompt).toMatch(/never fire a tool with no accompanying text/i);
+		expect(prompt).toMatch(/Before the first tool batch/i);
+		expect(prompt).toMatch(/something meaningful/i);
+		expect(prompt).toMatch(/Group related calls/i);
+		expect(prompt).not.toMatch(/Before each tool call/i);
 	});
 
 	test('the request body always carries the tool catalog', () => {

@@ -181,8 +181,9 @@ describe('built-in skills (harness-shipped)', () => {
 		expect(herdr!.body).toContain('HERDR_ENV');
 		expect(herdr!.body).toContain('herdr --help');
 	});
-	test('ships with the harness while caveman mode is ON (default)', () => {
-		expect(cavemanMode()).toBe(true);
+	test('ships as an opt-in skill while caveman mode is OFF', () => {
+		setCavemanMode(false);
+		expect(cavemanMode()).toBe(false);
 		const caveman = loadSkills().find(skill => skill.name === 'caveman');
 		expect(caveman).toBeDefined();
 		expect(caveman!.body).toContain('respond terse like smart caveman');
@@ -210,8 +211,8 @@ describe('built-in skills (harness-shipped)', () => {
 		expect(caveman[0]!.body).toContain('project body');
 	});
 
-	test('is excluded when caveman mode is OFF', () => {
+	test('remains available for opt-in when caveman mode is OFF', () => {
 		setCavemanMode(false);
-		expect(loadSkills().map(skill => skill.name)).not.toContain('caveman');
+		expect(loadSkills().map(skill => skill.name)).toContain('caveman');
 	});
 });

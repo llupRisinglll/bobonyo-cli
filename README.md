@@ -85,15 +85,14 @@ Behavior → System prompt lets you switch the agent's style on the fly:
   with the built-in prompt; edit the file in any editor and it is loaded on
   the next turn.
 
-All styles keep the harness's one hard rule: explain in one line what a
-tool call is about to do before firing it. So you get the vibe of the tool
-you already know, with the model freedom and cache savings you don't get
-from that tool.
+All styles keep the user informed without narrating every trivial operation:
+the agent gives a short plan before a tool batch, then reports meaningful
+discoveries, completed phases, or changes in direction before continuing.
 
 ## Caveman mode
 
 Why use many token when few do trick? bobonyo ships with **Caveman mode**
-built in, and it is ON by default.
+built in as an opt-in communication style.
 
 Caveman mode makes the agent reply in short, direct sentences. It drops
 filler words and pleasantries, but keeps every technical detail exact. Code
@@ -111,9 +110,9 @@ becomes:
 Same answer, way fewer tokens. The measured saving is around 65% of output
 tokens, and shorter replies mean every turn costs less.
 
-Do not like it? Turn it off in **Settings, Behavior → Caveman mode**, or just
-say "caveman off". You can also pick a level: "caveman lite" for normal
-sentences without the filler, "caveman full" for the classic style,
+Enable it in **Settings, Behavior → Caveman mode**, run `/caveman`, or say
+"caveman on". You can also pick a level: "caveman lite" for normal sentences
+without the filler, "caveman full" for the classic style,
 "caveman ultra" for the shortest possible, and even classical Chinese with
 "caveman wenyan-full" if you want to show off.
 

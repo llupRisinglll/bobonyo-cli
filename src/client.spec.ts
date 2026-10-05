@@ -20,13 +20,21 @@ import {
 	streamChat,
 } from './client';
 import {appendMemory} from './memory';
-import {activeEndpoint, setActiveEndpoint} from './state';
+import {
+	activeEndpoint,
+	cavemanMode,
+	setActiveEndpoint,
+	setCavemanMode,
+} from './state';
 let originalEndpoint: ReturnType<typeof activeEndpoint>;
+let originalCavemanMode: boolean;
 beforeEach(() => {
 	originalEndpoint = activeEndpoint();
+	originalCavemanMode = cavemanMode();
 });
 afterEach(() => {
 	setActiveEndpoint(originalEndpoint);
+	setCavemanMode(originalCavemanMode);
 });
 
 test('system prompt injects persistent memory, compaction prompt can omit Caveman', () => {
@@ -34,6 +42,7 @@ test('system prompt injects persistent memory, compaction prompt can omit Cavema
 	const originalCwd = process.cwd();
 	const root = mkdtempSync(join(tmpdir(), 'bobonyo-client-memory-'));
 	try {
+		setCavemanMode(true);
 		process.env.BOBONYO_CONFIG_DIR = join(root, 'config');
 		process.chdir(root);
 		appendMemory('Never commit unless explicitly asked.', 'user');
@@ -49,6 +58,13 @@ test('system prompt injects persistent memory, compaction prompt can omit Cavema
 		else process.env.BOBONYO_CONFIG_DIR = originalConfig;
 		rmSync(root, {recursive: true, force: true});
 	}
+});
+
+test('Caveman is absent by default and remains explicit opt-in', () => {
+	setCavemanMode(false);
+	expect(buildSystemPrompt()).not.toContain('CAVEMAN MODE');
+	setCavemanMode(true);
+	expect(buildSystemPrompt()).toContain('CAVEMAN MODE');
 });
 
 describe('sanitizeToolCallIds (auto-recovery for malformed tool history)', () => {

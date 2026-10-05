@@ -2754,7 +2754,7 @@ export function App() {
 					return;
 				}
 				setCavemanMode(on);
-				saveSettings({...settings, cavemanMode: on});
+				saveSettings({...settings, cavemanMode: on, cavemanOptIn: true});
 				return;
 			}
 			case 'systemPrompt': {

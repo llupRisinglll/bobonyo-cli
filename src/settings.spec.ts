@@ -100,14 +100,30 @@ describe('thinkingMode default (hidden / show / line)', () => {
 });
 
 describe('cavemanMode default', () => {
-	test('no settings file: defaults ON', () => {
-		expect(loadSettings().cavemanMode).toBe(true);
+	test('no settings file: defaults OFF', () => {
+		expect(loadSettings().cavemanMode).toBe(false);
 	});
 
-	test('existing settings file without the field (pre-default files): defaults ON', () => {
+	test('existing settings file without the field defaults OFF', () => {
 		writeFileSync(
 			join(root, 'settings.json'),
 			JSON.stringify({mode: 'normal'}),
+		);
+		expect(loadSettings().cavemanMode).toBe(false);
+	});
+
+	test('legacy true without an opt-in marker migrates to OFF', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({cavemanMode: true}),
+		);
+		expect(loadSettings().cavemanMode).toBe(false);
+	});
+
+	test('explicit opt-in is respected', () => {
+		writeFileSync(
+			join(root, 'settings.json'),
+			JSON.stringify({cavemanMode: true, cavemanOptIn: true}),
 		);
 		expect(loadSettings().cavemanMode).toBe(true);
 	});

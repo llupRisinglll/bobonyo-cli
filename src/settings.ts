@@ -48,10 +48,12 @@ export interface Settings {
 	/** @deprecated legacy on/off flag, migrated to thinkingMode. */
 	hideThinking?: boolean;
 	/**
-	 * Built-in caveman communication mode (bundled skill). ON by default;
-	 * the toggle removes the caveman instructions from the system prompt.
+	 * Built-in caveman communication mode (bundled skill). OFF by default;
+	 * users can opt in through Settings or `/caveman`.
 	 */
 	cavemanMode?: boolean;
+	/** Marks Caveman as an explicit user choice rather than the former default. */
+	cavemanOptIn?: boolean;
 	/** Resume working-directory mode (session / current / ask). */
 	resumeCwd?: ResumeCwdMode;
 	/** Whether file search tools honor .gitignore rules. */
@@ -100,7 +102,7 @@ const DEFAULTS: Settings = {
 	toolProfile: 'full',
 	maxMessages: 1000,
 	thinkingMode: 'hidden',
-	cavemanMode: true,
+	cavemanMode: false,
 	resumeCwd: 'session',
 	respectGitignore: true,
 	systemPrompt: 'default',
@@ -200,7 +202,8 @@ export function loadSettings(): Settings {
 					? 'hidden'
 					: 'show'
 				: (DEFAULTS.thinkingMode ?? 'hidden');
-	const cavemanMode = settings.cavemanMode !== false;
+	const cavemanMode =
+		settings.cavemanOptIn === true && settings.cavemanMode === true;
 	const resumeCwd = ['session', 'current', 'ask'].includes(
 		settings.resumeCwd ?? '',
 	)
@@ -232,6 +235,7 @@ export function loadSettings(): Settings {
 		statusLine,
 		thinkingMode,
 		cavemanMode,
+		cavemanOptIn: settings.cavemanOptIn === true,
 		resumeCwd,
 		respectGitignore,
 		systemPrompt,

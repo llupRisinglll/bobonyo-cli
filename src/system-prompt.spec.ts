@@ -47,11 +47,13 @@ describe('system prompt styles', () => {
 		// Codex CLI: personality + working rules.
 		expect(SYSTEM_PROMPT_PRESETS.codex).toMatch(/Call out weak ideas directly/);
 		expect(SYSTEM_PROMPT_PRESETS.codex).toMatch(/rg, rg --files/);
-		// The harness tool rule survives in every preset.
+		// Every style keeps conversational progress without robotic per-call
+		// narration. Tool-specific descriptions may still require a brief.
 		for (const body of Object.values(SYSTEM_PROMPT_PRESETS)) {
-			expect(body).toMatch(/Before each tool call/);
-			expect(body).toMatch(/exactly one short sentence/);
-			expect(body).toMatch(/Never use multiple sentences or paragraphs/);
+			expect(body).toMatch(/Before the first tool batch/);
+			expect(body).toMatch(/meaningful discoveries/);
+			expect(body).toMatch(/Group related calls/);
+			expect(body).not.toMatch(/Before each tool call/);
 		}
 		expect(new Set(Object.values(SYSTEM_PROMPT_PRESETS)).size).toBe(3);
 	});
