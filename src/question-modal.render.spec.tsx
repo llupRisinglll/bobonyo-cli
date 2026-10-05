@@ -51,6 +51,7 @@ test('custom choice has explicit entry, editing-only cursor, and preserved draft
 		expect(rows(setup).join('\n')).toContain('▌');
 		await setup.mockInput.typeText('draft');
 		setup.mockInput.pressEscape();
+		await Bun.sleep(60);
 		await setup.flush();
 		expect(setup.cancelled()).toBe(false);
 		expect(rows(setup).join('\n')).not.toContain('▌');
