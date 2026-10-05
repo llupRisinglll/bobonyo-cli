@@ -423,6 +423,7 @@ import {
 	setSessionName,
 	setStreaming,
 	setTasks,
+	setTasksTitle,
 	setTurnElapsed,
 	setThinkingElapsed,
 	spinnerFrame,
@@ -1233,6 +1234,7 @@ export function App() {
 		// /clear starts a fresh conversation: stop the COMPLETED popup.
 		completionPopupController.cancel();
 		setTasks([]);
+		setTasksTitle('Tasks');
 		setSettingsOpen(false);
 		setStatusOpen(false);
 		setModelOpen(false);
@@ -1398,6 +1400,15 @@ export function App() {
 							.find(message => message.tool?.name === 'write_tasks')?.tool?.args
 							?.tasks,
 					);
+				const restoredTaskMessage = [...resumed.messages]
+					.reverse()
+					.find(message => message.tool?.name === 'write_tasks');
+				setTasksTitle(
+					typeof restoredTaskMessage?.tool?.args?.title === 'string' &&
+						restoredTaskMessage.tool.args.title.trim()
+						? restoredTaskMessage.tool.args.title.trim()
+						: 'Tasks',
+				);
 				setTasks(
 					restoredTasks.map((task, index) => ({
 						...task,

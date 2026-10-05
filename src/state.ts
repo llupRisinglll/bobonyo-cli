@@ -189,6 +189,8 @@ export interface SessionTask {
 }
 /** A7/C9: explicit task list from `write_tasks`. */
 export const [tasks, setTasks] = createSignal<SessionTask[]>([]);
+/** Header reused when task_update/task_list refresh the main checklist. */
+export const [tasksTitle, setTasksTitle] = createSignal('Tasks');
 /** C12: in-flight subagent count (status line `agents: N`). */
 export const [activeAgents, setActiveAgents] = createSignal(0);
 /** Live delegated-agent rows, including review lenses. */

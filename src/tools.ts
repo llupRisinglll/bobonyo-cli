@@ -117,7 +117,7 @@ import {
 	stopManagedService,
 } from './managed-service';
 import type {Mode, ToolProfile} from './settings';
-import {contextTasks} from './task-checklist-state';
+import {contextTasks, contextTasksTitle} from './task-checklist-state';
 import {registerTaskTools} from './task-tools';
 import {normalizeTaskList} from './task-list-normalize';
 export {normalizeTaskList} from './task-list-normalize';
@@ -779,10 +779,13 @@ async function executeScopedTool(
 			...ctx,
 			toolCallId: call.id,
 		});
-		if (canonicalName === 'write_tasks') {
+		if (
+			['write_tasks', 'task_create', 'task_update', 'task_list'].includes(
+				canonicalName,
+			)
+		) {
 			displayArgs = {
-				title:
-					typeof effectiveArgs.title === 'string' ? effectiveArgs.title : '',
+				title: contextTasksTitle(ctx),
 				tasks: structuredClone(contextTasks(ctx)),
 				...(ctx.agentId ? {agentId: ctx.agentId} : {}),
 			};

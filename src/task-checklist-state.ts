@@ -1,4 +1,11 @@
-import {activeAgentRuns, setActiveAgentRuns, setTasks, tasks} from './state';
+import {
+	activeAgentRuns,
+	setActiveAgentRuns,
+	setTasks,
+	setTasksTitle,
+	tasks,
+	tasksTitle,
+} from './state';
 import type {SessionTask} from './state';
 import type {ToolContext} from './tools';
 
@@ -20,6 +27,11 @@ export function contextTasks(ctx: ToolContext): SessionTask[] {
 		: (checklistAgent(ctx).tasks ?? []);
 }
 
+export function contextTasksTitle(ctx: ToolContext): string {
+	if (ctx.agentId === undefined) return tasksTitle();
+	return checklistAgent(ctx).tasksTitle?.trim() || 'Tasks';
+}
+
 export function setContextTasks(
 	ctx: ToolContext,
 	next: SessionTask[] | ((previous: SessionTask[]) => SessionTask[]),
@@ -27,6 +39,7 @@ export function setContextTasks(
 ): void {
 	if (ctx.agentId === undefined) {
 		setTasks(next);
+		if (title !== undefined) setTasksTitle(title);
 	} else {
 		const run = checklistAgent(ctx);
 		const updated = typeof next === 'function' ? next(run.tasks ?? []) : next;

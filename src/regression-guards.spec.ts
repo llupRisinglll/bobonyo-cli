@@ -1654,26 +1654,19 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(app).toMatch(/compactHistory\(ctx, instructions\)/);
 		expect(commands).toMatch(/ctx\.compact\(args\)/);
 	});
-	test('task bookkeeping renders as plain progress text, not tool chrome', () => {
+	test('task bookkeeping keeps one rich checklist across later updates', () => {
 		const display = read('./tool-display.ts');
 		const history = read('./components/history.tsx');
-		const live = read('./components/live-tool-rows.tsx');
-		expect(display).toMatch(/isTaskProgressTool/);
 		expect(display).toMatch(
-			/if \(isTaskProgressTool\(tool\.name\)\) return raw/,
+			/if \(isTaskProgressTool\(tool\.name\)\) return formatTaskList\(tool, status\)/,
 		);
-		expect(history).toMatch(/formatTaskStatusText\(message\.tool, status\)/);
-		expect(live).toMatch(/row\.lang === 'inforow'/);
-		expect(live).toMatch(/row\.lang !== 'inforow'/);
-		expect(live).toMatch(/row\.glyphTone === 'muted'/);
-		expect(history).toMatch(/tokenizeTaskStatusRow/);
-		expect(history).toMatch(/rowGlyph\('inforow'\)/);
-		expect(live).toMatch(/settledGlyphColor\([\s\S]*row\.glyph/);
 		expect(history).toMatch(
-			/singleToolRow[\s\S]*isTaskProgressTool\(message\.tool\.name\)/,
+			/latestSettledTaskMessages[\s\S]*isTaskProgressTool\(message\.tool\?\.name \?\? ''\)/,
 		);
-		expect(history).not.toMatch(/`✦  \$\{formatTaskStatusText/);
-		expect(history).toMatch(/formatTaskStatusText\(message\.tool, status\)/);
+		expect(history).toMatch(
+			/singleToolRow[\s\S]*name: 'write_tasks'[\s\S]*compactTask/,
+		);
+		expect(history).not.toContain("message.tool.name !== 'write_tasks'");
 	});
 
 	test('the transcript scrollbox uses the opencode-style scroll speed', () => {
@@ -2315,18 +2308,17 @@ describe('regression guards (brief gap + COMPLETED modal only-when-idle)', () =>
 });
 
 describe('regression guards (historical task snapshots)', () => {
-	test('write_tasks reaches task rows before generic task summaries', () => {
+	test('every task progress tool reaches task rows before generic output tails', () => {
 		const display = read('./tool-display.ts');
 		expect(display).toMatch(
-			/if \(tool\.name === 'write_tasks'\) return formatTaskList\(tool, status\);/,
+			/if \(isTaskProgressTool\(tool\.name\)\) return formatTaskList\(tool, status\);/,
 		);
+		expect(display).toContain("'task_list'");
 		const history = read('./components/history.tsx');
 		expect(history).toContain(
 			'const latestTaskMessages = latestSettledTaskMessages(all)',
 		);
-		expect(history).toMatch(
-			/message\.tool\.name !== 'write_tasks' &&\s*isTaskProgressTool\(message\.tool\.name\)/,
-		);
+		expect(history).toContain("isTaskProgressTool(message.tool?.name ?? '')");
 	});
 });
 

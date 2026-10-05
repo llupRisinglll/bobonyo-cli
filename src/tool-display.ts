@@ -131,7 +131,9 @@ export function formatTaskStatusText(
 }
 
 export function isTaskProgressTool(name: string): boolean {
-	return ['write_tasks', 'task_create', 'task_update'].includes(name);
+	return ['write_tasks', 'task_create', 'task_update', 'task_list'].includes(
+		name,
+	);
 }
 
 function formatToolEntryText(
@@ -167,8 +169,7 @@ function formatGenericEntry(
 	if (tool.name === 'skill' || tool.name === 'check_skill') {
 		return formatSkillRow(tool, status);
 	}
-	if (tool.name === 'write_tasks') return formatTaskList(tool, status);
-	if (isTaskProgressTool(tool.name)) return formatTaskStatusText(tool, status);
+	if (isTaskProgressTool(tool.name)) return formatTaskList(tool, status);
 	if (tool.name === 'review_changes') return tool.output;
 	if (tool.name === 'agent') {
 		const detail = tool.detail || 'agent';

@@ -57,8 +57,8 @@ import {activityGroupForTool, formatActivityMessages} from '../activity-groups';
 import {
 	fence,
 	formatOutputTail,
-	formatToolEntry,
 	formatTaskStatusText,
+	formatToolEntry,
 	isTaskProgressTool,
 	rowGlyph,
 	rowLanguage,
@@ -714,24 +714,6 @@ export function History(props: HistoryProps) {
 				// Delegated-agent lifecycle belongs in the inline navigator and `/ps`.
 				// The acknowledgement and live tool row are duplicate noise in chat.
 				if (message.tool && isAgentControlTool(message.tool.name)) continue;
-				if (
-					message.tool &&
-					message.tool.name !== 'write_tasks' &&
-					isTaskProgressTool(message.tool.name)
-				) {
-					const status: RowStatus = message.running ? 'running' : 'done';
-					pushBlock(
-						fence(
-							'inforow',
-							status,
-							formatTaskStatusText(message.tool, status),
-						),
-						`task-info-${i}`,
-						'md',
-						message.brief,
-					);
-					continue;
-				}
 				// review_changes is a fan-out coordinator. Its individual reviewer
 				// calls are materialized as real agent tool rows; never paint the
 				// coordinator's aggregate result as one fake row.
@@ -1885,7 +1867,7 @@ export function latestSettledTaskMessages(
 		}
 		if (
 			message.role !== 'tool' ||
-			message.tool?.name !== 'write_tasks' ||
+			!isTaskProgressTool(message.tool?.name ?? '') ||
 			message.running
 		)
 			continue;
@@ -1910,11 +1892,11 @@ export function renderToolRun(
 		if (!activity) {
 			const message = block[0]!;
 			const compactTask =
-				message.tool?.name === 'write_tasks' &&
+				isTaskProgressTool(message.tool?.name ?? '') &&
 				!latestTaskMessages.has(message);
 			if (
 				compactTask &&
-				message.tool?.name === 'write_tasks' &&
+				isTaskProgressTool(message.tool?.name ?? '') &&
 				!message.brief?.trim()
 			) {
 				return [];
@@ -2046,14 +2028,19 @@ function singleToolRow(
 	compactTask = false,
 ): string {
 	if (!message.tool) return message.content;
-	if (
-		message.tool.name !== 'write_tasks' &&
-		isTaskProgressTool(message.tool.name)
-	) {
-		return fence(
-			'inforow',
+	if (isTaskProgressTool(message.tool.name)) {
+		return formatToolEntry(
+			{
+				...message.tool,
+				name: 'write_tasks',
+				output: liveOutput(message),
+				compactTask,
+			},
+			expandedBlocks()[key] ?? toolsExpanded(),
 			message.running ? 'running' : 'done',
-			formatTaskStatusText(message.tool, message.running ? 'running' : 'done'),
+			false,
+			true,
+			width,
 		);
 	}
 	if (message.tool.name === 'agent') return agentRow(message);

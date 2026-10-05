@@ -32,6 +32,33 @@ function snapshot(id: string, title: string, brief?: string): ChatMessage {
 	};
 }
 
+function taskProgressSnapshot(
+	name: 'task_update' | 'task_list',
+	id: string,
+	tasks: NonNullable<ChatMessage['tool']>['args'] extends never
+		? never
+		: Array<{
+				id: string;
+				title: string;
+				activeForm?: string;
+				status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+			}>,
+): ChatMessage {
+	return {
+		role: 'tool',
+		content: 'Task state updated.',
+		toolId: id,
+		tool: {
+			name,
+			detail: '',
+			output: tasks
+				.map(task => `${task.id} · ${task.status} · ${task.title}`)
+				.join('\n'),
+			args: {title: 'Finish Finance PR disposition', tasks},
+		},
+	};
+}
+
 test('History renders saved task rows and keeps them while replacement runs', async () => {
 	const stale = snapshot('stale', 'Superseded task');
 	const narrated = snapshot(
@@ -101,6 +128,102 @@ test('History renders saved task rows and keeps them while replacement runs', as
 	} finally {
 		setup.renderer.destroy();
 		setTasks([]);
+	}
+});
+
+test('later task updates keep the rich checklist instead of generic TaskList output', async () => {
+	const initial = snapshot('initial-tasks', 'Inspect current status');
+	initial.tool!.args = {
+		title: 'Finish Finance PR disposition',
+		tasks: [
+			{id: 'inspect', title: 'Inspect current status', status: 'in_progress'},
+			{
+				id: 'review',
+				title: 'Review exact checkpoint-isolation test change',
+				status: 'pending',
+			},
+			{
+				id: 'merge',
+				title: 'Merge checkpoint-isolation PR if exact-snapshot review passes',
+				status: 'pending',
+			},
+			{
+				id: 'verify',
+				title: 'Confirm Finance PR states and checks',
+				status: 'pending',
+			},
+		],
+	};
+	const updatedTasks = [
+		{
+			id: 'inspect',
+			title: 'Inspect current status',
+			status: 'completed' as const,
+		},
+		{
+			id: 'review',
+			title: 'Review exact checkpoint-isolation test change',
+			activeForm: 'Reviewing exact checkpoint-isolation test change',
+			status: 'in_progress' as const,
+		},
+		{
+			id: 'merge',
+			title: 'Merge checkpoint-isolation PR if exact-snapshot review passes',
+			status: 'pending' as const,
+		},
+		{
+			id: 'verify',
+			title: 'Confirm Finance PR states and checks',
+			status: 'pending' as const,
+		},
+	];
+	const update = taskProgressSnapshot(
+		'task_update',
+		'update-task',
+		updatedTasks,
+	);
+	const listed = taskProgressSnapshot('task_list', 'list-tasks', updatedTasks);
+	const [messages] = createSignal<ChatMessage[]>([initial, update, listed]);
+	const setup = await testRender(
+		() => (
+			<History
+				embedded
+				width={120}
+				height={20}
+				messages={messages}
+				running={() => false}
+				reasoning={() => ''}
+				streaming={() => ''}
+				liveOutputs={() => ({})}
+			/>
+		),
+		{width: 120, height: 20},
+	);
+	const text = () =>
+		setup
+			.captureSpans()
+			.lines.map(line => line.spans.map(span => span.text).join(''))
+			.join('\n');
+	try {
+		const deadline = Date.now() + 4000;
+		do {
+			await setup.flush();
+			if (text().includes('Reviewing exact checkpoint-isolation test change'))
+				break;
+			await Bun.sleep(25);
+		} while (Date.now() < deadline);
+		expect(text()).toContain('Finish Finance PR disposition');
+		expect(text()).toContain('(1 done, 1 in progress, 2 open)');
+		expect(text()).toContain('◆ Inspect current status');
+		expect(text()).toContain(
+			'› Reviewing exact checkpoint-isolation test change',
+		);
+		expect(text()).toContain('· Confirm Finance PR states and checks');
+		expect(text()).not.toContain('TaskList');
+		expect(text()).not.toContain('· in_progress ·');
+		expect(text()).not.toContain('more lines');
+	} finally {
+		setup.renderer.destroy();
 	}
 });
 
