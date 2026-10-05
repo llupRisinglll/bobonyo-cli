@@ -117,7 +117,7 @@ import {
 	stopManagedService,
 } from './managed-service';
 import type {Mode, ToolProfile} from './settings';
-import {contextTasks, contextTasksTitle} from './task-checklist-state';
+import {contextTaskDisplayArgs, contextTasks} from './task-checklist-state';
 import {registerTaskTools} from './task-tools';
 import {normalizeTaskList} from './task-list-normalize';
 export {normalizeTaskList} from './task-list-normalize';
@@ -784,11 +784,7 @@ async function executeScopedTool(
 				canonicalName,
 			)
 		) {
-			displayArgs = {
-				title: contextTasksTitle(ctx),
-				tasks: structuredClone(contextTasks(ctx)),
-				...(ctx.agentId ? {agentId: ctx.agentId} : {}),
-			};
+			displayArgs = contextTaskDisplayArgs(ctx);
 		}
 		if (canonicalName !== 'execute_bash') {
 			await runHooks({

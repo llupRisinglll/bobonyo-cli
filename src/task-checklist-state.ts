@@ -32,6 +32,17 @@ export function contextTasksTitle(ctx: ToolContext): string {
 	return checklistAgent(ctx).tasksTitle?.trim() || 'Tasks';
 }
 
+/** Immutable display snapshot shared by every task-progress tool result. */
+export function contextTaskDisplayArgs(
+	ctx: ToolContext,
+): Record<string, unknown> {
+	return {
+		title: contextTasksTitle(ctx),
+		tasks: structuredClone(contextTasks(ctx)),
+		...(ctx.agentId ? {agentId: ctx.agentId} : {}),
+	};
+}
+
 export function setContextTasks(
 	ctx: ToolContext,
 	next: SessionTask[] | ((previous: SessionTask[]) => SessionTask[]),
