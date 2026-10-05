@@ -212,7 +212,8 @@ import {ConnectProviderModal} from './components/connect-provider-modal';
 import {BackgroundJobsModal} from './components/background-jobs-modal';
 import {ActivityIndicator} from './components/activity-indicator';
 import {EffortModal} from './components/effort-modal';
-import {ResumeModal, type ResumeSession} from './components/resume-modal';
+import {ResumeModal} from './components/resume-modal';
+import {listSessionsAsync, loadSessionAsync} from './session-list-async';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {
@@ -1258,7 +1259,7 @@ export function App() {
 	};
 
 	let sessionLifecycleReady = Promise.resolve();
-	const startNewSession = (resumeRef?: string) => {
+	const startNewSession = (resumeRef?: string, loadedSession?: SessionData) => {
 		resetSessionCompaction();
 		graphContexts = new GraphContextStore();
 		compactionFailureRef = {...INITIAL_COMPACTION_FAILURE_STATE};
@@ -1273,7 +1274,7 @@ export function App() {
 					: 'startup',
 		}).then(() => {});
 		if (resumeRef) {
-			const resumed = resolveSession(resumeRef);
+			const resumed = loadedSession ?? resolveSession(resumeRef);
 			if (!resumed) {
 				appendInfo(`No session found for '${resumeRef}'.`);
 				// Inline list (listSessionsInfo is a later const, calling it
@@ -5305,7 +5306,7 @@ export function App() {
 			appendError(error instanceof Error ? error.message : String(error));
 		}
 	};
-	const resumeSession = (ref?: string) => {
+	const resumeSession = (ref?: string, loadedSession?: SessionData) => {
 		if (busy()) {
 			appendInfo('Cannot resume while a turn is running.');
 			return;
@@ -5322,7 +5323,7 @@ export function App() {
 		// `currentSession` still points at the old conversation, so this write
 		// can overwrite its file with the just-cleared display before resume
 		// installs the target session.
-		startNewSession(ref);
+		startNewSession(ref, loadedSession);
 	};
 
 	const listSessionsInfo = () => {
@@ -6430,21 +6431,12 @@ export function App() {
 			<Show when={resumeOpen()}>
 				<ResumeModal
 					cwd={process.cwd()}
-					// Read version makes filesystem-backed rows refresh after saves.
-					sessions={(sessionListVersion(), listSessions()).map(session => ({
-						id: session.id,
-						name: session.name,
-						createdAt: session.createdAt,
-						updatedAt: session.updatedAt,
-						firstMessage: session.firstMessage,
-						lastMessage: session.lastMessage,
-						cwd: session.cwd,
-						provider: session.provider,
-						model: session.model,
-					}))}
-					onResume={id => {
+					refreshVersion={sessionListVersion()}
+					loadSessions={listSessionsAsync}
+					loadSelected={loadSessionAsync}
+					onResume={(id, loadedSession) => {
 						setResumeOpen(false);
-						resumeSession(id);
+						resumeSession(id, loadedSession);
 					}}
 					onClose={() => setResumeOpen(false)}
 				/>

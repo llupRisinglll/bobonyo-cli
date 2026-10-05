@@ -1,11 +1,19 @@
 /** @jsxImportSource @opentui/solid */
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js';
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+} from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
 import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
 import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
 import {isDeleteKey} from '../input-keys';
+import type {SessionData} from '../session';
 
 export interface ResumeSession {
 	id: string;
@@ -112,10 +120,66 @@ function relativeTime(ts: number): string {
  */
 export function ResumeModal(props: {
 	cwd: string;
-	sessions: ResumeSession[];
-	onResume: (id: string) => void;
+	sessions?: ResumeSession[];
+	loadSessions?: (signal: AbortSignal) => Promise<ResumeSession[]>;
+	refreshVersion?: number;
+	loadSelected?: (
+		id: string,
+		signal: AbortSignal,
+	) => Promise<SessionData | null>;
+	onResume: (id: string, loadedSession?: SessionData) => void;
 	onClose: () => void;
 }) {
+	const [loadedSessions, setLoadedSessions] = createSignal<ResumeSession[]>([]);
+	const [loading, setLoading] = createSignal(Boolean(props.loadSessions));
+	const [loadError, setLoadError] = createSignal(false);
+	const [selecting, setSelecting] = createSignal(false);
+	let selection: AbortController | undefined;
+	onCleanup(() => selection?.abort());
+	const selectSession = async (id: string) => {
+		if (selecting()) return;
+		if (!props.loadSelected) return props.onResume(id);
+		selection = new AbortController();
+		const controller = selection;
+		setSelecting(true);
+		setLoadError(false);
+		try {
+			const data = await props.loadSelected(id, controller.signal);
+			if (controller.signal.aborted) return;
+			if (!data) throw new Error('Session unavailable');
+			props.onResume(id, data);
+		} catch {
+			if (!controller.signal.aborted) setLoadError(true);
+		} finally {
+			if (!controller.signal.aborted) setSelecting(false);
+		}
+	};
+	createEffect(() => {
+		props.refreshVersion;
+		const load = props.loadSessions;
+		if (!load) return;
+		const controller = new AbortController();
+		onCleanup(() => controller.abort());
+		setLoading(true);
+		setLoadError(false);
+		setLoadedSessions([]);
+		// Yield first so the modal paints before any filesystem work starts.
+		Promise.resolve()
+			.then(() => {
+				if (controller.signal.aborted) return;
+				return load(controller.signal);
+			})
+			.then(rows => {
+				if (controller.signal.aborted) return;
+				setLoadedSessions(rows ?? []);
+				setLoading(false);
+			})
+			.catch(() => {
+				if (controller.signal.aborted) return;
+				setLoadError(true);
+				setLoading(false);
+			});
+	});
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
 	const [rowIndex, setRowIndex] = createSignal(0);
@@ -151,12 +215,14 @@ export function ResumeModal(props: {
 				? 2
 				: 1;
 		const content = allRows().reduce((sum, row) => sum + lineCount(row), 0);
-		return Math.min(available, 26, Math.max(10, content + 10));
+		// Shared three-row ModalHeader increased fixed chrome from 10 to 14
+		// rows. Reserve that chrome so loading state and footer stay visible.
+		return Math.min(available, 26, Math.max(15, content + 14));
 	};
 	const cardY = () =>
 		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	const listVisible = () => Math.max(3, cardHeight() - 10);
+	const listVisible = () => Math.max(1, cardHeight() - 14);
 
 	// Lazy + memoized row building: dedupe duplicate session ids (same
 	// session saved under several files), cap pathological lists, and only
@@ -165,7 +231,9 @@ export function ResumeModal(props: {
 	const allRows = createMemo(() => {
 		const q = query().trim().toLowerCase();
 		const seen = new Set<string>();
-		const filtered = [...props.sessions]
+		const filtered = [
+			...(props.loadSessions ? loadedSessions() : (props.sessions ?? [])),
+		]
 			.sort(
 				(a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
 			)
@@ -276,7 +344,7 @@ export function ResumeModal(props: {
 		}
 		if (event.name === 'return') {
 			const row = items()[rowIndex()]?.row;
-			if (row?.kind === 'session') props.onResume(row.session.id);
+			if (row?.kind === 'session') void selectSession(row.session.id);
 			return;
 		}
 		if (isDeleteKey(event)) {
@@ -389,7 +457,11 @@ export function ResumeModal(props: {
 							if (row.kind === 'empty') {
 								return (
 									<text fg={colors().secondary} attributes={dim()}>
-										No sessions match "{query()}"
+										{loading()
+											? 'Loading sessions…'
+											: loadError()
+												? 'Could not load sessions. Esc close; /resume to retry.'
+												: `No sessions match "${query()}"`}
 									</text>
 								);
 							}
@@ -417,7 +489,7 @@ export function ResumeModal(props: {
 									height={reason ? 2 : 1}
 									backgroundColor={item.active ? activeRow().bg : undefined}
 									{...({
-										onMouseUp: () => props.onResume(row.session.id),
+										onMouseUp: () => void selectSession(row.session.id),
 										onMouseMove: () =>
 											setRowIndex(
 												allRows().findIndex(
@@ -482,8 +554,11 @@ export function ResumeModal(props: {
 					</For>
 					<box height={1} />
 					<text fg={colors().secondary} attributes={dim()}>
-						↑/↓ select · Enter resume · Ctrl+A {showAll() ? 'folder' : 'all'} ·
-						Esc close
+						{selecting()
+							? 'Loading session… · Esc close'
+							: loadError()
+								? 'Could not load sessions. Esc close; /resume to retry.'
+								: `↑/↓ select · Enter resume · Ctrl+A ${showAll() ? 'folder' : 'all'} · Esc close`}
 					</text>
 				</box>
 			</box>

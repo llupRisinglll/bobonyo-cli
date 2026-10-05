@@ -906,6 +906,20 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(resume).toContain('useKeyboard(handleKey)');
 	});
 
+	test('resume modal never scans session files during app render', () => {
+		const app = read('./app.tsx');
+		const modal = read('./components/resume-modal.tsx');
+		expect(app).toContain('loadSessions={listSessionsAsync}');
+		expect(app).toContain('loadSelected={loadSessionAsync}');
+		expect(app).not.toMatch(
+			/sessions=\{\(sessionListVersion\(\), listSessions\(\)\)/,
+		);
+		expect(modal).toContain("'Loading sessions…'");
+		expect(modal).toMatch(
+			/Promise\.resolve\(\)[\s\S]*load\(controller\.signal\)/,
+		);
+	});
+
 	test('/undo is conversation-only and /rewind owns file restoration', () => {
 		const app = read('./app.tsx');
 		const commands = read('./commands.ts');
