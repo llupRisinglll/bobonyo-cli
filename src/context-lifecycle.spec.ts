@@ -24,7 +24,6 @@ test('resume readiness includes asynchronous context restoration', () => {
 	expect(resume).toMatch(
 		/Promise\.all\(\[\s*sessionLifecycleReady,\s*restoreSession,?\s*\]\)/,
 	);
-	expect(resume).toContain(
-		'if (hookSessionId() !== restoringSessionId) return;',
-	);
+	expect(resume).toMatch(/if\s*\(controller\.signal\.aborted\) return;/);
+	expect(resume).not.toContain('const restoringSessionId = hookSessionId()');
 });

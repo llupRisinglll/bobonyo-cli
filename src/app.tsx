@@ -174,7 +174,6 @@ import {
 	forkSession,
 	listSessions,
 	newSessionId,
-	resolveSession,
 	saveCompactionTranscript,
 	saveCheckpoint,
 	saveSession,
@@ -214,7 +213,13 @@ import {BackgroundJobsModal} from './components/background-jobs-modal';
 import {ActivityIndicator} from './components/activity-indicator';
 import {EffortModal} from './components/effort-modal';
 import {ResumeModal} from './components/resume-modal';
-import {listSessionsAsync, loadSessionAsync} from './session-list-async';
+import {listSessionsAsync, prepareSessionAsync} from './session-list-async';
+import {
+	afterLoadingFrame,
+	showResumeLoading,
+	hideResumeLoading,
+} from './resume-loading';
+export {promptHistoryFromMessages} from './resume-preparation';
 import {AgentsModal} from './components/agents-modal';
 import {DetailsModal} from './components/details-modal';
 import {
@@ -338,7 +343,6 @@ import {
 	appendInfo,
 	appendMessage,
 	appendWarning,
-	capDisplayMessages,
 	showToast,
 	toast,
 	formatElapsed,
@@ -649,7 +653,7 @@ export interface CompactionPartition {
  * the transcript as info rows, never to the provider context, never
  * persisted.
  */
-export function App() {
+export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	const renderer = useRenderer();
 	// Resume may switch process.cwd() to the saved session directory. Keep
 	// launch CWD so `/clear` returns to the directory outside the TUI.
@@ -1052,7 +1056,8 @@ export function App() {
 		// are file reads, MCP is a stdio handshake, LSP a sync binary scan —
 		// one can finish long before the others).
 		const startedAt = Date.now();
-		setStartupLoading([
+		setStartupLoading(prev => [
+			...prev.filter(item => item.id === 'resume'),
 			{id: 'skills', label: 'Loading skills · tools'},
 			{id: 'mcp', label: 'Loading MCP'},
 			{id: 'lsp', label: 'Loading LSP'},
@@ -1139,7 +1144,7 @@ export function App() {
 			finish('lsp');
 		} catch {
 			// Best-effort init; never let the loader hang on a failure.
-			setStartupLoading([]);
+			setStartupLoading(prev => prev.filter(item => item.id === 'resume'));
 		} finally {
 			// The catalog is final (built-ins + custom + MCP + LSP tool) once
 			// lazy init settles; allow LLM turns from here on.
@@ -1159,7 +1164,18 @@ export function App() {
 		execute: () =>
 			process.env.NANOCODER_DIAG_FIXTURE ?? 'Diagnostics: no issues found.',
 	});
-	setTimeout(() => void startupInit(), 0);
+	// A zero-delay timer can run before native paint and block the resume
+	// loading frame with unrelated custom-tool/LSP filesystem scans.
+	let startupTimer: ReturnType<typeof setTimeout> | undefined;
+	const startServices = () => {
+		startupTimer = setTimeout(() => void startupInit(), 0);
+	};
+	renderer.once('frame', startServices);
+	renderer.requestRender();
+	onCleanup(() => {
+		renderer.off('frame', startServices);
+		if (startupTimer) clearTimeout(startupTimer);
+	});
 
 	const persist = () => {
 		if (!currentSession || !hasPersistableConversation(messages())) return;
@@ -1260,59 +1276,76 @@ export function App() {
 	};
 
 	let sessionLifecycleReady = Promise.resolve();
+	let sessionGeneration = 0;
+	const sessionStillCurrent = (generation: number) => {
+		if (generation === sessionGeneration) return true;
+		appendInfo(
+			'Session changed while preparing your message. Submit it again in the intended conversation.',
+		);
+		return false;
+	};
+	let resumeController: AbortController | undefined;
+	let goalDraftController: AbortController | undefined;
+	onCleanup(() => resumeController?.abort());
 	const startNewSession = (resumeRef?: string, loadedSession?: SessionData) => {
+		sessionGeneration++;
+		resumeController?.abort();
+		goalDraftController?.abort();
+		setCurrentGoal(undefined);
+		goalContinuationPending = false;
+		loopJobsRef = [];
+		for (const timer of loopTimers.values()) clearTimeout(timer);
+		loopTimers.clear();
+		setPendingQueue([]);
+		// No persistence owner exists between conversations. Commands remain
+		// usable while loading, but must never write into the previous session.
+		currentSession = null;
+		hideResumeLoading();
 		resetSessionCompaction();
 		graphContexts = new GraphContextStore();
 		compactionFailureRef = {...INITIAL_COMPACTION_FAILURE_STATE};
 		autoCompactReentryFloorRef = 0;
 		resetFileUndoStack();
-		sessionLifecycleReady = runHooks({
-			event: 'SessionStart',
-			sessionSource: resumeRef
-				? 'resume'
-				: messages().length > 0
-					? 'clear'
-					: 'startup',
-		}).then(() => {});
+		const sessionStartHook = () =>
+			runHooks({
+				event: 'SessionStart',
+				sessionSource: resumeRef
+					? 'resume'
+					: messages().length > 0
+						? 'clear'
+						: 'startup',
+			}).then(() => {});
+		sessionLifecycleReady = resumeRef ? Promise.resolve() : sessionStartHook();
 		if (resumeRef) {
-			const resumed = loadedSession ?? resolveSession(resumeRef);
-			if (!resumed) {
-				appendInfo(`No session found for '${resumeRef}'.`);
-				// Inline list (listSessionsInfo is a later const, calling it
-				// here during init would hit the TDZ).
-				const sessions = listSessions();
-				appendInfo(
-					sessions.length === 0
-						? 'No saved sessions yet.'
-						: `Saved sessions (${sessions.length}):\n` +
-								sessions
-									.slice(0, 8)
-									.map(
-										(session, index) =>
-											`  └ ${index} · ${session.id} · ${session.firstMessage}`,
-									)
-									.join('\n'),
-				);
-				return;
-			}
-			// The resume body is async ONLY for the `ask` cwd mode (the user
-			// answers the directory prompt before the session fully loads);
-			// everything up to the first await runs synchronously, so the
-			// transcript/context render immediately.
-			const restoringSessionId = hookSessionId();
+			const controller = new AbortController();
+			resumeController = controller;
+			showResumeLoading();
 			setActiveEndpoint(prev => ({...prev, fastMode: undefined}));
 			const restoreSession = (async () => {
+				await afterLoadingFrame(renderer, controller.signal);
+				if (controller.signal.aborted) return;
+				const [prepared] = await Promise.all([
+					(props.resumeLoader ?? prepareSessionAsync)(
+						resumeRef,
+						maxMessages(),
+						controller.signal,
+						loadedSession,
+					),
+					sessionStartHook(),
+				]);
+				if (controller.signal.aborted) return;
+				if (!prepared) {
+					installFreshSession();
+					appendInfo(
+						`No session found for '${resumeRef}'. Use /resume to choose a saved session.`,
+					);
+					return;
+				}
+				const resumed = prepared.session;
 				// LAZY BUFFER: a resumed session with a huge transcript is
 				// capped to the bounded display window (older messages are
 				// trimmed with a marker) so the render stays light even when
 				// a pre-compaction session file survived.
-				setMessages(
-					capDisplayMessages(
-						resumed.messages.filter(
-							message => !isTaskNotification(message.content),
-						),
-					),
-				);
 				// Heal pre-fix sessions whose provider context lagged the
 				// transcript (interrupted turns never committed their user
 				// messages) — otherwise a resumed conversation looks empty
@@ -1320,16 +1353,6 @@ export function App() {
 				// The heal is tail-lag only and capped to the live message
 				// budget, so a healthy capped context is reused byte-for-byte
 				// and the provider's prefix cache survives the resume.
-				graphContexts = new GraphContextStore(resumed.graphContexts);
-				setContext(
-					resumed.graphContexts
-						? resumed.context
-						: healResumedContext(
-								resumed.context,
-								resumed.messages,
-								maxMessages(),
-							),
-				);
 				// CACHE HEAD PARITY: the system prompt's volatile block
 				// carries the working directory + that dir's AGENTS.md (it
 				// reads process.cwd()). A session resumed from a DIFFERENT
@@ -1362,24 +1385,41 @@ export function App() {
 				if (cwdDecision === 'session') {
 					cwdChanged = tryChdir();
 				} else if (cwdDecision === 'ask') {
-					const answer = await new Promise<string>(resolve =>
-						setPendingPrompt({
+					const answer = await new Promise<string>(resolve => {
+						const prompt = {
 							question: `Use the session directory ${resumed.cwd}? (y/N)`,
 							resolve,
 							onCancel: () => resolve(''),
-						}),
-					);
-					if (hookSessionId() !== restoringSessionId) return;
+						};
+						const cancel = () => {
+							if (pendingPrompt() === prompt) setPendingPrompt(null);
+							resolve('');
+						};
+						controller.signal.addEventListener('abort', cancel, {once: true});
+						setPendingPrompt(prompt);
+						// Remove the cancellation listener on normal answers too.
+						prompt.resolve = answer => {
+							controller.signal.removeEventListener('abort', cancel);
+							resolve(answer);
+						};
+						prompt.onCancel = () => prompt.resolve('');
+					});
+					// SessionStart replaces hook identity itself. The controller,
+					// not that identity, owns this restoration across the prompt.
+					if (controller.signal.aborted) return;
 					if (/^y(es)?$/i.test(answer.trim())) {
 						cwdChanged = tryChdir();
 					}
 				}
 				updateWorkspaceCwd(process.cwd());
+				setMessages(prepared.display);
+				graphContexts = new GraphContextStore(resumed.graphContexts);
+				setContext(prepared.context);
 				// Arrow-up history parity: rebuild the prompt history from the
 				// resumed conversation so ↑/↓ recall the prompts this session
 				// actually sent (live sessions build the same list per turn,
 				// capped at 100, newest last).
-				setPromptHistory(promptHistoryFromMessages(resumed.messages));
+				setPromptHistory(prepared.promptHistory);
 				setHistoryIndex(-1);
 				setSessionId(resumed.id);
 				setSessionName(resumed.name);
@@ -1394,17 +1434,10 @@ export function App() {
 				currentSession = {...resumed};
 				setCurrentGoal(resumed.goal);
 				loopJobsRef = [...(resumed.loopJobs ?? [])];
+				const restoredTaskMessage = prepared.taskMessage;
 				const restoredTasks =
 					resumed.tasks ??
-					normalizeTaskList(
-						[...resumed.messages]
-							.reverse()
-							.find(message => message.tool?.name === 'write_tasks')?.tool?.args
-							?.tasks,
-					);
-				const restoredTaskMessage = [...resumed.messages]
-					.reverse()
-					.find(message => message.tool?.name === 'write_tasks');
+					normalizeTaskList(restoredTaskMessage?.tool?.args?.tasks);
 				setTasksTitle(
 					typeof restoredTaskMessage?.tool?.args?.title === 'string' &&
 						restoredTaskMessage.tool.args.title.trim()
@@ -1418,19 +1451,17 @@ export function App() {
 					})),
 				);
 				setActiveAgentRuns(
-					(resumed.subagentRuns ?? [])
-						.map(run =>
-							run.status === 'running'
-								? {
-										...run,
-										status: 'cancelled' as const,
-										streaming: '',
-										output:
-											`${run.output}\nInterrupted by session restart.`.trim(),
-									}
-								: {...run},
-						)
-						.slice(-20),
+					(resumed.subagentRuns ?? []).slice(-20).map(run =>
+						run.status === 'running'
+							? {
+									...run,
+									status: 'cancelled' as const,
+									streaming: '',
+									output:
+										`${run.output}\nInterrupted by session restart.`.trim(),
+								}
+							: {...run},
+					),
 				);
 				for (const timer of loopTimers.values()) clearTimeout(timer);
 				loopTimers.clear();
@@ -1498,14 +1529,36 @@ export function App() {
 					setCompletionMessage('');
 					setCompletionTone('default');
 				}, 6000);
-			})();
+			})()
+				.catch(error => {
+					if (!controller.signal.aborted) {
+						installFreshSession();
+						appendError(
+							`Could not resume session: ${error instanceof Error ? error.message : String(error)}. Started a new conversation; use /resume to retry.`,
+						);
+					}
+				})
+				.finally(() => {
+					// Restoration is complete; the next paint replaces the loader with
+					// the restored transcript rather than showing a stale loading row.
+					if (!controller.signal.aborted) hideResumeLoading();
+				});
 			sessionLifecycleReady = Promise.all([
 				sessionLifecycleReady,
 				restoreSession,
 			]).then(() => {});
 			return;
 		}
+		installFreshSession();
+	};
+	const installFreshSession = () => {
 		const id = newSessionId();
+		clearMessages();
+		setCompletionMessage('');
+		graphContexts = new GraphContextStore();
+		setTasks([]);
+		setTasksTitle('Tasks');
+		setActiveAgentRuns([]);
 		setCurrentGoal(undefined);
 		loopJobsRef = [];
 		for (const timer of loopTimers.values()) clearTimeout(timer);
@@ -1859,7 +1912,6 @@ export function App() {
 		persist();
 	}
 
-	let goalDraftController: AbortController | undefined;
 	async function goalFromContext(focus: string): Promise<void> {
 		if (queryActiveRef || promptPreparingRef || busy()) {
 			appendInfo('Finish the current foreground turn before using /goal:this.');
@@ -3011,6 +3063,7 @@ export function App() {
 	const prepareUserPrompt = async (
 		value: string,
 		attachments?: Record<string, string>,
+		generation = sessionGeneration,
 	) => {
 		const trimmed = value.trim();
 		// Vision fallback (Settings → Capabilities → Vision model): when the
@@ -3039,6 +3092,7 @@ export function App() {
 							'Be specific about visible text, layout, colors, UI elements, and anything ' +
 							'another agent might need to act on.',
 					);
+					if (!sessionStillCurrent(generation)) return;
 					if (description.trim()) {
 						prompt = prompt.replace(
 							match[0],
@@ -3047,6 +3101,7 @@ export function App() {
 						replaced += 1;
 					}
 				} catch (error) {
+					if (!sessionStillCurrent(generation)) return;
 					// Best-effort: keep the [Image #N] token so the main model
 					// still sees the attachment reference, but surface the
 					// failure so a misconfigured fallback is debuggable.
@@ -3066,7 +3121,9 @@ export function App() {
 		}
 
 		await sessionLifecycleReady;
+		if (!sessionStillCurrent(generation)) return;
 		const promptHook = await runHooks({event: 'UserPromptSubmit', prompt});
+		if (!sessionStillCurrent(generation)) return;
 		return applyUserPromptHookResult(prompt, promptHook, appendWarning);
 	};
 	const repairWorkspaceCwd = (): string | undefined => {
@@ -3200,7 +3257,7 @@ export function App() {
 			// message path so file paths / natural language starting with /
 			// still reach the model and get recorded in prompt history.
 			const handled = runCommand(prompt, {
-				onBuiltinCommand: () => {
+				onBuiltinCommand: (_input, options) => {
 					appendMessage({role: 'user', content: value, submittedCommand: true});
 					setPromptHistory(prev =>
 						prev[prev.length - 1] === value
@@ -3209,7 +3266,7 @@ export function App() {
 					);
 					setHistoryIndex(-1);
 					if (currentSession) currentSession.lastMessageAt = Date.now();
-					persist();
+					if (options?.persist !== false) persist();
 				},
 				exit,
 				clear,
@@ -3336,7 +3393,9 @@ export function App() {
 			if (handled) return;
 		}
 
-		const prepared = await prepareUserPrompt(value, attachments);
+		const generation = sessionGeneration;
+		const prepared = await prepareUserPrompt(value, attachments, generation);
+		if (!sessionStillCurrent(generation)) return;
 		if (prepared === undefined) return;
 		prompt = prepared;
 		// Ordinary busy submissions are snapshotted before asynchronous preparation.
@@ -3352,7 +3411,14 @@ export function App() {
 		// command that is the typed `/command args`, NOT the injected body);
 		// the provider sees the prompt with vision-description blocks
 		// substituted for [Image #N].
-		await runTurn(command?.original ?? value, prompt, attachments, command);
+		await runTurn(
+			command?.original ?? value,
+			prompt,
+			attachments,
+			command,
+			undefined,
+			generation,
+		);
 		processQueue();
 	};
 
@@ -3373,8 +3439,10 @@ export function App() {
 			graphId?: string;
 			goalOwner?: GoalOwner;
 		},
+		generation = sessionGeneration,
 	) => {
 		await sessionLifecycleReady;
+		if (!sessionStillCurrent(generation)) return;
 		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
 		const activeGoalOwner =
@@ -5100,7 +5168,9 @@ export function App() {
 		}
 	};
 	const compact = async (instructions = '') => {
+		const generation = sessionGeneration;
 		await sessionLifecycleReady;
+		if (!sessionStillCurrent(generation)) return;
 		if (busy()) {
 			appendInfo('Cannot compact while a turn is running.');
 			return;
@@ -5332,11 +5402,10 @@ export function App() {
 			return;
 		}
 		abortRef?.abort();
+		currentSession = null;
 		clearMessages();
-		// `startNewSession(ref)` loads asynchronously. Do not persist here:
-		// `currentSession` still points at the old conversation, so this write
-		// can overwrite its file with the just-cleared display before resume
-		// installs the target session.
+		// Detach before clearing: even slash-command persistence during delayed
+		// loading cannot overwrite the previous conversation's saved snapshot.
 		startNewSession(ref, loadedSession);
 	};
 
@@ -6447,7 +6516,6 @@ export function App() {
 					cwd={process.cwd()}
 					refreshVersion={sessionListVersion()}
 					loadSessions={listSessionsAsync}
-					loadSelected={loadSessionAsync}
 					onResume={(id, loadedSession) => {
 						setResumeOpen(false);
 						resumeSession(id, loadedSession);
@@ -6717,25 +6785,6 @@ export function interruptedContext(
 	return partial.trim()
 		? [...history, {role: 'assistant' as const, content: partial}]
 		: [...history];
-}
-
-/**
- * Rebuild the arrow-up prompt history from a session's transcript (used on
- * resume so ↑ recalls the prompts this conversation actually sent). Pure,
- * unit-tested: user messages only, `command.original` (the typed command)
- * wins over the injected body, errors skipped, consecutive duplicates
- * collapsed, newest last, capped at 100 like the live per-turn history.
- */
-export function promptHistoryFromMessages(messages: ChatMessage[]): string[] {
-	const history: string[] = [];
-	for (const message of messages) {
-		if (message.role !== 'user' || message.error) continue;
-		const prompt = message.command?.original ?? message.content ?? '';
-		if (!prompt) continue;
-		if (history[history.length - 1] === prompt) continue;
-		history.push(prompt);
-	}
-	return history.slice(-100);
 }
 
 /**

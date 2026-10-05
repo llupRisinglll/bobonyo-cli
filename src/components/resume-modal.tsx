@@ -8,7 +8,12 @@ import {
 	Show,
 } from 'solid-js';
 import {createTextAttributes, RGBA} from '@opentui/core';
-import {useKeyboard, usePaste, useTerminalDimensions} from '@opentui/solid';
+import {
+	useKeyboard,
+	usePaste,
+	useRenderer,
+	useTerminalDimensions,
+} from '@opentui/solid';
 import {ModalHeader, modalWheel} from './modal-header';
 import {colors} from '../theme';
 import {activeRowPalette} from '../row-highlight';
@@ -130,6 +135,7 @@ export function ResumeModal(props: {
 	onResume: (id: string, loadedSession?: SessionData) => void;
 	onClose: () => void;
 }) {
+	const renderer = useRenderer();
 	const [loadedSessions, setLoadedSessions] = createSignal<ResumeSession[]>([]);
 	const [loading, setLoading] = createSignal(Boolean(props.loadSessions));
 	const [loadError, setLoadError] = createSignal(false);
@@ -159,26 +165,33 @@ export function ResumeModal(props: {
 		const load = props.loadSessions;
 		if (!load) return;
 		const controller = new AbortController();
-		onCleanup(() => controller.abort());
+		onCleanup(() => {
+			controller.abort();
+			renderer.off('frame', startLoading);
+		});
 		setLoading(true);
 		setLoadError(false);
 		setLoadedSessions([]);
-		// Yield first so the modal paints before any filesystem work starts.
-		Promise.resolve()
-			.then(() => {
-				if (controller.signal.aborted) return;
-				return load(controller.signal);
-			})
-			.then(rows => {
-				if (controller.signal.aborted) return;
-				setLoadedSessions(rows ?? []);
-				setLoading(false);
-			})
-			.catch(() => {
-				if (controller.signal.aborted) return;
-				setLoadError(true);
-				setLoading(false);
-			});
+		// A microtask yields to promises, NOT the renderer. Start I/O only
+		// after the native loading frame has actually been painted.
+		const startLoading = () =>
+			void Promise.resolve()
+				.then(() => {
+					if (controller.signal.aborted) return;
+					return load(controller.signal);
+				})
+				.then(rows => {
+					if (controller.signal.aborted) return;
+					setLoadedSessions(rows ?? []);
+					setLoading(false);
+				})
+				.catch(() => {
+					if (controller.signal.aborted) return;
+					setLoadError(true);
+					setLoading(false);
+				});
+		renderer.once('frame', startLoading);
+		renderer.requestRender();
 	});
 	const terminalDimensions = useTerminalDimensions();
 	const dims = () => terminalDimensions();
@@ -215,14 +228,14 @@ export function ResumeModal(props: {
 				? 2
 				: 1;
 		const content = allRows().reduce((sum, row) => sum + lineCount(row), 0);
-		// Shared three-row ModalHeader increased fixed chrome from 10 to 14
-		// rows. Reserve that chrome so loading state and footer stay visible.
-		return Math.min(available, 26, Math.max(15, content + 14));
+		return Math.min(available, 26, content + chromeHeight());
 	};
+	// Header + body padding + search + scope + two separators + footer.
+	const chromeHeight = () => (dims().height >= 9 ? 12 : 8);
 	const cardY = () =>
 		Math.max(0, Math.floor((dims().height - cardHeight()) / 2));
 	const cardX = () => Math.floor((dims().width - cardWidth()) / 2);
-	const listVisible = () => Math.max(1, cardHeight() - 14);
+	const listVisible = () => Math.max(1, cardHeight() - chromeHeight());
 
 	// Lazy + memoized row building: dedupe duplicate session ids (same
 	// session saved under several files), cap pathological lists, and only
@@ -275,31 +288,32 @@ export function ResumeModal(props: {
 	const visibleItems = () => {
 		const all = items();
 		const budget = Math.max(1, listVisible());
-		// Sessions occupy TWO lines (reason + title); headers/spacers one.
-		// The window is sliced by LINE budget so a 2-line row can never
-		// overflow the card and overlap the next row.
+		// Reserve the selected title before adding context above it. A
+		// one-line viewport drops the optional preview, never the selection.
 		const lineCount = (row: Row): number =>
 			row.kind === 'session' &&
 			(row.session.lastMessage ?? row.session.firstMessage ?? '').trim()
 				? 2
 				: 1;
 		const sel = Math.min(Math.max(0, rowIndex()), all.length - 1);
+		const selectedLines = Math.min(budget, lineCount(all[sel]!.row));
 		let start = sel;
 		let used = 0;
-		const half = Math.floor(budget / 2);
-		while (start > 0 && used + lineCount(all[start]!.row) <= half) {
-			used += lineCount(all[start]!.row);
+		const aboveBudget = Math.min(
+			Math.floor(budget / 2),
+			budget - selectedLines,
+		);
+		while (start > 0 && used + lineCount(all[start - 1]!.row) <= aboveBudget) {
+			used += lineCount(all[start - 1]!.row);
 			start--;
 		}
-		const out: typeof all = [];
+		const out: Array<(typeof all)[number] & {lines: number}> = [];
 		let lines = 0;
-		for (
-			let i = start;
-			i < all.length && lines + lineCount(all[i]!.row) <= budget;
-			i++
-		) {
-			out.push(all[i]!);
-			lines += lineCount(all[i]!.row);
+		for (let i = start; i < all.length; i++) {
+			const rowLines = i === sel ? selectedLines : lineCount(all[i]!.row);
+			if (lines + rowLines > budget) break;
+			out.push({...all[i]!, lines: rowLines});
+			lines += rowLines;
 		}
 		return out;
 	};
@@ -415,10 +429,6 @@ export function ResumeModal(props: {
 					paddingX={Math.min(1, Math.floor(cardWidth() / 3))}
 					paddingY={dims().height >= 9 ? 1 : 0}
 				>
-					<box height={1} />
-					{/* opencode-style title spacing: a comfortable gap before the
-				    search field. */}
-					<box height={1} />
 					<box
 						border
 						borderStyle="rounded"
@@ -435,7 +445,6 @@ export function ResumeModal(props: {
 							<text fg={colors().secondary}>Type to filter…</text>
 						</Show>
 					</box>
-					<box height={1} />
 					{/* SCOPE indicator: current folder by default, Ctrl+A toggles
 				    to ALL conversations. */}
 					<Show
@@ -486,7 +495,7 @@ export function ResumeModal(props: {
 							return (
 								<box
 									flexDirection="column"
-									height={reason ? 2 : 1}
+									height={item.lines}
 									backgroundColor={item.active ? activeRow().bg : undefined}
 									{...({
 										onMouseUp: () => void selectSession(row.session.id),
@@ -537,7 +546,7 @@ export function ResumeModal(props: {
 									{/* The LAST PROMPT sits BELOW the title with a
 								    ` └ ` branch, secondary (dimmed) — same
 								    color rule as the other optional lines. */}
-									{reason ? (
+									{reason && item.lines > 1 ? (
 										<text
 											fg={item.active ? activeRow().fg : colors().secondary}
 											attributes={item.active ? bold() : dim()}

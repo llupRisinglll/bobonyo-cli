@@ -259,7 +259,7 @@ const MOCK_PROMPTS: Record<string, string> = {
 
 export interface CommandContext {
 	/** Record a typed built-in invocation before its handler runs. */
-	onBuiltinCommand?: (input: string) => void;
+	onBuiltinCommand?: (input: string, options?: {persist: false}) => void;
 	exit: () => void;
 	clear: () => void;
 	compact: (instructions: string) => void;
@@ -424,7 +424,13 @@ export function runCommand(input: string, ctx: CommandContext): boolean {
 		name === 'herdr:fork' ||
 		name === 'fast'
 	) {
-		ctx.onBuiltinCommand?.(input);
+		// Opening a picker is navigation, not a durable conversation change.
+		// Still record the command, but do not snapshot the entire transcript
+		// before mounting the loading UI. The next turn/exit saves it normally.
+		ctx.onBuiltinCommand?.(
+			input,
+			name === 'resume' && !args ? {persist: false} : undefined,
+		);
 	}
 	switch (name) {
 		case 'help':

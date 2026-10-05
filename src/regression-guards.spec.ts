@@ -910,7 +910,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const app = read('./app.tsx');
 		const modal = read('./components/resume-modal.tsx');
 		expect(app).toContain('loadSessions={listSessionsAsync}');
-		expect(app).toContain('loadSelected={loadSessionAsync}');
+		expect(app).toContain('props.resumeLoader ?? prepareSessionAsync');
+		expect(app).toMatch(
+			/await afterLoadingFrame\(renderer, controller\.signal\)[\s\S]*props\.resumeLoader \?\? prepareSessionAsync/,
+		);
+		expect(app).not.toContain('resolveSession(resumeRef)');
 		expect(app).not.toMatch(
 			/sessions=\{\(sessionListVersion\(\), listSessions\(\)\)/,
 		);
@@ -918,6 +922,18 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(modal).toMatch(
 			/Promise\.resolve\(\)[\s\S]*load\(controller\.signal\)/,
 		);
+	});
+	test('application dispatch honors resume navigation persistence policy', () => {
+		const app = read('./app.tsx');
+		const callback = app.slice(
+			app.indexOf('onBuiltinCommand:'),
+			app.indexOf('\n\t\t\t\texit,', app.indexOf('onBuiltinCommand:')),
+		);
+		expect(callback).toContain('(_input, options)');
+		expect(callback).toContain('if (options?.persist !== false) persist();');
+		const modal = read('./components/resume-modal.tsx');
+		expect(modal).toContain("renderer.once('frame', startLoading)");
+		expect(modal).toContain('cardHeight() - chromeHeight()');
 	});
 
 	test('/undo is conversation-only and /rewind owns file restoration', () => {
@@ -1367,11 +1383,11 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 	test('goal continuation prompts never replace typed command history', () => {
 		const app = read('./app.tsx');
-		expect(app).toContain('onBuiltinCommand: () =>');
+		expect(app).toContain('onBuiltinCommand: (_input, options) =>');
 		expect(app).toContain('submittedCommand: true');
 		const record = app.slice(
-			app.indexOf('onBuiltinCommand: () =>'),
-			app.indexOf('goal: goalCommand', app.indexOf('onBuiltinCommand: () =>')),
+			app.indexOf('onBuiltinCommand:'),
+			app.indexOf('goal: goalCommand', app.indexOf('onBuiltinCommand:')),
 		);
 		expect(record).toContain('content: value');
 		expect(record).toContain('persist()');

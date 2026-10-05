@@ -1,8 +1,13 @@
 import {Worker} from 'node:worker_threads';
 import type {SessionData, SessionMeta} from './session';
+import type {PreparedResume} from './resume-preparation';
 
 /** Keep filesystem scans and large JSON parsing off the UI thread. */
-async function readInWorker<T>(signal?: AbortSignal, id?: string): Promise<T> {
+async function readInWorker<T>(
+	signal?: AbortSignal,
+	id?: string,
+	resume?: {ref?: string; session?: SessionData; maxMessages: number},
+): Promise<T> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(new DOMException('Session loading cancelled', 'AbortError'));
@@ -10,7 +15,7 @@ async function readInWorker<T>(signal?: AbortSignal, id?: string): Promise<T> {
 		}
 		const worker = new Worker(
 			new URL('./session-list.worker.ts', import.meta.url),
-			{workerData: {id}},
+			{workerData: {id, resume}},
 		);
 		let settled = false;
 		const finish = (error: Error | null, value?: T) => {
@@ -46,4 +51,13 @@ export function loadSessionAsync(
 	signal?: AbortSignal,
 ): Promise<SessionData | null> {
 	return readInWorker(signal, id);
+}
+
+export function prepareSessionAsync(
+	ref: string,
+	maxMessages: number,
+	signal?: AbortSignal,
+	session?: SessionData,
+): Promise<PreparedResume | null> {
+	return readInWorker(signal, undefined, {ref, session, maxMessages});
 }

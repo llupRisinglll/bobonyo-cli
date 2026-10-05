@@ -81,6 +81,28 @@ describe('commandNames', () => {
 });
 
 describe('runCommand routing', () => {
+	test('only the no-argument resume picker skips the immediate snapshot', () => {
+		for (const input of [
+			'/resume',
+			'/resume last',
+			'/resume sess_test',
+			'/status',
+		]) {
+			let policy: {persist: false} | undefined;
+			const ctx = new Proxy({} as CommandContext, {
+				get: (_target, key) =>
+					key === 'onBuiltinCommand'
+						? (_input: string, options?: {persist: false}) => {
+								policy = options;
+							}
+						: () => {},
+			});
+			runCommand(input, ctx);
+			expect(policy).toEqual(
+				input === '/resume' ? {persist: false} : undefined,
+			);
+		}
+	});
 	test('built-ins record exact submitted command once before handler execution', () => {
 		for (const input of [
 			'/goal:this finish uncovered cases',
