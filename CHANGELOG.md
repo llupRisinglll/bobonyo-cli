@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.0 (2026-10-05)
+
+### Minor
+- Make Caveman mode opt-in and restore conversational progress updates between meaningful tool-work phases.
 ## v0.3.5 (2026-10-05)
 
 ### Patch
