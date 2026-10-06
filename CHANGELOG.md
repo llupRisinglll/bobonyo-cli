@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.5 (2026-10-06)
+
+### Patch
+- Prevent completed checklists and stale background results from reopening previous work during unrelated requests.
 ## v0.4.4 (2026-10-05)
 
 ### Patch
