@@ -63,6 +63,10 @@ describe('goal helpers', () => {
 		expect(prompt).toContain('Raise coverage to 90%');
 		expect(prompt).toContain('[GOAL_COMPLETE]');
 		expect(prompt).toContain('[GOAL_BLOCKED]');
+		expect(prompt).toContain('Before declaring work blocked');
+		expect(prompt).toContain('unused port');
+		expect(prompt).toContain('Do not stop or restart its owner');
+		expect(prompt).toContain('recommend a concrete remedy');
 	});
 
 	test('response markers update status only when explicit', () => {

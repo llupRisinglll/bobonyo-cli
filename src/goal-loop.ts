@@ -1,3 +1,5 @@
+import {BLOCKER_RECOVERY_GUIDANCE} from './plain-response';
+
 export type GoalStatus =
 	| 'active'
 	| 'paused'
@@ -262,8 +264,9 @@ export function goalContinuationPrompt(goal: SessionGoal): string {
 		iterationLine +
 		'Do concrete work with tools and use files, tests, and repository state as source of truth. ' +
 		'Do not stop merely to report progress, recap, or ask what to do next. ' +
-		`${completion} ` +
-		'When external intervention is required, end with [GOAL_BLOCKED].'
+		`${completion}\n\n` +
+		`${BLOCKER_RECOVERY_GUIDANCE}\n` +
+		'Only when safe authorized alternatives are exhausted and external intervention is genuinely required, ask the concrete recovery question and end with [GOAL_BLOCKED].'
 	);
 }
 export function formatGoalProgress(progress: GoalProgress): string {

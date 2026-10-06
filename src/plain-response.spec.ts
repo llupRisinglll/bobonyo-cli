@@ -85,6 +85,24 @@ describe('always-on plain response guidance', () => {
 		expect(stable).toContain('Separate verified facts from unknowns');
 		expect(stable).toContain('Never describe planned recovery as completed');
 	});
+	test('port conflicts require safe alternatives before escalation across all styles', () => {
+		writeFileSync(join(configDir, 'SYSTEM.md'), 'Custom voice: terse.');
+		for (const style of SYSTEM_PROMPT_STYLES) {
+			writeFileSync(
+				join(configDir, 'settings.json'),
+				JSON.stringify({systemPrompt: style}),
+			);
+			const {stable} = buildSystemParts();
+			expect(stable).toContain('Before declaring work blocked');
+			expect(stable).toContain('unused port');
+			expect(stable).toContain('health checks and browser/test URLs');
+			expect(stable).toContain('Do not stop or restart its owner');
+			expect(stable).toContain('explicit denials or project constraints');
+			expect(stable).toContain('recommend a concrete remedy');
+			expect(stable).toContain('Do not merely say approval is needed');
+			expect(stable).toContain('verify the original blocked check');
+		}
+	});
 
 	test('internal output contracts win without coupling clarity to caveman', () => {
 		const {stable} = buildSystemParts(undefined, {disableCaveman: true});
