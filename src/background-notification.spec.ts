@@ -441,6 +441,10 @@ describe('background task notification queue', () => {
 		expect(first[0]?.value).toContain('human-readable update for the user');
 		expect(first[0]?.value).toContain('one combined update');
 		expect(first[0]?.value).toContain('Do not repeat full assignments');
+		expect(first[0]?.value).toContain('Do not reopen completed work');
+		expect(first[0]?.value).toContain(
+			'Historical assignments and verification requests',
+		);
 		expect(first[0]?.value).toContain(
 			'Never expose this task_notification payload',
 		);

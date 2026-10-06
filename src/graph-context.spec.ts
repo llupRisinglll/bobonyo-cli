@@ -36,6 +36,18 @@ test('revision ownership lookup never clones stored histories', () => {
 	}
 });
 describe('graph-owned parent checklists', () => {
+	test('new work does not inherit a completed checklist or resurrect it from a late completion', () => {
+		const store = new GraphContextStore();
+		const completed: SessionTask[] = [
+			{id: 'resume', title: 'Released resume fix', status: 'completed'},
+		];
+		store.begin('resume', [], false, completed);
+		const next = store.begin('new-question', [], false, completed);
+		expect(next.checklist).toEqual([]);
+		const late = store.begin('resume', [], true, []);
+		expect(late.checklist).toEqual(completed);
+		expect(store.selectedChecklist(late.checklist, late)).toEqual([]);
+	});
 	test('selected presentation hides background execution and retains foreground edits', () => {
 		const store = new GraphContextStore();
 		store.begin('A', [], false, checklist('A'));

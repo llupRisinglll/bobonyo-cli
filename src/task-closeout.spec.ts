@@ -1,4 +1,5 @@
 import {expect, test} from 'bun:test';
+import {readFileSync} from 'node:fs';
 import {toolCatalog, executeTool} from './tools';
 import {tasks, setTasks} from './state';
 import {
@@ -52,6 +53,21 @@ test('honestly pending work does not trigger another closeout after reconciliati
 	expect(shouldNudgeTaskCloseout(2, 1, false)).toBe(true);
 	expect(shouldNudgeTaskCloseout(2, 2, false)).toBe(false);
 	expect(shouldNudgeTaskCloseout(0, 0, false)).toBe(false);
+});
+test('inherited tasks do not force an unrelated turn to reconcile old work', () => {
+	expect(shouldNudgeTaskCloseout(2, 0, false, false)).toBe(false);
+	expect(shouldNudgeTaskCloseout(2, 0, false, true)).toBe(true);
+});
+test('application scopes closeout to current user work and resets it on queued direction', () => {
+	const app = readFileSync(new URL('./app.tsx', import.meta.url), 'utf8');
+	expect(app).toContain('checklistTouchedThisTurn && !systemTurn');
+	const steering = app.slice(
+		app.indexOf('// New user direction is not another failed attempt'),
+	);
+	expect(steering.slice(0, 700)).toContain('checklistTouchedThisTurn = false;');
+	expect(steering.slice(0, 700)).toContain(
+		'taskToolRanAfterCloseoutDraft = false;',
+	);
 });
 
 test('repeated text after write_tasks still persists', () => {

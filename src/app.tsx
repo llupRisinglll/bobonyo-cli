@@ -3693,6 +3693,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			let taskCloseoutNudgeCount = 0;
 			let lastTaskCloseoutDraft = '';
 			let taskToolRanAfterCloseoutDraft = false;
+			let checklistTouchedThisTurn = false;
 			let toolBriefActive = false;
 			let reactiveCompactRetries = 0;
 			setDiagnosticsCount(0);
@@ -3755,6 +3756,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						if (currentSession) currentSession.lastMessageAt = Date.now();
 						appendSubscriptions(item.value);
 						// New user direction is not another failed attempt at the old task.
+						checklistTouchedThisTurn = false;
+						taskToolRanAfterCloseoutDraft = false;
+						lastTaskCloseoutDraft = '';
 						emptyTurnCount = 0;
 						malformedRetryCount = 0;
 						repeatedToolState = INITIAL_REPEATED_TOOL_STATE;
@@ -3991,6 +3995,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 									unfinishedTasks.length,
 									taskCloseoutNudgeCount,
 									taskToolRanAfterCloseoutDraft,
+									checklistTouchedThisTurn && !systemTurn,
 								)
 							) {
 								taskCloseoutNudgeCount += 1;
@@ -4509,6 +4514,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 							!toolResult.content.startsWith('Error:')
 						) {
 							taskToolRanAfterCloseoutDraft = true;
+							checklistTouchedThisTurn = true;
 						}
 						toolMessages.push({
 							role: 'tool',

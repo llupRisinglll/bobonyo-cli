@@ -10,8 +10,10 @@ export function shouldNudgeTaskCloseout(
 	unfinishedCount: number,
 	nudgeCount: number,
 	taskToolRanAfterDraft: boolean,
+	checklistTouchedThisTurn = true,
 ): boolean {
 	return (
+		checklistTouchedThisTurn &&
 		unfinishedCount > 0 &&
 		nudgeCount < 2 &&
 		!(nudgeCount > 0 && taskToolRanAfterDraft)

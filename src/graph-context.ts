@@ -92,10 +92,16 @@ export class GraphContextStore {
 		if (latestChecklist !== undefined)
 			this.captureLatestChecklist(latestChecklist);
 		const history = structuredClone(previous?.history ?? latest);
-		// New foreground requests inherit current state, as they do history.
+		// Preserve genuinely unfinished work across follow-up turns, not a finished
+		// checklist from a previous request. Its historical graph retains the snapshot.
 		// Legacy background owners must never adopt another graph's checklist.
+		const inheritedChecklist = latestChecklist?.some(
+			task => task.status === 'pending' || task.status === 'in_progress',
+		)
+			? latestChecklist
+			: [];
 		const checklist = structuredClone(
-			previous?.checklist ?? (completion ? [] : (latestChecklist ?? [])),
+			previous?.checklist ?? (completion ? [] : inheritedChecklist),
 		);
 		const revision = (previous?.revision ?? 0) + 1;
 		Object.defineProperty(this.state.graphs, graphId, {
