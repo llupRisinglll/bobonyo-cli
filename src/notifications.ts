@@ -141,9 +141,10 @@ export function notificationBackends(
 				: (options.hasNotifySend ?? hasCommand('notify-send'))
 					? 'notify-send'
 					: 'bell';
-	// Herdr notification is an in-app toast. It is NOT a desktop notification.
-	// Deliver both so users see completion while another app is focused.
-	return herdr ? ['herdr', desktop] : [desktop];
+	// Herdr already owns the desktop/toast bridge for managed panes. Sending a
+	// second native notification (`notify-send` on Linux) creates duplicate
+	// popups for every completed task or subagent turn.
+	return herdr ? ['herdr'] : [desktop];
 }
 
 export function notificationBackend(

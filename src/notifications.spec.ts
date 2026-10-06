@@ -6,14 +6,14 @@ import {
 } from './notifications';
 
 describe('notification backend selection', () => {
-	test('Herdr keeps its toast but also sends a desktop notification', () => {
+	test('Herdr-managed panes use one notification backend, never Herdr plus notify-send', () => {
 		const options = {
 			platform: 'linux' as const,
 			herdr: true,
 			hasNotifySend: true,
 		};
 		expect(notificationBackend(options)).toBe('herdr');
-		expect(notificationBackends(options)).toEqual(['herdr', 'notify-send']);
+		expect(notificationBackends(options)).toEqual(['herdr']);
 	});
 
 	test('uses native platform backends outside Herdr', () => {
