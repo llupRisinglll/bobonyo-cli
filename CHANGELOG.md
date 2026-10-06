@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.7 (2026-10-06)
+
+### Patch
+- Try safe, isolated recovery before declaring work blocked, and offer a concrete remedy when permission is genuinely required.
 ## v0.4.6 (2026-10-06)
 
 ### Patch
