@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.4.8 (2026-10-06)
+
+### Patch
+- Recover from blockers using focused investigation and exact-symptom verification, while preserving permission boundaries and suggesting concrete next actions.
 ## v0.4.7 (2026-10-06)
 
 ### Patch
