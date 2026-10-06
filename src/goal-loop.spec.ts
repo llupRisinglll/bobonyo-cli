@@ -67,6 +67,9 @@ describe('goal helpers', () => {
 		expect(prompt).toContain('unused port');
 		expect(prompt).toContain('Do not stop or restart its owner');
 		expect(prompt).toContain('recommend a concrete remedy');
+		expect(prompt).toContain('exact reported symptom');
+		expect(prompt).toContain('one focused hypothesis');
+		expect(prompt).toContain('full output and exit status');
 	});
 
 	test('response markers update status only when explicit', () => {

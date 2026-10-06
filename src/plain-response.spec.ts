@@ -103,6 +103,20 @@ describe('always-on plain response guidance', () => {
 			expect(stable).toContain('verify the original blocked check');
 		}
 	});
+	test('recovery uses exact-symptom feedback instead of speculative fixes or blanket permission', () => {
+		const {stable} = buildSystemParts();
+		for (const rule of [
+			'exact reported symptom',
+			'working example',
+			'one focused hypothesis',
+			'new evidence',
+			'full output and exit status',
+			'not authorization for unrelated changes',
+			'Scale investigation to the problem',
+			'correct your own task-local setup',
+		])
+			expect(stable).toContain(rule);
+	});
 
 	test('internal output contracts win without coupling clarity to caveman', () => {
 		const {stable} = buildSystemParts(undefined, {disableCaveman: true});
