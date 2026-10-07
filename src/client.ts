@@ -37,6 +37,34 @@ import {
 /** nanocoder's retry budgets (source/constants.ts + rate-limit.ts). */
 export const MAX_RATE_LIMIT_RETRIES = 3;
 export const MAX_STREAM_STALL_RETRIES = 2;
+export const MAX_NETWORK_RETRIES = 2;
+
+/** Network failures are not HTTP/provider errors or user cancellation. */
+function isTransientNetworkError(error: unknown): boolean {
+	if (!(error instanceof Error) || error.name === 'AbortError') return false;
+	const code = (error as Error & {code?: string}).code;
+	return (
+		['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ConnectionClosed'].includes(
+			code ?? '',
+		) || /The socket connection was closed unexpectedly/i.test(error.message)
+	);
+}
+
+class NetworkInterruptedError extends Error {
+	constructor(
+		readonly partial: boolean,
+		retries: number,
+		cause: unknown,
+	) {
+		super(
+			partial
+				? 'Provider connection closed after partial output. Automatic replay was skipped to avoid duplicate output or actions. Retry the turn explicitly; completed local tools were not rerun.'
+				: `Provider connection closed before output after ${retries} retries. Retry the turn; if it persists, check network connectivity or select another provider.`,
+			{cause},
+		);
+		this.name = 'NetworkInterruptedError';
+	}
+}
 /** nanocoder's runaway-stream bounds (source/constants.ts). */
 export const MAX_STREAM_OUTPUT_CHARS = 1_000_000;
 export const MAX_STREAM_DURATION_MS = 600_000;
@@ -763,6 +791,8 @@ export async function streamChat(
 			return result;
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') throw error;
+			if (error instanceof NetworkInterruptedError && error.partial)
+				throw error;
 			// B23: the runaway guard aborts the TURN, never retry another
 			// provider on a client-side stream bound.
 			if (error instanceof StreamRunawayError) throw error;
@@ -782,12 +812,29 @@ async function streamOnceWithRetries(
 	toolProfile?: string,
 	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
-	const attempts = {rate: 0, stall: 0};
+	const attempts = {rate: 0, stall: 0, network: 0};
+	let delivered = false;
+	const trackedHandlers: StreamHandlers = {
+		...handlers,
+		onText: delta => {
+			if (delta) delivered = true;
+			handlers.onText(delta);
+		},
+		onReasoning: delta => {
+			if (delta) delivered = true;
+			handlers.onReasoning(delta);
+		},
+		onWebSearch: action => {
+			delivered = true;
+			handlers.onWebSearch?.(action);
+		},
+	};
 	for (;;) {
 		try {
+			signal?.throwIfAborted();
 			const result = await streamOnce(
 				messages,
-				handlers,
+				trackedHandlers,
 				signal,
 				tools,
 				endpointOverride,
@@ -798,6 +845,20 @@ async function streamOnceWithRetries(
 			setRetryingAttempt(0);
 			return result;
 		} catch (error) {
+			setRetryingAttempt(0);
+			signal?.throwIfAborted();
+			if (isTransientNetworkError(error)) {
+				if (delivered || attempts.network >= MAX_NETWORK_RETRIES)
+					throw new NetworkInterruptedError(delivered, attempts.network, error);
+				attempts.network++;
+				setRetryingAttempt(attempts.network);
+				try {
+					await networkRetryDelay(400 * attempts.network, signal);
+				} finally {
+					setRetryingAttempt(0);
+				}
+				continue;
+			}
 			// opencode-go subscription limits (GoUsageLimitError /
 			// FreeUsageLimitError) do NOT retry — they reset in hours/days,
 			// not seconds. Surface the limit message immediately.
@@ -1937,6 +1998,23 @@ export function buildAnthropicMessages(
 
 function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function networkRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		signal?.throwIfAborted();
+		const finish = () => {
+			signal?.removeEventListener('abort', abort);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		const abort = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener('abort', abort);
+			reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+		};
+		signal?.addEventListener('abort', abort, {once: true});
+	});
 }
 
 /**
