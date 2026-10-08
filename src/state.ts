@@ -2,9 +2,13 @@ import {runHooks} from './hooks';
 import {createMemo, createSignal} from 'solid-js';
 import type {ChatMessageLike} from './client';
 import type {PendingWorkItem} from './background-notification';
+import type {SteeringMessage} from './live-steering';
 import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 
 export interface ChatMessage {
+	/** Durable acceptance identity; context means inserted into model history, not a provider receipt. */
+	steeringId?: string;
+	steeringStatus?: 'accepted' | 'context';
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
 	/** User-submitted built-in command: visible/persisted, never provider context. */
@@ -111,14 +115,14 @@ export const [sessionName, setSessionName] = createSignal('New conversation');
 /** Prompt history for ↑/↓ navigation. */
 export const [promptHistory, setPromptHistory] = createSignal<string[]>([]);
 export const [historyIndex, setHistoryIndex] = createSignal(-1);
-/**
- * Messages queued while a turn is streaming (submitted when it settles).
- * Each entry keeps its ATTACHMENTS so `[Image #N]` vision analysis still
- * works for queued prompts (the image paths would otherwise be lost).
- */
+/** Autonomous jobs and task notifications; user input has its own inbox. */
 export const [pendingQueue, setPendingQueue] = createSignal<PendingWorkItem[]>(
 	[],
 );
+/** User directions never share the autonomous/task scheduling queue. */
+export const [steeringInbox, setSteeringInbox] = createSignal<
+	SteeringMessage[]
+>([]);
 /** Per-turn usage snapshots for `/usage`. */
 export interface SessionUsageSnapshot {
 	provider: string;
@@ -565,6 +569,7 @@ export const [retrySnapshot, setRetrySnapshot] = createSignal<{
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
 	prompt: string;
+	steeringId?: string;
 } | null>(null);
 
 export function appendMessage(message: ChatMessage): void {

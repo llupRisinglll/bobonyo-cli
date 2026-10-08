@@ -750,49 +750,21 @@ describe('InputBox caret rendering (Shift+Enter regression, render-level)', () =
 			setup.renderer.destroy();
 		}
 	});
-	test('queued messages: header and rows render on SEPARATE lines (no overlap)', async () => {
-		// The reported bug: the queue block used bare <text> nodes inside a
-		// fixed-height column — the header (`Queued messages (…)`) and the
-		// first queued message painted THE SAME ROW, mangling both (the
-		// message overwrote the header). Mounts the REAL InputBox with a real
-		// queued message: the header must paint on its OWN row and the
-		// message on the NEXT, with `(queued)` + the value spaced apart.
+	test('accepted steering never adds input height or editable queue rows', async () => {
 		setInput('');
-		setPendingQueue([
-			{
-				value:
-					'feel free to also research this because some people might have encountered a problem when they are some TUI inside the herdr',
-			},
-		]);
+		setPendingQueue([{value: 'direction already in transcript'}]);
 		const setup = await testRender(() => <InputBox onSubmit={() => {}} />, {
 			width: 120,
 			height: 12,
 		});
 		try {
 			await setup.flush();
-			const frame = setup.captureSpans();
-			const rows = frame.lines.map(line =>
-				line.spans
-					.map(span => span.text)
-					.join('')
-					.trimEnd(),
-			);
-			// Header row and message row are DISTINCT — the message never
-			// overwrites the header (the old single-mangled-line bug).
-			const headerRow = rows.findIndex(row =>
-				row.includes(
-					'Queued messages (↑/↓ select, Enter edit, Del remove · /queue',
-				),
-			);
-			expect(headerRow).toBeGreaterThanOrEqual(0);
-			expect(rows[headerRow]).not.toContain('(next round)');
-			const msgRow = rows.findIndex(row =>
-				row.includes('feel free to also research'),
-			);
-			expect(msgRow).toBeGreaterThan(headerRow);
-			// Tag + value are spaced: `(queued) feel` never `(queued)feel`.
-			expect(rows[msgRow]).toMatch(/\(next round\)\s+feel free/);
-			expect(rows[msgRow]).not.toContain('(next round)feel');
+			const frame = setup
+				.captureSpans()
+				.lines.flatMap(line => line.spans.map(span => span.text))
+				.join('\n');
+			expect(frame).not.toContain('Queued messages');
+			expect(frame).not.toContain('direction already in transcript');
 		} finally {
 			setPendingQueue([]);
 			setup.renderer.destroy();

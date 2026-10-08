@@ -37,7 +37,7 @@ async function runSteeringLoop(options: {
 			'taskTurn',
 			'canDeliverPendingPrompts',
 			'steeringSnapshot',
-			'pendingQueue',
+			'steeringInbox',
 			`return (${condition});`,
 		)(taskTurn, canDeliverPendingPrompts, steeringSnapshot, () => queue);
 	let providerCalls = 0;
@@ -76,14 +76,15 @@ describe('text-only turn scheduling with queued steering', () => {
 		expect(delivery).toContain('canDeliverQueuedSteering({');
 		expect(delivery).toContain('taskTurn,');
 		expect(delivery).toContain('detachedWorkStarted,');
-		expect(delivery).toContain('aborted: controller.signal.aborted');
+		expect(delivery).toMatch(/aborted:\s*controller.signal.aborted/);
+		expect(delivery).toContain('generation !== sessionGeneration');
 		expect(
 			delivery.match(/if \(!canDeliverPendingPrompts\(\)\) return false;/g),
 		).toHaveLength(2);
 	});
 	test('application discards stale system replies before final-response handling', () => {
 		const supersession = appSource.indexOf(
-			'queuedSteeringSupersedesSystemTurn(systemTurn, pendingQueue())',
+			'systemTurn &&\n\t\t\t\t\t\tsteeringInbox().length > 0',
 		);
 		const finalResponse = appSource.indexOf(
 			'if (result.toolCalls.length === 0) {',

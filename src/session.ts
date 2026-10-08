@@ -20,6 +20,7 @@ import {
 import {join} from 'node:path';
 import {bobonyoDataDir} from './bobonyo-paths';
 import type {ChatMessageLike} from './client';
+import type {SteeringMessage} from './live-steering';
 import type {
 	ActiveAgentRun,
 	ChatMessage,
@@ -70,6 +71,8 @@ export interface SessionMeta {
 }
 
 export interface SessionData extends SessionMeta {
+	/** Accepted directions not yet inserted into model history. Resume retains them without auto-running. */
+	steeringInbox?: SteeringMessage[];
 	messages: ChatMessage[];
 	context: ChatMessageLike[];
 	/** Missing in legacy sessions; never infer graph ownership from the transcript. */

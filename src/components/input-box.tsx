@@ -10,7 +10,6 @@ import {
 	Show,
 	onCleanup,
 } from 'solid-js';
-import type {PendingWorkItem} from '../background-notification';
 import {
 	COMMAND_DESCRIPTIONS,
 	commandNames,
@@ -51,10 +50,8 @@ import {
 	pendingApproval,
 	pendingPrompt,
 	promptHistory,
-	pendingQueue,
 	retryingAttempt,
 	setWorkingTipVisible,
-	setPendingQueue,
 	setExitConfirm,
 	sessionId,
 	spinnerFrame,
@@ -72,6 +69,7 @@ import {
 	setMode,
 	setPendingApproval,
 	setPendingPrompt,
+	showToast,
 } from '../state';
 import {CHALK_GREY, colors} from '../theme';
 import {saveModeSettings} from '../settings';
@@ -239,19 +237,15 @@ export function isNewlineInsert(event: {
  * Input row, parity with nanocoder's prompt line: `❯ <value>▌` plus a busy
  * hint. ↑/↓ navigate prompt history (draft preserved), typing `/` opens a
  * fuzzy command-suggestion menu (Tab completes), and Enter submits, chat
- * messages queue while busy, slash commands act immediately.
+ * messages steer while busy, slash commands act immediately.
  */
 export function InputBox(props: {
 	onSubmit: (value: string, attachments?: Record<string, string>) => void;
 	agentNavigationIndex?: number;
 	onAgentNavigate?: (direction: 'up' | 'down') => boolean;
-	/** App checks this before aborting: global keyboard listeners run first. */
-	onQueueEscapeHandler?: (handler: (() => boolean) | null) => void;
 }) {
 	const terminalDimensions = useTerminalDimensions();
 	const [draft, setDraft] = createSignal('');
-	const [selectedQueued, setSelectedQueued] =
-		createSignal<PendingWorkItem | null>(null);
 	// ---- Cursor-aware input editing --------------------------------------
 	// The input tracks a cursor index (parity: Ink's TextInput). Arrow keys
 	// move it; attachment tokens (`[Image #N]` / `[Text #N]`) and a leading
@@ -271,14 +265,12 @@ export function InputBox(props: {
 	// this effect never overrides deliberate cursor movement.
 	let locallyWrittenInput = input();
 	const writeInput = (value: string): void => {
-		setSelectedQueued(null);
 		locallyWrittenInput = value;
 		setInput(value);
 	};
 	createEffect(() => {
 		const value = input();
 		if (value === locallyWrittenInput) return;
-		setSelectedQueued(null);
 		locallyWrittenInput = value;
 		setCursorPos(value.length);
 	});
@@ -376,27 +368,6 @@ export function InputBox(props: {
 		);
 		return true;
 	};
-	const visiblePendingQueue = createMemo(() =>
-		pendingQueue().filter(item => !item.source),
-	);
-	createEffect(() => {
-		const selected = selectedQueued();
-		if (selected && !visiblePendingQueue().includes(selected))
-			setSelectedQueued(null);
-	});
-	const deselectQueued = (): boolean => {
-		const selected = selectedQueued();
-		if (
-			!selected ||
-			input().length > 0 ||
-			!visiblePendingQueue().includes(selected)
-		)
-			return false;
-		setSelectedQueued(null);
-		return true;
-	};
-	props.onQueueEscapeHandler?.(deselectQueued);
-	onCleanup(() => props.onQueueEscapeHandler?.(null));
 	const [selectedCompletion, setSelectedCompletion] = createSignal(0);
 	const [mentionSelected, setMentionSelected] = createSignal(0);
 	const [pasteAttachments, setPasteAttachments] = createSignal<
@@ -425,6 +396,15 @@ export function InputBox(props: {
 	const submitExpanded = (value: string): void => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
+		if (
+			startupLoading().some(row => row.id === 'resume') &&
+			!commandNames().includes(trimmed.match(/^\/(\S+)/)?.[1] ?? '')
+		) {
+			showToast(
+				'Session is loading. Your draft is retained; press Enter after loading finishes.',
+			);
+			return;
+		}
 		// Clear BEFORE calling async app logic (vision fallback, slash-command
 		// work, or queue insertion). Otherwise the old text remains painted
 		// during that await and a second Enter queues it again.
@@ -862,29 +842,6 @@ export function InputBox(props: {
 			event.preventDefault();
 			return;
 		}
-		if (event.name === 'escape' && deselectQueued()) {
-			event.preventDefault();
-			return;
-		}
-		// Queue sits above the empty draft. Up enters its last row;
-		// Down enters its first row, then exits after the last row.
-		if (
-			input().length === 0 &&
-			visiblePendingQueue().length > 0 &&
-			(event.name === 'up' || event.name === 'down')
-		) {
-			event.preventDefault();
-			const queue = visiblePendingQueue();
-			const index = queue.indexOf(selectedQueued()!);
-			if (event.name === 'up') {
-				setSelectedQueued(
-					queue[index < 0 ? queue.length - 1 : Math.max(0, index - 1)]!,
-				);
-			} else {
-				setSelectedQueued(queue[index + 1] ?? null);
-			}
-			return;
-		}
 		if (event.name === 'up') {
 			event.preventDefault();
 			const history = promptHistory();
@@ -1045,24 +1002,6 @@ export function InputBox(props: {
 		}
 		if (isReturnKey) {
 			event.preventDefault();
-			// Enter on a selected queued item loads it back into the input
-			// for editing (and removes it from the queue).
-			const selected = selectedQueued();
-			if (
-				input().length === 0 &&
-				selected &&
-				visiblePendingQueue().includes(selected)
-			) {
-				setPasteAttachments({...selected.attachments});
-				setInputAt(
-					selected.delivery === 'after-current'
-						? `/queue ${selected.value}`
-						: selected.value,
-				);
-				setHistoryIndex(-1);
-				setPendingQueue(prev => prev.filter(item => item !== selected));
-				return;
-			}
 			const value = input().trim();
 			if (!value) return;
 			submitExpanded(value);
@@ -1070,18 +1009,6 @@ export function InputBox(props: {
 		}
 		if (isDeleteKey(event)) {
 			event.preventDefault();
-			// Del on a selected queued item removes it.
-			const selected = selectedQueued();
-			if (
-				event.name === 'delete' &&
-				selected &&
-				visiblePendingQueue().includes(selected) &&
-				input().length === 0
-			) {
-				setSelectedQueued(null);
-				setPendingQueue(prev => prev.filter(item => item !== selected));
-				return;
-			}
 			// Backspace deletes at the CURSOR, a whole atomic token when the
 			// cursor sits at its end, otherwise one char, ACCELERATING while
 			// held (parity: opencode's fast-erase).
@@ -1198,66 +1125,6 @@ export function InputBox(props: {
 						Press Ctrl+C again to exit · resume with `bobonyo --resume{' '}
 						{sessionId()}`
 					</text>
-				</box>
-			</Show>
-			{/* Queued messages: a persistent block ABOVE the input while busy
-			    (parity: nanocoder's queuedBlock, it must stay visible, not
-			    scroll away with the transcript). Every row is a FIXED-height
-			    box — bare <text> nodes inside a fixed-height column overlap
-			    (the header and the first message painted the same row).
-			    Colors: header secondary, rows default text with a secondary
-			    `(queued)` tag; ONLY the selected row gets the active-row
-			    highlight (info bg + bold), so the block never floods the
-			    screen with primary. */}
-			<Show when={visiblePendingQueue().length > 0}>
-				<box flexDirection="column" height={visiblePendingQueue().length + 1}>
-					<box height={1} flexDirection="row">
-						<text fg={colors().secondary} attributes={dim()}>
-							Queued messages (↑/↓ select, Enter edit, Del remove · /queue
-							waits):
-						</text>
-					</box>
-					<For each={visiblePendingQueue()}>
-						{entry => {
-							const active = () =>
-								selectedQueued() === entry && input().length === 0;
-							return (
-								<box
-									flexDirection="row"
-									height={1}
-									backgroundColor={active() ? activeRow().bg : undefined}
-									{...({
-										onMouseMove: () =>
-											setSelectedQueued(input().length === 0 ? entry : null),
-										onMouseUp: () => {
-											setSelectedQueued(input().length === 0 ? entry : null);
-										},
-									} as any)}
-								>
-									<text
-										width={18}
-										fg={active() ? activeRow().fg : colors().secondary}
-										attributes={active() ? bold() : undefined}
-									>
-										{active() ? '▸ ' : '  '}
-										{entry.delivery === 'after-current'
-											? '(after current)'
-											: '(next round)'}
-									</text>
-									{/* Fixed-width tag cell (11 = `▸ (queued)`): the
-									    renderer TRIMS a text node's trailing space,
-									    so `(queued) ` + value glued into
-									    `(queued)feel`; a lone ' ' node and an empty
-									    width-1 box both vanish. The width reserves
-									    the cell (completion-row pattern), the next
-									    node starts after it. */}
-									<text fg={active() ? activeRow().fg : colors().text}>
-										{entry.value}
-									</text>
-								</box>
-							);
-						}}
-					</For>
 				</box>
 			</Show>
 			{/* `@` file-mention popup, same bordered-list + mouse style as the

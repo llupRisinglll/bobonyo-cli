@@ -16,6 +16,8 @@ import {
 	setCompletionMessage,
 	setPendingTrust,
 	setInput,
+	input,
+	steeringInbox,
 	pendingPrompt,
 	sessionId,
 	sessionName,
@@ -41,6 +43,7 @@ for (const entry of [
 	'failure error',
 	'old loop',
 	'old goal',
+	'loading input',
 ]) {
 	if (!selectedEntry) {
 		test(`isolated App resume regression: ${entry}`, async () => {
@@ -95,7 +98,7 @@ for (const entry of [
 		process.env.MOCK_URL = server.url.toString();
 		const launchCwd = process.cwd();
 		if (asks) saveSettings({...loadSettings(), resumeCwd: 'ask'});
-		if (entry === 'CLI last' || asks || ownership)
+		if (entry === 'CLI last' || asks || ownership || entry === 'loading input')
 			process.env.NANOCODER_RESUME = 'last';
 		else delete process.env.NANOCODER_RESUME;
 		clearMessages();
@@ -197,6 +200,30 @@ for (const entry of [
 				ui.mockInput.pressEnter();
 				await ui.flush();
 			};
+			if (entry === 'loading input') {
+				await waitFor(() => started);
+				await command('first draft while loading');
+				expect(input()).toBe('first draft while loading');
+				await command('second draft while loading');
+				expect(input()).toBe('second draft while loading');
+				await command('/workspace/image.png inspect after resume');
+				expect(input()).toBe('/workspace/image.png inspect after resume');
+				expect(steeringInbox()).toEqual([]);
+				expect(requests).toBe(0);
+				resolve(prepareResume(session, 100));
+				await waitFor(() => sessionId() === session.id);
+				expect(input()).toBe('/workspace/image.png inspect after resume');
+				ui.mockInput.pressEnter();
+				await ui.flush();
+				await waitFor(() => requests === 1);
+				expect(
+					messages().filter(
+						message =>
+							message.content === '/workspace/image.png inspect after resume',
+					),
+				).toHaveLength(1);
+				return;
+			}
 			if (ownership) {
 				await waitFor(() => sessionId() === session.id);
 				await waitFor(() => !text().includes('Loading skills'));
@@ -283,6 +310,9 @@ for (const entry of [
 				}
 				if (stale) {
 					await command('must-not-move');
+					expect(input()).toBe('must-not-move');
+					expect(steeringInbox()).toEqual([]);
+					expect(text()).toContain('Your draft is retained');
 					const requestCount = requests;
 					await command(
 						entry === 'stale clear' ? '/clear' : '/resume sess_delayed',
@@ -303,7 +333,6 @@ for (const entry of [
 						messages().some(message => message.content === 'must-not-move'),
 					).toBe(false);
 					expect(requests).toBe(requestCount);
-					expect(text()).toContain('Session changed');
 					return;
 				}
 				await command('/status');

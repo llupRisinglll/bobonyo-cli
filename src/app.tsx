@@ -121,20 +121,20 @@ import {
 	elapsedSinceOldest,
 	enqueueTaskNotification,
 	invalidateGoalContinuations,
-	enqueueUserWork,
 	shouldReleaseDetachedAgentBatch,
 	shouldProcessDetachedCompletion,
 	isTaskNotification,
 	type DetachedCompletion,
 } from './background-notification';
 import {createDebouncedFlush} from './debounced-flush';
+import {canDeliverQueuedSteering} from './queued-steering';
+import {acknowledgeSteering, deliverSteering} from './live-steering';
 import {
-	canDeliverQueuedSteering,
-	deliverQueuedSteering,
-	queuedSteeringSupersedesSystemTurn,
-	steeringSnapshot,
-} from './queued-steering';
-import {COMMAND_DESCRIPTIONS, findCustomCommand, runCommand} from './commands';
+	COMMAND_DESCRIPTIONS,
+	commandNames,
+	findCustomCommand,
+	runCommand,
+} from './commands';
 import {
 	loadSettings,
 	resumeCwdDecision,
@@ -415,6 +415,8 @@ import {
 	setLiveOutputs,
 	setMaxMessages,
 	setMessages,
+	steeringInbox,
+	setSteeringInbox,
 	setMode,
 	setPendingQueue,
 	setPendingApproval,
@@ -798,7 +800,10 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	let foregroundTurnSeq = 0;
 	let foregroundTurnOwner = 0;
 	let queryActiveRef = false;
-	let queueEscapeHandler: (() => boolean) | null = null;
+	let promptPreparingRef = false;
+	let steeringPaused = false;
+	// Escape invalidates in-flight preparation even if a newer submission resumes delivery.
+	let steeringEpoch = 0;
 	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
 	// CACHE HEAD GATE: the tool catalog is part of the request prefix
 	// (parity: codex + nanocoder tool-filter). Lazy MCP/custom-tool loading
@@ -1195,6 +1200,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					message.kind !== 'info' && !isTaskNotification(message.content),
 			),
 			context: context(),
+			steeringInbox: steeringInbox(),
 			graphContexts: graphContexts.snapshot(),
 			usageHistory: usageHistory().slice(-100),
 			goal: currentGoal,
@@ -1289,6 +1295,10 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	onCleanup(() => resumeController?.abort());
 	const startNewSession = (resumeRef?: string, loadedSession?: SessionData) => {
 		sessionGeneration++;
+		steeringEpoch++;
+		steeringPaused = true;
+		promptPreparingRef = false;
+		setSteeringInbox([]);
 		resumeController?.abort();
 		goalDraftController?.abort();
 		setCurrentGoal(undefined);
@@ -1432,6 +1442,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				setUsageHistory(restoredUsage);
 				setLastUsage(restoredUsage.at(-1));
 				currentSession = {...resumed};
+				setSteeringInbox(resumed.steeringInbox ?? []);
 				setCurrentGoal(resumed.goal);
 				loopJobsRef = [...(resumed.loopJobs ?? [])];
 				const restoredTaskMessage = prepared.taskMessage;
@@ -1771,10 +1782,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			return;
 		}
 		if (event.name === 'escape') {
-			if (queueEscapeHandler?.()) {
-				event.preventDefault();
-				return;
-			}
+			steeringEpoch++;
+			steeringPaused = true;
 			// Esc interrupts an in-flight turn. When idle, InputBox owns Esc
 			// for clearing input or dismissing its local completion popup. It
 			// must never arm or confirm the Ctrl+C exit prompt.
@@ -1811,8 +1820,77 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		}
 	});
 
-	let promptPreparingRef = false;
+	const acknowledgeDirection = (id: string) => {
+		setSteeringInbox(previous => acknowledgeSteering(previous, id));
+		setMessages(previous =>
+			previous.map(message =>
+				message.steeringId === id
+					? {...message, steeringStatus: 'context'}
+					: message,
+			),
+		);
+		persist();
+	};
+	const processSteering = async () => {
+		const item = steeringInbox()[0];
+		if (
+			!item ||
+			steeringPaused ||
+			promptPreparingRef ||
+			queryActiveRef ||
+			busy()
+		)
+			return;
+		const generation = sessionGeneration;
+		const preparationEpoch = steeringEpoch;
+		promptPreparingRef = true;
+		try {
+			// Continuing retained history is not another UserPromptSubmit event.
+			// Its original transformed prompt already lives in provider context.
+			await sessionLifecycleReady;
+			const prompt = item.reuseContext
+				? item.value
+				: await prepareUserPrompt(item.value, item.attachments, generation);
+			if (
+				generation !== sessionGeneration ||
+				preparationEpoch !== steeringEpoch ||
+				steeringPaused
+			)
+				return;
+			if (prompt === undefined) {
+				steeringPaused = true;
+				showToast(
+					'Direction retained; prompt hook blocked delivery. Submit again to continue.',
+				);
+				return;
+			}
+			await runTurn(
+				item.value,
+				prompt,
+				item.attachments,
+				undefined,
+				undefined,
+				generation,
+				item.id,
+				preparationEpoch,
+				item.reuseContext,
+			);
+		} catch (error) {
+			if (generation !== sessionGeneration) return;
+			steeringPaused = true;
+			appendError(String(error));
+		} finally {
+			if (generation === sessionGeneration) {
+				promptPreparingRef = false;
+				processQueue();
+			}
+		}
+	};
 	const processQueue = () => {
+		if (steeringInbox().length && !steeringPaused) {
+			void processSteering();
+			return;
+		}
 		if (
 			promptPreparingRef ||
 			queryActiveRef ||
@@ -3140,16 +3218,20 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		value: string,
 		attachments?: Record<string, string>,
 		command?: import('./background-notification').PendingWorkItem['command'],
-	) => {
+		admittedFallback = false,
+	): Promise<void> => {
 		if (goalDraftController && /^[!/]/.test(value.trim())) {
 			appendInfo(
-				'Goal drafting is in progress. Press Esc to cancel before running another command. Ordinary messages can still queue.',
+				'Goal drafting is in progress. Press Esc to cancel before running another command. Ordinary messages still steer the conversation.',
 			);
 			return;
 		}
 		const explicitQueue = /^\/queue\s+/i.test(value.trim());
 		if (explicitQueue) value = value.trim().replace(/^\/queue\s+/i, '');
-		const delivery = explicitQueue ? 'after-current' : 'steer';
+		if (explicitQueue)
+			showToast(
+				'/queue now sends live direction; express sequencing in your message.',
+			);
 		if (
 			!explicitQueue &&
 			currentGoal?.status === 'active' &&
@@ -3167,41 +3249,59 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				return;
 			}
 		}
-		const ordinary = !/^[!/]/.test(value.trim());
+		const ordinary = admittedFallback || !/^[!/]/.test(value.trim());
 		if (!value.trim()) return;
+		if (
+			startupLoading().some(row => row.id === 'resume') &&
+			!commandNames().includes(value.trim().match(/^\/(\S+)/)?.[1] ?? '')
+		) {
+			setInput(value);
+			showToast(
+				'Session is loading. Your draft is retained; press Enter after loading finishes.',
+			);
+			return;
+		}
 		if (!ordinary) return submitPrepared(value, attachments, command);
 		if (!startupReadyRef) {
 			appendInfo('Still loading tools (MCP/skills)… try again in a moment.');
 			return;
 		}
+		if (currentSession && !sessionId()) {
+			setSessionId(currentSession.id);
+			reportHerdrSession(currentSession.id, process.cwd());
+		}
 		const snapshot = attachments
 			? persistImageAttachments(value.trim(), {...attachments}, sessionId())
 			: undefined;
-		if (
-			promptPreparingRef ||
-			queryActiveRef ||
-			(busy() && foregroundTurnOwner !== 0) ||
-			(delivery === 'after-current' &&
-				activeAgentRuns().some(run => run.status === 'running'))
-		) {
-			setPendingQueue(previous =>
-				enqueueUserWork(previous, {
-					value,
-					delivery,
-					attachments: snapshot,
-					...(command ? {command: {...command}} : {}),
-				}),
-			);
-			setInput('');
-			return;
+		const id = crypto.randomUUID();
+		if (!queryActiveRef && !promptPreparingRef) {
+			setRetrySnapshot({
+				messages: [...messages()],
+				context: [...context()],
+				prompt: value,
+				steeringId: id,
+			});
 		}
-		promptPreparingRef = true;
-		try {
-			await submitPrepared(value, snapshot, command);
-		} finally {
-			promptPreparingRef = false;
-			processQueue();
-		}
+		setSteeringInbox(previous => [
+			...previous,
+			{id, value, attachments: snapshot},
+		]);
+		appendMessage({
+			role: 'user',
+			content: value,
+			steeringId: id,
+			steeringStatus: 'accepted',
+			...(snapshot ? {attachments: snapshot} : {}),
+			...(command ? {command} : {}),
+		});
+		setPromptHistory(previous => [...previous.slice(-99), value]);
+		setHistoryIndex(-1);
+		if (currentSession) currentSession.lastMessageAt = Date.now();
+		setInput('');
+		if (steeringPaused) steeringEpoch++;
+		steeringPaused = false;
+		persist();
+		processQueue();
 	};
 	const submitPrepared = async (
 		value: string,
@@ -3212,7 +3312,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			original?: string;
 			body: string;
 		},
-	) => {
+	): Promise<void> => {
 		const trimmed = value.trim();
 		if (!trimmed) return;
 		if (attachments && Object.keys(attachments).length > 0) {
@@ -3391,6 +3491,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			// message path so file paths / natural language starting with /
 			// still reach the model and get recorded in prompt history.
 			if (handled) return;
+			// Unknown slash/path input is user direction, not a second turn owner.
+			return submit(value, attachments, command, true);
 		}
 
 		const generation = sessionGeneration;
@@ -3440,9 +3542,14 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			goalOwner?: GoalOwner;
 		},
 		generation = sessionGeneration,
+		acceptedSteeringId?: string,
+		preparationEpoch = steeringEpoch,
+		reuseContext = false,
 	) => {
 		await sessionLifecycleReady;
 		if (!sessionStillCurrent(generation)) return;
+		if (acceptedSteeringId && preparationEpoch !== steeringEpoch) return;
+		if (acceptedSteeringId) interruptedRef = false;
 		queryActiveRef = true;
 		const turnId = ++foregroundTurnSeq;
 		const activeGoalOwner =
@@ -3480,6 +3587,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				tasks(),
 			);
 		} catch (error) {
+			if (acceptedSteeringId) steeringPaused = true;
 			queryActiveRef = false;
 			foregroundTurnOwner = 0;
 			autonomousTurnRef = false;
@@ -3516,15 +3624,17 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			if (shouldAutoCompactHistory(initialContext)) {
 				initialContext = await compactTurnContext(initialContext);
 			}
+			if (generation !== sessionGeneration) return;
+			if (acceptedSteeringId && preparationEpoch !== steeringEpoch) return;
 			// Snapshot for `/retry` BEFORE the user message lands.
-			if (!systemTurn) {
+			if (!systemTurn && !acceptedSteeringId) {
 				setRetrySnapshot({
 					messages: [...messages()],
 					context: [...context()],
 					prompt: value,
 				});
 			}
-			if (!systemTurn) {
+			if (!systemTurn && !acceptedSteeringId) {
 				setPromptHistory(prev =>
 					prev[prev.length - 1] === value ? prev : [...prev.slice(-99), value],
 				);
@@ -3533,7 +3643,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 
 			// B22: the transcript shows the original; the provider sees scrubbed
 			// text (placeholders are rehydrated in replies).
-			if (!systemTurn) {
+			if (!systemTurn && !acceptedSteeringId) {
 				if (currentSession && !sessionId()) {
 					setSessionId(currentSession.id);
 					reportHerdrSession(currentSession.id, process.cwd());
@@ -3635,7 +3745,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				sessionId: sessionId(),
 			});
 
-			let history: ChatMessageLike[] = [...initialContext, datedUserMsg];
+			let history: ChatMessageLike[] = reuseContext
+				? [...initialContext]
+				: [...initialContext, datedUserMsg];
 			const appendSubscriptions = (value: string): void => {
 				// F4: subscribe blocks auto-trigger, a custom command whose
 				// `subscribe:` keywords match the prompt injects its body.
@@ -3686,9 +3798,10 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					}
 				}
 			};
-			if (!taskTurn) appendSubscriptions(value);
+			if (!taskTurn && !reuseContext) appendSubscriptions(value);
 			history = capMessages(history, maxMessages());
 			commitTurnContext(history);
+			if (acceptedSteeringId) acknowledgeDirection(acceptedSteeringId);
 			persist();
 			let emptyTurnCount = 0;
 			let repeatedToolState: RepeatedToolState = INITIAL_REPEATED_TOOL_STATE;
@@ -3712,19 +3825,29 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				canDeliverQueuedSteering({
 					taskTurn,
 					detachedWorkStarted,
-					aborted: controller.signal.aborted,
+					aborted:
+						controller.signal.aborted ||
+						steeringPaused ||
+						generation !== sessionGeneration,
 				});
 			const deliverPendingPrompts = async (): Promise<void> => {
-				await deliverQueuedSteering(
-					pendingQueue(),
+				const deliveryEpoch = steeringEpoch;
+				await deliverSteering(
+					steeringInbox(),
 					async item => {
 						if (!canDeliverPendingPrompts()) return false;
 						const prompt = await prepareUserPrompt(
 							item.value,
 							item.attachments,
+							generation,
 						);
 						if (!canDeliverPendingPrompts()) return false;
-						if (prompt === undefined) return true;
+						if (prompt === undefined) {
+							steeringPaused = true;
+							showToast('Direction retained; prompt hook blocked delivery.');
+							return false;
+						}
+						if (deliveryEpoch !== steeringEpoch) return false;
 						const images = supportsNativeImageInput(activeEndpoint())
 							? Object.entries(item.attachments ?? {})
 									.filter(([index]) => prompt.includes(`[Image #${index}]`))
@@ -3745,18 +3868,6 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 								...(images.length ? {images} : {}),
 							},
 						];
-						appendMessage({
-							role: 'user',
-							content: item.value,
-							...(item.attachments ? {attachments: item.attachments} : {}),
-						});
-						setPromptHistory(previous =>
-							previous[previous.length - 1] === item.value
-								? previous
-								: [...previous.slice(-99), item.value],
-						);
-						setHistoryIndex(-1);
-						if (currentSession) currentSession.lastMessageAt = Date.now();
 						appendSubscriptions(item.value);
 						// New user direction is not another failed attempt at the old task.
 						checklistTouchedThisTurn = false;
@@ -3769,12 +3880,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						commitTurnContext(history);
 						return true;
 					},
-					item => {
-						setPendingQueue(previous =>
-							previous.filter(candidate => candidate !== item),
-						);
-						persist();
-					},
+					acknowledgeDirection,
 				);
 			};
 			try {
@@ -3958,7 +4064,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					}
 
 					if (
-						queuedSteeringSupersedesSystemTurn(systemTurn, pendingQueue()) &&
+						systemTurn &&
+						steeringInbox().length > 0 &&
+						!steeringPaused &&
 						result.toolCalls.length === 0
 					) {
 						// User direction queued during an autonomous/task response owns the
@@ -3971,10 +4079,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					}
 
 					if (result.toolCalls.length === 0) {
-						if (
-							canDeliverPendingPrompts() &&
-							steeringSnapshot(pendingQueue()).length > 0
-						) {
+						if (canDeliverPendingPrompts() && steeringInbox().length > 0) {
 							if (result.text.trim() || result.reasoning.trim()) {
 								appendAssistantMessage(scrubberRef.rehydrate(result.text), {
 									reasoning: result.reasoning.trim() || undefined,
@@ -4808,7 +4913,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				const afterTurnWillContinue =
 					!loopTurn &&
 					loopJobsRef.some(job => job.cronExpression === '@after-turn');
-				const queuedWillContinue = pendingQueue().length > 0;
+				const queuedWillContinue =
+					pendingQueue().length > 0 ||
+					(!steeringPaused && steeringInbox().length > 0);
 				const willContinue =
 					!completionFailed &&
 					!completionInterrupted &&
@@ -4863,6 +4970,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				// A detached task may complete while this turn still holds
 				// queryActiveRef. Its first queue attempt correctly waits; retry after
 				// cleanup releases the gate so the completion cannot strand the turn.
+				if (
+					(completionFailed || completionInterrupted || interruptedRef) &&
+					preparationEpoch === steeringEpoch
+				)
+					steeringPaused = true;
 				queueMicrotask(processQueue);
 			}
 		} finally {
@@ -5216,6 +5328,40 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		const snapshot = retrySnapshot();
 		if (!snapshot) {
 			appendInfo('Nothing to retry yet.');
+			return;
+		}
+		if (snapshot.steeringId) {
+			const accepted = messages().find(
+				message => message.steeringId === snapshot.steeringId,
+			);
+			if (!accepted) {
+				showToast(
+					'The retry submission no longer belongs to this conversation.',
+				);
+				return;
+			}
+			steeringEpoch++;
+			steeringPaused = false;
+			if (!steeringInbox().some(item => item.id === snapshot.steeringId)) {
+				setSteeringInbox(previous => [
+					{
+						id: snapshot.steeringId!,
+						value: accepted.content,
+						attachments: accepted.attachments,
+						reuseContext: true,
+					},
+					...previous,
+				]);
+			}
+			setInput('');
+			persist();
+			processQueue();
+			return;
+		}
+		if (steeringInbox().length) {
+			showToast(
+				'Undelivered directions are retained. Submit input to continue before retrying an older command.',
+			);
 			return;
 		}
 		setMessages(snapshot.messages);
@@ -6251,9 +6397,6 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			cancelling(),
 		),
 	);
-	const visiblePendingQueueCount = createMemo(
-		() => pendingQueue().filter(item => !item.source).length,
-	);
 	// Reserve the actual composer before assigning the bounded agent footer.
 	const composerRows = createMemo(
 		() =>
@@ -6266,7 +6409,6 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			startupLoading().length +
 			completionMessageRows(completionMessage(), completionTone()) +
 			(exitConfirm() ? 1 : 0) +
-			(visiblePendingQueueCount() > 0 ? visiblePendingQueueCount() + 1 : 0) +
 			completionPopupHeight(input(), terminalDimensions().width) +
 			mentionPopupHeight(input()),
 	);
@@ -6326,9 +6468,6 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			{/* The input box and status line stay visible while a modal is
 			    open, the modal only overlays the history region above. */}
 			<InputBox
-				onQueueEscapeHandler={handler => {
-					queueEscapeHandler = handler;
-				}}
 				onSubmit={(value, attachments) => void submit(value, attachments)}
 				agentNavigationIndex={inlineAgentIndex()}
 				onAgentNavigate={navigateInlineAgent}

@@ -78,3 +78,33 @@ test('healthy provider context is reused verbatim; task lookup selects the newes
 		'new',
 	);
 });
+
+test('resume keeps accepted steering visible but never heals it into provider history', () => {
+	const pending = {id: 'accepted-1', value: 'undelivered direction'};
+	const session: SessionData = {
+		id: 'sess_pending',
+		name: 'Pending',
+		createdAt: 1,
+		updatedAt: 1,
+		firstMessage: 'old prompt',
+		messages: [
+			{role: 'user', content: 'old prompt'},
+			{role: 'assistant', content: 'old answer'},
+			{
+				role: 'user',
+				content: pending.value,
+				steeringId: pending.id,
+				steeringStatus: 'accepted',
+			},
+		],
+		context: [],
+		steeringInbox: [pending],
+	};
+	const restored = prepareResume(session, 100);
+	expect(restored.display.at(-1)?.content).toBe(pending.value);
+	expect(restored.session.steeringInbox).toEqual([pending]);
+	expect(restored.context.map(message => message.content)).toEqual([
+		'old prompt',
+		'old answer',
+	]);
+});

@@ -23,7 +23,13 @@ export function prepareResume(session: SessionData, maxMessages: number) {
 		),
 		context: session.graphContexts
 			? session.context
-			: healResumedContext(session.context, session.messages, maxMessages),
+			: healResumedContext(
+					session.context,
+					session.messages.filter(
+						message => message.steeringStatus !== 'accepted',
+					),
+					maxMessages,
+				),
 		promptHistory: promptHistoryFromMessages(session.messages),
 		taskMessage: session.messages.findLast(
 			message => message.tool?.name === 'write_tasks',

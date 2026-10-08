@@ -198,17 +198,26 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			loop,
 		);
 		expect(delivery).toMatch(/commitTurnContext|setContext\(history\)/);
-		expect(delivery).toMatch(/persist\(\)/);
+		expect(delivery).toContain('acknowledgeDirection');
+		const acknowledge = app.slice(
+			app.indexOf('const acknowledgeDirection'),
+			app.indexOf('const processSteering'),
+		);
+		expect(acknowledge).toContain('persist()');
 		expect(delivery).not.toContain('runTurn(');
-		expect(app).toContain('steeringSnapshot(pendingQueue())');
+		expect(app).toContain('steeringInbox().length > 0');
+		expect(app).not.toContain('visiblePendingQueueCount');
+		const input = read('./components/input-box.tsx');
+		expect(input).not.toContain('selectedQueued');
+		expect(input).not.toContain('pendingQueue');
 		const submit = app.slice(
 			app.indexOf('const submit = async'),
 			app.indexOf('const submitPrepared = async'),
 		);
-		expect(submit.indexOf('enqueueUserWork')).toBeLessThan(
-			submit.indexOf('await submitPrepared'),
+		expect(submit.indexOf('setSteeringInbox')).toBeLessThan(
+			submit.indexOf('processQueue()'),
 		);
-		expect(submit).toContain('promptPreparingRef = true');
+		expect(submit).toContain("steeringStatus: 'accepted'");
 	});
 	test('background agent launch keeps foreground alive for the full launch batch', () => {
 		const source = readFileSync(join(import.meta.dir, 'tools.ts'), 'utf8');
