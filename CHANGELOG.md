@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.5.0 (2026-10-08)
+
+### Minor
+- Send live directions straight into the conversation while work continues, preserving undelivered input across interruptions and session resume.
 ## v0.4.11 (2026-10-08)
 
 ### Patch
