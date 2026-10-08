@@ -90,7 +90,7 @@ export function shouldReleaseDetachedAgentBatch(
 ): boolean {
 	return calls.some((call, index) => {
 		const name = call.name;
-		if (name !== 'agent' && name !== 'agent_message') return false;
+		if (name !== 'agent') return false;
 		// Agent tools default to detached execution. Explicit false remains the
 		// opt-in foreground form; omitted background must release the parent too.
 		if (call.arguments?.background === false) return false;

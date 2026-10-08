@@ -26,6 +26,13 @@ afterEach(() => {
 });
 
 describe('always-on plain response guidance', () => {
+	test('authorized implementation and prerequisites are work, not readiness commentary', () => {
+		const {stable} = buildSystemParts();
+		expect(stable).toContain('do the prerequisite work');
+		expect(stable).toContain('not a substitute for implementation');
+		expect(stable).toContain('newer explicit instruction supersedes');
+		expect(stable).toContain('Do not treat updating a worker as completion');
+	});
 	test('checklist bookkeeping stays in tools, not repeated assistant prose', () => {
 		const {stable} = buildSystemParts();
 		expect(stable).toContain('Checklist bookkeeping is silent');

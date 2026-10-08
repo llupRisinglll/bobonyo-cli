@@ -575,6 +575,17 @@ describe('background task notification queue', () => {
 	});
 
 	test('foreground releases only after successful background agent calls', () => {
+		for (const output of [
+			'Queued message for running agent old-finance-worker',
+			'Continued background agent old-finance-worker',
+		]) {
+			expect(
+				shouldReleaseDetachedAgentBatch(
+					[{name: 'agent_message', arguments: {background: true}}],
+					[{content: output}],
+				),
+			).toBe(false);
+		}
 		expect(
 			shouldReleaseDetachedAgentBatch(
 				[

@@ -3571,6 +3571,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				role: 'user' as const,
 				content:
 					scrubberRef.scrub(providerValue) +
+					(taskTurn
+						? turnContextStore.completionScopeGuidance(workGraphId)
+						: '') +
 					sourceContext +
 					mentionContext +
 					goalLedger,

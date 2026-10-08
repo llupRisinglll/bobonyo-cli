@@ -1021,6 +1021,24 @@ test('agent_wait returns settled state without polling and live messages queue',
 			rawArguments: '',
 		});
 		expect(queued.content).toContain('Queued message for running agent');
+		let detached = false;
+		await executeTool(
+			{
+				id: 'message-running-independent',
+				name: 'agent_message',
+				arguments: {
+					agent_id: 'agent-running',
+					message: 'Preserve Finance; SDK work is independent.',
+				},
+				rawArguments: '',
+			},
+			{
+				onDetachedWork: () => {
+					detached = true;
+				},
+			},
+		);
+		expect(detached).toBe(false);
 	} finally {
 		setActiveAgentRuns([]);
 	}
@@ -1030,6 +1048,17 @@ test('subagent exhaustion has a bounded recovery finalization contract', () => {
 	expect(MAX_SUBAGENT_TOOL_ROUNDS).toBeGreaterThan(6);
 	expect(SUBAGENT_FINALIZATION_PROMPT).toContain('Do not call tools');
 	expect(SUBAGENT_FINALIZATION_PROMPT).toContain('verified findings');
+});
+
+test('worker revisions cannot detach independent coordinator work', () => {
+	const source = readFileSync(new URL('./tools.ts', import.meta.url), 'utf8');
+	const messageTool = source.slice(
+		source.indexOf("registerTool('agent_message'"),
+		source.indexOf("registerTool('agent_status'"),
+	);
+	expect(messageTool).not.toContain('ctx.onDetachedWork');
+	expect(messageTool).toContain('Continue independent coordinator work');
+	expect(messageTool).not.toContain('Wait for the running agent batch');
 });
 
 test('read and search tools reject symlink escapes outside workspace', async () => {

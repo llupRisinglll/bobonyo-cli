@@ -28,6 +28,23 @@ export class GraphContextStore {
 	snapshot(): GraphContextSnapshot {
 		return structuredClone(this.state);
 	}
+	/** Inform old integrations of newer ownership without importing another task. */
+	completionScopeGuidance(graphId: string | undefined): string {
+		if (
+			!graphId ||
+			!this.state.latestGraphId ||
+			graphId === this.state.latestGraphId
+		)
+			return '';
+		return (
+			'\n\n<completion_scope>\nA newer user request owns the foreground. ' +
+			'This result belongs to an older work graph. Integrate only its evidence; ' +
+			'you must not cancel, narrow, or declare the newer request complete. ' +
+			'Do not treat this worker result as the final deliverable for the current foreground request. ' +
+			'Do not infer the newer task or execute it from this older context. ' +
+			'Report the owning result briefly; leave the foreground request and checklist intact.\n</completion_scope>'
+		);
+	}
 	/** Check revision ownership without copying unrelated histories. */
 	owns(lease: GraphContextLease): boolean {
 		return (

@@ -1,5 +1,5 @@
 import {describe, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {ChatMessageLike} from './client';
@@ -157,6 +157,28 @@ describe('graph-owned parent checklists', () => {
 });
 
 describe('graph-owned provider context', () => {
+	test('old Finance completion cannot declare revised SDK request finished', () => {
+		const store = new GraphContextStore();
+		const a = store.begin('finance', []);
+		store.commit(a, history('Prepare Finance PR'));
+		const b = store.begin('sdk', history('Prepare Finance PR'));
+		store.commit(
+			b,
+			history('Extract SDK worker and release it; Finance consumer only'),
+		);
+		const scope = store.completionScopeGuidance('finance');
+		expect(scope).toContain('newer user request');
+		expect(scope).toContain('must not cancel, narrow, or declare');
+		expect(scope).not.toContain('Extract SDK');
+		expect(store.completionScopeGuidance('sdk')).toBe('');
+		expect(store.begin('finance', [], true).history).toEqual(
+			history('Prepare Finance PR'),
+		);
+		const app = readFileSync(new URL('./app.tsx', import.meta.url), 'utf8');
+		expect(app).toContain(
+			'turnContextStore.completionScopeGuidance(workGraphId)',
+		);
+	});
 	test('A completion uses A history after B, without replacing latest B', () => {
 		const store = new GraphContextStore();
 		const a = store.begin('A', []);

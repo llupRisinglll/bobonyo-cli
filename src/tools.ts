@@ -2682,9 +2682,12 @@ registerTool('agent_message', {
 			background,
 		);
 		if (background) {
-			ctx.onDetachedWork?.('agent', id);
 			void task.catch(() => {});
-			return `Continued background agent ${id}. Wait for the running agent batch to settle before reporting results.`;
+			return (
+				`Continued background agent ${id}. ` +
+				'Continue independent coordinator work. This message does not complete the user request; ' +
+				"wait only for work that depends on this agent's result."
+			);
 		}
 		return task;
 	},
