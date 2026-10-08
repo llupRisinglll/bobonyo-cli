@@ -10,6 +10,7 @@
 
 import {listProviders, loadPreferences} from './config';
 import type {NativeWebSearchAction} from './client';
+import type {ChatMessage} from './state';
 
 export interface WebSearchFallback {
 	baseUrl: string;
@@ -46,6 +47,26 @@ export function formatNativeWebSearchActivity(
 ): string {
 	const detail = nativeWebSearchActionDetail(action);
 	return `✦ Searched the web${detail ? ` for ${detail}` : ''}`;
+}
+export function webSearchActivityMessage(
+	action?: NativeWebSearchAction,
+): ChatMessage {
+	const detail = nativeWebSearchActionDetail(action);
+	const name =
+		action?.type === 'open_page' || action?.type === 'find_in_page'
+			? 'fetch_url'
+			: 'web_search';
+	return {
+		role: 'tool',
+		content: '',
+		toolId: `native-web-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		tool: {
+			name,
+			detail,
+			output: '',
+			args: detail ? {query: detail, url: detail} : {},
+		},
+	};
 }
 
 /** Resolve the configured web-search fallback (null = inherit main model). */

@@ -118,6 +118,14 @@ export {
 	wrapThoughtBody,
 } from './history-thought';
 const PREVIEW_LINES = 3;
+
+export function stripProviderCitationMarkers(text: string): string {
+	return text
+		.replace(/\s*cite[^]*/g, '')
+		.replace(/\s*\[cite:[^\]\n]+\]/gi, '')
+		.replace(/[ \t]+\n/g, '\n')
+		.replace(/[ \t]{2,}/g, ' ');
+}
 /**
  * Fence languages rendered as PLAIN COMPONENTS (`SettledToolRow`) instead
  * of markdown. These are the hover/click targets; markdown's text buffer is
@@ -804,7 +812,7 @@ export function History(props: HistoryProps) {
 					pushBlock(
 						// The `✦` glyph renders OUTSIDE the reply container
 						// (aligned with tool glyphs); the content is plain.
-						message.content,
+						stripProviderCitationMarkers(message.content),
 						undefined,
 						'reply',
 					);

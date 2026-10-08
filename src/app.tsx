@@ -58,7 +58,7 @@ import {
 	type ResolvedProvider,
 } from './config';
 import {resolveRulesFile} from './rules-file';
-import {formatNativeWebSearchActivity} from './web-search';
+import {webSearchActivityMessage} from './web-search';
 import {
 	addPluginMarketplace,
 	installPlugin,
@@ -3855,7 +3855,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 								},
 								onReasoningStart: beginThinkingPhase,
 								onWebSearch: action =>
-									appendInfo(formatNativeWebSearchActivity(action)),
+									appendMessage(webSearchActivityMessage(action)),
 							},
 							controller.signal,
 							toolCatalogForModel(activeEndpoint().model),

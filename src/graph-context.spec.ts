@@ -241,15 +241,13 @@ describe('graph-owned provider context', () => {
 		expect(store.begin('A', [], true).history).toEqual(history('A'));
 	});
 
-	test('legacy or missing ownership fails explicitly rather than adopting latest B', () => {
+	test('legacy completion without graph snapshot falls back to supplied context', () => {
 		const store = new GraphContextStore();
-		expect(() => store.begin('A', history('B'), true)).toThrow(
-			'Provider context unavailable for work graph A',
-		);
+		expect(store.begin('A', history('B'), true).history).toEqual(history('B'));
 		expect(() => store.begin(undefined, history('B'), true)).toThrow(
 			'no work graph owner',
 		);
-		expect(store.snapshot().graphs).toEqual({});
+		expect(store.snapshot().graphs.A?.checklist).toEqual([]);
 		expect(
 			store.begin('new-user-work', history('legacy conversation')).history,
 		).toEqual(history('legacy conversation'));
@@ -304,13 +302,13 @@ describe('graph-owned provider context', () => {
 			delete session.graphContexts;
 			saveSession(session);
 			const legacy = loadSession(session.id)!;
-			expect(() =>
+			expect(
 				new GraphContextStore(legacy.graphContexts).begin(
 					'A',
 					legacy.context,
 					true,
-				),
-			).toThrow('Provider context unavailable');
+				).history,
+			).toEqual(legacy.context);
 		} finally {
 			if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
 			else process.env.BOBONYO_DATA_DIR = previous;

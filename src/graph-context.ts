@@ -101,7 +101,8 @@ export class GraphContextStore {
 		const previous = Object.hasOwn(this.state.graphs, graphId)
 			? this.state.graphs[graphId]
 			: undefined;
-		if (completion && !previous) {
+		const missingCompletionOwner = completion && !previous;
+		if (missingCompletionOwner && Object.keys(this.state.graphs).length > 0) {
 			throw new Error(
 				`Provider context unavailable for work graph ${graphId}; completion was not dispatched. Legacy sessions require an explicit new user turn.`,
 			);
@@ -131,7 +132,8 @@ export class GraphContextStore {
 			enumerable: true,
 			configurable: true,
 		});
-		if (!completion) this.state.latestGraphId = graphId;
+		if (!completion || missingCompletionOwner)
+			this.state.latestGraphId = graphId;
 		return {graphId, revision, history, checklist, publishLatest: !completion};
 	}
 

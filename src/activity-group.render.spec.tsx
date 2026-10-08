@@ -8,6 +8,8 @@ import {colors} from './theme';
 import {markdownSyntaxStyleFor} from './syntax';
 import type {MarkdownBriefRenderer} from './components/markdown-brief';
 import {History, renderToolRun} from './components/history';
+import {stripProviderCitationMarkers} from './components/history';
+import {webSearchActivityMessage} from './web-search';
 import type {ChatMessage} from './state';
 
 const md: MarkdownBriefRenderer = {
@@ -95,6 +97,58 @@ test('History groups shell find/grep with reads but keeps unsafe Bash cards', as
 	} finally {
 		setup.renderer.destroy();
 	}
+});
+
+test('native provider web search renders as grouped web activity, not gold info rows', async () => {
+	const messages = [
+		webSearchActivityMessage({type: 'search', query: 'npm stage approval'}),
+		webSearchActivityMessage({
+			type: 'open_page',
+			url: 'https://docs.npmjs.com',
+		}),
+	] satisfies ChatMessage[];
+	const setup = await testRender(
+		() => (
+			<History
+				embedded
+				width={90}
+				height={18}
+				messages={() => messages}
+				running={() => false}
+				reasoning={() => ''}
+				streaming={() => ''}
+				liveOutputs={() => ({})}
+			/>
+		),
+		{width: 90, height: 18},
+	);
+	try {
+		await Bun.sleep(180);
+		await setup.flush();
+		const text = setup
+			.captureSpans()
+			.lines.map(line => line.spans.map(span => span.text).join(''))
+			.join('\n');
+		expect(text).toContain('Navigated Web');
+		expect(text).toContain('├ WebSearch "npm stage approval"');
+		expect(text).toContain('└ WebFetch https://docs.npmjs.com');
+		expect(text).not.toContain('Searched the web');
+	} finally {
+		setup.renderer.destroy();
+	}
+});
+
+test('assistant replies strip provider citation placeholders before markdown rendering', () => {
+	expect(
+		stripProviderCitationMarkers(
+			'record before asking you to act. citeturn1view0\nNext sentence citeturn0search3',
+		),
+	).toBe('record before asking you to act.\nNext sentence');
+	expect(
+		stripProviderCitationMarkers(
+			'record before asking you to act. [cite:turn1view0]\nNext sentence [cite:turn0search3]',
+		),
+	).toBe('record before asking you to act.\nNext sentence');
 });
 
 test('group details retain shell commands, output and errors for expansion', () => {
