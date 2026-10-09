@@ -87,7 +87,17 @@ test('evidence-only recovery exposes no tools and rejects hallucinated calls bef
 	expect(boundary).toBeLessThan(
 		app.indexOf('const parsed = parseToolCalls(result.text)', boundary),
 	);
-	expect(boundary).toBeLessThan(app.indexOf('executeTool(call,', boundary));
+	const nativeBoundary = app.indexOf(
+		'assertGraphToolExecution(',
+		app.indexOf('onRequiredInput: async'),
+	);
+	expect(nativeBoundary).toBeGreaterThan(0);
+	expect(nativeBoundary).toBeLessThan(
+		app.indexOf('await executeToolTurn(', nativeBoundary),
+	);
+	expect(app.indexOf('executeTool(call,')).toBeGreaterThan(
+		app.indexOf('const executeToolTurn'),
+	);
 	expect(app).toMatch(/graphToolCatalog\(\s*contextLease,/);
 	expect(app).toContain('disableTools: contextLease.evidenceOnly === true');
 });

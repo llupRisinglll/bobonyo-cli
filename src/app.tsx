@@ -1,6 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import {existsSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {
+	ResponsesWebSocketError,
+	type ResponsesSteeringController,
+	type SteeringSubmission,
+} from './responses-websocket';
 import {writeAgentTrajectory} from './agent-trajectory';
 import {createContextGoal} from './context-goal';
 import {recoverWorkingDirectory} from './cwd-recovery';
@@ -807,6 +812,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	let queryActiveRef = false;
 	let promptPreparingRef = false;
 	let steeringPaused = false;
+	let dismissedNativeRecoveryId: string | undefined;
+	let nativeSteeringDelivery: (() => Promise<void>) | undefined;
 	// Escape invalidates in-flight preparation even if a newer submission resumes delivery.
 	let steeringEpoch = 0;
 	reportHerdrAgent('idle', {message: 'BoboNyo ready'});
@@ -1845,8 +1852,94 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		);
 		persist();
 	};
+	const recoverNativeDirection = (force = false): boolean => {
+		const item = steeringInbox()[0];
+		if (
+			!item?.nativeOwnership ||
+			busy() ||
+			queryActiveRef ||
+			promptPreparingRef
+		)
+			return false;
+		if (pendingQuestion()) return true;
+		if (!force && dismissedNativeRecoveryId === item.id) return true;
+		const generation = sessionGeneration;
+		const ownerSession = sessionId();
+		steeringPaused = true;
+		setPendingQuestion({
+			header: 'Retained native direction',
+			question:
+				item.nativeOwnership === 'failed'
+					? `The server returned this direction unapplied: ${item.value}\nRetry sends it once at a new safe boundary. Discard removes only the retained instruction.`
+					: `Delivery is unresolved: ${item.value}\nThe server may already have acted on it. Retry can duplicate instructions or effects. Discard does not undo output or tools; neither option rolls back completed work.`,
+			options: [
+				{
+					label: 'Keep',
+					description:
+						'Retain without replay. Use /retry to reopen this choice.',
+				},
+				{
+					label: 'Retry direction',
+					description:
+						'Explicitly send only this instruction at a new boundary; saved local tool results are retained.',
+				},
+				{
+					label: 'Discard direction',
+					description:
+						'Remove the retained instruction, without undoing any prior effects.',
+				},
+			],
+			resolve: answer => {
+				if (
+					generation !== sessionGeneration ||
+					ownerSession !== sessionId() ||
+					steeringInbox()[0]?.id !== item.id
+				)
+					return;
+				if (answer !== 'Retry direction' && answer !== 'Discard direction') {
+					dismissedNativeRecoveryId = item.id;
+					return;
+				}
+				if (answer === 'Discard direction') {
+					setSteeringInbox(previous => acknowledgeSteering(previous, item.id));
+					setMessages(previous =>
+						previous.map(message =>
+							message.steeringId === item.id
+								? {...message, steeringStatus: 'discarded'}
+								: message,
+						),
+					);
+					appendInfo(
+						'Retained native direction discarded. Earlier output and tool effects were not rolled back.',
+					);
+				} else {
+					setSteeringInbox(previous =>
+						previous.map(entry =>
+							entry.id === item.id
+								? {...entry, nativeOwnership: undefined, reuseContext: false}
+								: entry,
+						),
+					);
+					appendInfo(
+						'Retrying retained direction explicitly; completed local tools are not replayed.',
+					);
+				}
+				dismissedNativeRecoveryId = undefined;
+				steeringEpoch++;
+				steeringPaused = false;
+				persist();
+				queueMicrotask(processQueue);
+			},
+		});
+		return true;
+	};
 	const processSteering = async () => {
 		const item = steeringInbox()[0];
+		if (item?.nativeOwnership) {
+			steeringPaused = true;
+			recoverNativeDirection();
+			return;
+		}
 		if (
 			!item ||
 			steeringPaused ||
@@ -1901,6 +1994,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		}
 	};
 	const processQueue = () => {
+		if (recoverNativeDirection()) return;
+		if (nativeSteeringDelivery && !steeringPaused && steeringInbox().length) {
+			void nativeSteeringDelivery();
+			return;
+		}
 		if (steeringInbox().length && !steeringPaused) {
 			void processSteering();
 			return;
@@ -3859,6 +3957,130 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			let checklistTouchedThisTurn = false;
 			let toolBriefActive = false;
 			let reactiveCompactRetries = 0;
+			let nativeController: ResponsesSteeringController | undefined;
+			const nativeSubmissions = new Map<
+				number,
+				{id: string; content: string}
+			>();
+			let nativePreparing = false;
+			const nativeDelivery = async () => {
+				if (nativePreparing || !nativeController || !canDeliverPendingPrompts())
+					return;
+				nativePreparing = true;
+				try {
+					for (const item of [...steeringInbox()]) {
+						if (
+							item.nativeOwnership ||
+							(item.owner &&
+								(item.owner.sessionId !== sessionId() ||
+									item.owner.generation !== generation ||
+									item.owner.turnId !== turnId))
+						)
+							break;
+						if (
+							[...nativeSubmissions.values()].some(
+								entry => entry.id === item.id,
+							)
+						)
+							continue;
+						// Keep images durable for the ordinary boundary until multimodal steering is integrated.
+						if (Object.keys(item.attachments ?? {}).length) break;
+						const epoch = steeringEpoch;
+						const prompt = await prepareUserPrompt(
+							item.value,
+							item.attachments,
+							generation,
+						);
+						if (
+							!canDeliverPendingPrompts() ||
+							epoch !== steeringEpoch ||
+							!nativeController
+						)
+							return;
+						if (prompt === undefined) {
+							steeringPaused = true;
+							return;
+						}
+						const content =
+							scrubberRef.scrub(prompt) +
+							buildMentionContext(item.value, workspaceCwd()) +
+							currentDateFragment();
+						const submission = nativeController.submit(content);
+						if (!submission) return;
+						nativeSubmissions.set(submission.id, {id: item.id, content});
+						setSteeringInbox(previous =>
+							previous.map(entry =>
+								entry.id === item.id
+									? {
+											...entry,
+											nativeOwnership:
+												submission.status === 'uncertain'
+													? 'uncertain'
+													: 'sent',
+										}
+									: entry,
+							),
+						);
+						persist();
+					}
+				} finally {
+					nativePreparing = false;
+				}
+			};
+			const nativeChanged = (submission: SteeringSubmission) => {
+				const local = nativeSubmissions.get(submission.id);
+				if (
+					!local ||
+					generation !== sessionGeneration ||
+					foregroundTurnOwner !== turnId
+				)
+					return;
+				if (['accepted', 'uncertain', 'failed'].includes(submission.status)) {
+					setSteeringInbox(previous =>
+						previous.map(item =>
+							item.id === local.id
+								? {
+										...item,
+										nativeOwnership: submission.status as
+											'accepted' | 'uncertain' | 'failed',
+									}
+								: item,
+						),
+					);
+					persist();
+				}
+				if (
+					submission.status === 'uncertain' ||
+					submission.status === 'failed'
+				) {
+					steeringPaused = true;
+					return;
+				}
+				if (submission.status !== 'applied') return;
+				checklistTouchedThisTurn = false;
+				taskToolRanAfterCloseoutDraft = false;
+				lastTaskCloseoutDraft = '';
+				emptyTurnCount = 0;
+				malformedRetryCount = 0;
+				repeatedToolState = INITIAL_REPEATED_TOOL_STATE;
+				taskCloseoutNudgeCount = 0;
+				if (!history.some(message => message.steeringId === local.id)) {
+					history = [
+						...history,
+						{role: 'user', content: local.content, steeringId: local.id},
+					];
+					commitTurnContext(history);
+				}
+				acknowledgeDirection(local.id);
+				setMessages(previous =>
+					previous.map(message =>
+						message.steeringId === local.id
+							? {...message, steeringStatus: 'consumed'}
+							: message,
+					),
+				);
+				persist();
+			};
 			setDiagnosticsCount(0);
 			let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
 			if (watchdogMsRef > 0) {
@@ -3883,6 +4105,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				await deliverSteering(
 					steeringInbox(),
 					async item => {
+						if (item.nativeOwnership) return false;
 						if (!canDeliverPendingPrompts()) return false;
 						if (
 							item.owner &&
@@ -3938,6 +4161,623 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					},
 					acknowledgeDirection,
 				);
+			};
+
+			const thoughtDuration = (): number =>
+				thinkingSeconds(
+					thinkingStartedAt > 0 ? thinkingStartedAt : startedAt,
+					Date.now(),
+				);
+			const executeToolTurn = async (
+				result: Awaited<ReturnType<typeof streamChat>>,
+				round: number,
+				nativeTools = false,
+			): Promise<false | ChatMessageLike[]> => {
+				// B14: repeated identical EFFECTFUL tool signature across turns →
+				// loop guard. Checklist bookkeeping (`write_tasks`) is excluded:
+				// models legitimately repeat it while advancing and closing tasks.
+				// Other tools remain guarded, including skill loading.
+				const repeated = evaluateRepeatedToolCalls(
+					result.toolCalls,
+					repeatedToolState,
+				);
+				repeatedToolState = repeated.state;
+				if (repeated.stop) {
+					appendError(
+						`Repeated tool call detected (${repeated.state.count}× identical calls), stopping the loop.`,
+					);
+					return false;
+				}
+
+				// Tool turn: execute every call, render each row, feed the
+				// results back so the model can reply.
+				const toolMessages: ChatMessageLike[] = [];
+				// Settled Thought block for a reasoning+tools turn (parity:
+				// /mock:thoughtrun keeps `⚙ Thought (Ns)` above the tally).
+				if (result.reasoning.trim()) {
+					appendAssistantMessage('', {
+						reasoning: result.reasoning.trim(),
+						durationSec: thoughtDuration(),
+					});
+				}
+				// Pre-tool BRIEF (parity: claude code / openclaude render the
+				// model's "I'll check X" narration BEFORE the tool box). It is
+				// attached to the FIRST tool message of the batch and renders
+				// once as part of the tool entry — never repeated per tool.
+				const preToolText = splitPreToolText(
+					scrubberRef.rehydrate(result.text),
+				);
+				const briefText = result.text.trim()
+					? oneSentencePreToolBrief(preToolText.brief)
+					: '';
+				const priorRoundBriefed = toolBriefActive;
+				if (briefText) toolBriefActive = true;
+				// Text became pre-tool brief. Remove live-reply copy immediately;
+				// otherwise same narration paints above tool and again below it
+				// until next streaming throttle tick.
+				setStreaming('');
+				// Keep prose after the compact pre-tool sentence as a normal
+				// assistant message. Previously every result.text attached to a
+				// tool call was collapsed into one brief, silently dropping
+				// substantive sentences between tool rounds.
+				if (preToolText.remainder) {
+					appendAssistantMessage(preToolText.remainder, {
+						reasoning: result.reasoning.trim() || undefined,
+						durationSec: thoughtDuration(),
+					});
+				}
+				const toolResults: Array<{
+					tool_call_id: string;
+					content: string;
+					displayArgs?: Record<string, unknown>;
+				}> = [];
+				// B8: single-tool profiles truncate to one call per turn.
+				const selectedCalls = isSingleToolProfile(
+					toolProfile(),
+					activeEndpoint().model,
+				)
+					? result.toolCalls.slice(0, 1)
+					: result.toolCalls;
+				// Normalize BEFORE rendering and provider-history persistence. Doing
+				// this only inside executeTool still shows redundant `cd <cwd> &&`
+				// in the visible call and teaches the model to repeat it.
+				const calls: MockToolCall[] = selectedCalls.map(call => {
+					if (resolveToolName(call.name) !== 'execute_bash') return call;
+					const command = call.arguments.command;
+					if (typeof command !== 'string') return call;
+					const normalized = normalizeBashCommand(command, workspaceCwd());
+					if (normalized === command) return call;
+					const args = {...call.arguments, command: normalized};
+					return {
+						...call,
+						arguments: args,
+						rawArguments: JSON.stringify(args),
+					};
+				});
+				let declined = false;
+				// B17: read-only batches run in PARALLEL (results keep order);
+				// mutation tools always run sequentially.
+				const allReadOnly = calls.every(call => {
+					const availability = toolAvailability(
+						call.name,
+						toolProfile(),
+						mode(),
+						activeEndpoint().model,
+					);
+					return (
+						availability.available &&
+						isReadOnlyTool(call.name) &&
+						isParallelSafeTool(call.name) &&
+						!evaluateToolConstraint(call.name, steeringRef, {
+							intent: classifyIntent(value),
+							model: activeEndpoint().model,
+							budgetTurns: round,
+							totalBudget: TOOL_LOOP_BUDGET,
+							backgroundTasksRunning: activeBgCount() > 0,
+						})
+					);
+				});
+				// B9/C6: pre-append every running row for the read-only
+				// PARALLEL batch so the compact tally streams LIVE instead of
+				// appearing only after the whole batch settles.
+				const batchStartedAt = Date.now();
+				if (allReadOnly) {
+					for (const [callIndex, call] of calls.entries()) {
+						const detail = toolDisplayDetail(call);
+						appendMessage({
+							role: 'tool',
+							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
+							running: true,
+							toolId: call.id,
+							// First message carries the brief TEXT; every
+							// message marks the batch so later boxes share
+							// the single glyph and indent to the brief column.
+							brief: toolCallBrief(briefText, callIndex, priorRoundBriefed),
+							tool: {
+								name: call.name,
+								detail,
+								output: '',
+								args: call.arguments,
+							},
+						});
+					}
+				}
+				const parallelResults = allReadOnly
+					? await Promise.allSettled(
+							calls.map(call =>
+								executeTool(call, {
+									sessionId: sessionId(),
+									hookContextId,
+									hookSessionId: turnHookSessionId,
+									workGraphId,
+									onProgress: content =>
+										setLiveOutputs(prev => ({
+											...prev,
+											[call.id]: content,
+										})),
+									signal: controller.signal,
+									cwd: workspaceCwd(),
+									workspaceRoot,
+									onCwdChange: updateWorkspaceCwd,
+									askUser,
+									onStateChange: agentProgressPersistence.flush,
+									onAgentProgress: agentProgressPersistence.schedule,
+									onDetachedWork: (kind, id) => {
+										if (kind === 'bash' && goalOwner)
+											backgroundGoalGraphs.set(id, workGraphId);
+										releaseForegroundForDetachedWork();
+									},
+									onDetachedComplete: queueDetachedCompletion,
+									backgroundOwner: autonomousTurn
+										? 'goal'
+										: loopTurn
+											? 'loop'
+											: 'user',
+								}),
+							),
+						)
+					: null;
+				// Cancellation can escape during the next call's hook or approval.
+				// Preserve settled effects before propagating it; pending calls never
+				// acquire declarations merely because the model proposed them.
+				const commitCompletedTools = (): MockToolCall[] => {
+					const completedIds = new Set(
+						toolMessages.flatMap(message =>
+							message.role === 'tool' && message.tool_call_id
+								? [message.tool_call_id]
+								: [],
+						),
+					);
+					const completedCalls = calls.filter(call =>
+						completedIds.has(call.id),
+					);
+					if (!completedCalls.length) return completedCalls;
+					const assistantToolMsg: ChatMessageLike = {
+						role: 'assistant',
+						content: result.text,
+						tool_calls: completedCalls.map(call => ({
+							id: call.id,
+							name: call.name,
+							arguments: call.rawArguments,
+						})),
+					};
+					history = completedCalls.length
+						? [...history, assistantToolMsg, ...toolMessages]
+						: history;
+					if (commitTurnContext(history) && generation === sessionGeneration)
+						persist();
+					return completedCalls;
+				};
+				const assertDispatchCurrent = (callId: string): void => {
+					if (
+						// Parallel calls already dispatched before cancellation. Drain their
+						// settled results rather than treating them as undispatched calls.
+						(!controller.signal.aborted || parallelResults !== null) &&
+						generation === sessionGeneration &&
+						foregroundTurnOwner === turnId
+					)
+						return;
+					setMessages(previous =>
+						previous.filter(message => message.toolId !== callId),
+					);
+					commitCompletedTools();
+					throw new DOMException(
+						'Turn no longer owns tool dispatch',
+						'AbortError',
+					);
+				};
+				callLoop: for (const [index, call] of calls.entries()) {
+					assertDispatchCurrent(call.id);
+					// Rejected parallel calls already ran. Never redispatch them or
+					// fabricate a result; commit only their fulfilled siblings.
+					const parallelResult = parallelResults?.[index];
+					if (parallelResult?.status === 'rejected') continue;
+					// A dispatched tool owns its execution through settlement. New direction
+					// invalidates only undispatched calls; resample after paired results commit.
+					if (
+						!allReadOnly &&
+						!nativeTools &&
+						canDeliverPendingPrompts() &&
+						steeringInbox().length > 0
+					)
+						break callLoop;
+					// Render the row BEFORE execution so bash output streams live
+					// into the transcript tail (parity: streaming tool rows).
+					const detail = toolDisplayDetail(call);
+					const callStartedAt = allReadOnly ? batchStartedAt : Date.now();
+					// B9/C6: the read-only PARALLEL batch pre-appends every
+					// running row BEFORE execution so the compact tally streams
+					// live (the rows above already exist for that path).
+					if (!allReadOnly) {
+						appendMessage({
+							role: 'tool',
+							content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
+							running: true,
+							toolId: call.id,
+							brief: toolCallBrief(briefText, index, priorRoundBriefed),
+							tool: {
+								name: call.name,
+								detail,
+								output: '',
+								args: call.arguments,
+							},
+						});
+					}
+					if (declined) {
+						const declinedContent = 'Declined by user.';
+						toolResults.push({
+							tool_call_id: call.id,
+							content: declinedContent,
+						});
+						toolMessages.push({
+							role: 'tool',
+							content: declinedContent,
+							tool_call_id: call.id,
+						});
+						setMessages(prev =>
+							prev.map(message =>
+								message.toolId === call.id
+									? {
+											...message,
+											running: false,
+											tool: {...message.tool!, output: declinedContent},
+										}
+									: message,
+							),
+						);
+						continue;
+					}
+					// B15: steering tool-call constraints block before dispatch.
+					const toolConstraint = evaluateToolConstraint(
+						call.name,
+						steeringRef,
+						{
+							intent: classifyIntent(value),
+							model: activeEndpoint().model,
+							budgetTurns: round,
+							totalBudget: TOOL_LOOP_BUDGET,
+							backgroundTasksRunning: activeBgCount() > 0,
+						},
+					);
+					if (toolConstraint) {
+						const reason =
+							`Blocked by steering rule ${toolConstraint.rule.id}: ` +
+							`${toolConstraint.rule.message ?? 'constraint'}`;
+						appendInfo(
+							formatInnerDaemonRow(toolConstraint.rule.id, 'block', {
+								intent: toolConstraint.intent,
+								model: activeEndpoint().model,
+								budgetTurns: round,
+								totalBudget: TOOL_LOOP_BUDGET,
+								backgroundTasksRunning: activeBgCount() > 0,
+							}),
+						);
+						toolResults.push({tool_call_id: call.id, content: reason});
+						toolMessages.push({
+							role: 'tool',
+							content: reason,
+							tool_call_id: call.id,
+						});
+						setMessages(prev =>
+							prev.map(message =>
+								message.toolId === call.id
+									? {
+											...message,
+											running: false,
+											tool: {...message.tool!, output: reason},
+										}
+									: message,
+							),
+						);
+						continue;
+					}
+					// D7/D3: profile/plan availability.
+					const availability = toolAvailability(
+						call.name,
+						toolProfile(),
+						mode(),
+						activeEndpoint().model,
+					);
+					if (!availability.available) {
+						const reason = `Tool ${displayToolName(call.name)} ${availability.reason}.`;
+						toolResults.push({tool_call_id: call.id, content: reason});
+						toolMessages.push({
+							role: 'tool',
+							content: reason,
+							tool_call_id: call.id,
+						});
+						setMessages(prev =>
+							prev.map(message =>
+								message.toolId === call.id
+									? {
+											...message,
+											running: false,
+											tool: {...message.tool!, output: reason},
+										}
+									: message,
+							),
+						);
+						continue;
+					}
+					// B16: approval gating.
+					const preprocessedArgs = !isReadOnlyTool(call.name)
+						? await preprocessToolInput(call, hookContextId, turnHookSessionId)
+						: undefined;
+					assertDispatchCurrent(call.id);
+					const approvalCall = preprocessedArgs
+						? {...call, arguments: preprocessedArgs}
+						: call;
+					if (
+						!allReadOnly &&
+						!nativeTools &&
+						canDeliverPendingPrompts() &&
+						steeringInbox().length > 0
+					) {
+						setMessages(previous =>
+							previous.filter(message => message.toolId !== call.id),
+						);
+						break callLoop;
+					}
+					if (
+						requiresCallApproval(
+							approvalCall,
+							mode(),
+							activeEndpoint().alwaysAllow ?? [],
+							workspaceCwd(),
+							workspaceRoot,
+						)
+					) {
+						const approved = await approvalGate(
+							displayToolName(call.name),
+							detail,
+							() => assertDispatchCurrent(call.id),
+							controller.signal,
+						);
+						assertDispatchCurrent(call.id);
+						reportHerdrAgent('working', {
+							message: completionSummary || 'Working',
+							sessionId: sessionId(),
+						});
+						if (!approved) {
+							declined = true; // decline cancels the REST
+							const declinedContent = 'Declined by user.';
+							toolResults.push({
+								tool_call_id: call.id,
+								content: declinedContent,
+							});
+							toolMessages.push({
+								role: 'tool',
+								content: declinedContent,
+								tool_call_id: call.id,
+							});
+							setMessages(prev =>
+								prev.map(message =>
+									message.toolId === call.id
+										? {
+												...message,
+												running: false,
+												tool: {...message.tool!, output: declinedContent},
+											}
+										: message,
+								),
+							);
+							continue;
+						}
+					}
+					if (
+						!allReadOnly &&
+						!nativeTools &&
+						canDeliverPendingPrompts() &&
+						steeringInbox().length > 0
+					) {
+						setMessages(previous =>
+							previous.filter(message => message.toolId !== call.id),
+						);
+						break callLoop;
+					}
+					assertDispatchCurrent(call.id);
+					const toolResult =
+						(parallelResult?.status === 'fulfilled'
+							? parallelResult.value
+							: undefined) ??
+						(await executeTool(call, {
+							sessionId: sessionId(),
+							hookContextId,
+							hookSessionId: turnHookSessionId,
+							workGraphId,
+							onProgress: content =>
+								setLiveOutputs(prev => ({...prev, [call.id]: content})),
+							signal: controller.signal,
+							cwd: workspaceCwd(),
+							workspaceRoot,
+							askUser,
+							onStateChange: agentProgressPersistence.flush,
+							onAgentProgress: agentProgressPersistence.schedule,
+							onDetachedWork: (kind, id) => {
+								if (kind === 'bash' && goalOwner)
+									backgroundGoalGraphs.set(id, workGraphId);
+								releaseForegroundForDetachedWork();
+							},
+							onDetachedComplete: queueDetachedCompletion,
+							backgroundOwner: autonomousTurn
+								? 'goal'
+								: loopTurn
+									? 'loop'
+									: 'user',
+							...(preprocessedArgs ? {preprocessedArgs} : {}),
+							onCwdChange: next => {
+								updateWorkspaceCwd(next);
+								persist();
+							},
+						}));
+					if (call.arguments._malformed) {
+						// B7: malformed arguments → corrective nudge so the model
+						// retries with valid JSON (self-correction loop).
+						appendInfo(
+							`Auto-recovered malformed tool call: ${call.name}, retrying with valid arguments.`,
+						);
+						toolMessages.push({
+							role: 'user',
+							content:
+								`Your tool call to ${call.name} had invalid JSON arguments ` +
+								`(${call.rawArguments}). Please retry with valid JSON.`,
+						});
+					}
+					toolResults.push(toolResult);
+					if (
+						['write_tasks', 'task_update', 'task_create'].includes(
+							resolveToolName(call.name),
+						) &&
+						!toolResult.content.startsWith('Error:')
+					) {
+						taskToolRanAfterCloseoutDraft = true;
+						checklistTouchedThisTurn = true;
+					}
+					toolMessages.push({
+						role: 'tool',
+						content: toolResult.content,
+						tool_call_id: toolResult.tool_call_id,
+					});
+					// Fast tools settle before the next paint: an MCP stdio
+					// round trip can be ~1ms while the renderer frames at
+					// ~16ms, so without a floor the row appears already
+					// green with output and the grey running glyph is never
+					// seen. Hold the RUNNING state until the floor elapses
+					// (parity: the startup loader's MIN_LOAD_MS floor).
+					const executedAt = Date.now();
+					const runningRemaining = toolRunningRemainingMs(
+						callStartedAt,
+						executedAt,
+					);
+					if (runningRemaining > 0) {
+						await new Promise(resolve => setTimeout(resolve, runningRemaining));
+					}
+					setMessages(prev =>
+						prev.map(message =>
+							message.toolId === call.id
+								? {
+										...message,
+										running: false,
+										tool: {
+											...message.tool!,
+											output: toolResult.content,
+											args: toolResult.displayArgs ?? message.tool!.args,
+										},
+										toolStats: {
+											durationSec: Math.max(
+												0,
+												(executedAt - callStartedAt) / 1000,
+											),
+											toolCalls: calls.length,
+										},
+									}
+								: message,
+						),
+					);
+					setLiveOutputs(prev => {
+						const next = {...prev};
+						delete next[call.id];
+						return next;
+					});
+					if (detachedWorkStarted) {
+						// Completion notification resumes work with exact output. End this
+						// turn now instead of polling or holding foreground ownership.
+						break callLoop;
+					}
+				}
+
+				// Detached work ends the current turn immediately. A model batch can
+				// contain more calls after that detached call, but those calls were
+				// never executed and therefore have no tool result. Persisting the
+				// original full declaration creates an invalid provider history:
+				// `tool_calls` contains orphaned calls, which breaks resume with
+				// "No tool output found". Keep only declarations with results.
+				const completedCalls = commitCompletedTools();
+				const rejectedParallel = parallelResults?.find(
+					result => result.status === 'rejected',
+				);
+				if (rejectedParallel?.status === 'rejected')
+					throw rejectedParallel.reason;
+				if (parallelResults) controller.signal.throwIfAborted();
+				refreshContextPercent();
+				if (shouldReleaseDetachedAgentBatch(completedCalls, toolResults)) {
+					releaseForegroundForDetachedWork();
+				}
+				if (detachedWorkStarted) {
+					// Finally clears busy while detached process keeps running.
+					return false;
+				}
+				// Codex true mid-turn continuation: compact after tool output,
+				// replace local history, then sample again in this SAME loop.
+				if (!nativeTools && shouldAutoCompactHistory(history)) {
+					history = await compactTurnContext(history);
+				}
+				if (nativeTools) {
+					setStreaming('');
+					setReasoning('');
+					thinkingStartedAt = 0;
+					return toolMessages;
+				}
+				// B4: cap the provider context to the newest N messages.
+				history = capMessages(history, maxMessages());
+				// B21: auto-diagnostics after a tool turn, run the LSP
+				// diagnostics tool and inject the summary before recursion.
+				// ONLY when there are FINDINGS: a clean "no issues" pass must
+				// not spam the chat with a useless row or waste provider
+				// tokens (parity: the original only surfaces findings).
+				try {
+					const diagnostics = await executeTool(
+						{
+							id: 'call_diag',
+							name: 'lsp_get_diagnostics',
+							arguments: {},
+							rawArguments: '{}',
+						},
+						{},
+					);
+					const issues = /(\d+)\s+(?:issue|error|problem)s?/i.exec(
+						diagnostics.content,
+					);
+					const count = issues ? Number(issues[1]) : 0;
+					setDiagnosticsCount(count);
+					if (count > 0) {
+						appendInfo(firstLine(diagnostics.content, 120));
+						history = [
+							...history,
+							{
+								role: 'user',
+								content: `<diagnostics-summary>\n${diagnostics.content}\n</diagnostics-summary>`,
+							},
+						];
+					}
+				} catch {
+					// diagnostics are best-effort; never block the loop
+				}
+				setStreaming('');
+				setReasoning('');
+				thinkingStartedAt = 0;
+				recordTurnUsage(result.usage);
+				return toolMessages;
 			};
 			try {
 				// B15: preflight steering evaluation before the first request.
@@ -4011,12 +4851,88 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						result = await streamChat(
 							history,
 							{
+								responsesWebSocket:
+									process.env.BOBONYO_NATIVE_STEERING === '1' &&
+									!systemTurn &&
+									!isSingleToolProfile(toolProfile(), activeEndpoint().model) &&
+									!contextLease.evidenceOnly
+										? {
+												enabled: true,
+												register: registered => {
+													nativeController = registered;
+													nativeSteeringDelivery = registered
+														? nativeDelivery
+														: undefined;
+												},
+												onSteeringChange: nativeChanged,
+												onTransportFailure: () => controller.abort(),
+												onIntermediateResponse: segment => {
+													if (
+														generation !== sessionGeneration ||
+														foregroundTurnOwner !== turnId
+													)
+														return;
+													if (segment.text.trim() || segment.reasoning.trim())
+														appendAssistantMessage(
+															scrubberRef.rehydrate(segment.text),
+															{
+																reasoning: segment.reasoning || undefined,
+															},
+														);
+													history = [
+														...history,
+														{role: 'assistant', content: segment.text},
+													];
+													commitTurnContext(history);
+													setStreaming('');
+													setReasoning('');
+												},
+												onResponseCreated: () => {
+													void nativeDelivery();
+												},
+												onRequiredInput: async request => {
+													assertGraphToolExecution(
+														contextLease,
+														request.toolCalls,
+													);
+													if (
+														request.requiredInput.some(
+															item => item.type !== 'function_call_output',
+														)
+													) {
+														throw new ResponsesWebSocketError(
+															'Native approvals are not integrated; request retained without replay.',
+														);
+													}
+													setThinkingActive(false);
+													const outputs = await executeToolTurn(
+														request.result,
+														round,
+														true,
+													);
+													if (!outputs) {
+														throw new ResponsesWebSocketError(
+															'Native tool turn stopped; continuation was not replayed.',
+														);
+													}
+													return outputs
+														.filter(message => message.role === 'tool')
+														.map(message => ({
+															type: 'function_call_output',
+															call_id: message.tool_call_id,
+															output: message.content,
+														}));
+												},
+											}
+										: undefined,
 								onText: delta => {
+									void nativeDelivery();
 									// Reply text streaming ⇒ the thinking phase is over.
 									if (delta) setThinkingActive(false);
 									setStreaming(prev => prev + delta);
 								},
 								onReasoning: delta => {
+									void nativeDelivery();
 									if (delta) beginThinkingPhase();
 									setReasoning(prev => prev + delta);
 								},
@@ -4065,7 +4981,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						samplingDirections.clear();
 						persist();
 					} catch (error) {
-						if (isCompactOverflowError(error) && reactiveCompactRetries < 2) {
+						if (
+							!(error instanceof ResponsesWebSocketError) &&
+							isCompactOverflowError(error) &&
+							reactiveCompactRetries < 2
+						) {
 							reactiveCompactRetries += 1;
 							setStreaming('');
 							setReasoning('');
@@ -4323,593 +5243,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						continue;
 					}
 
-					// B14: repeated identical EFFECTFUL tool signature across turns →
-					// loop guard. Checklist bookkeeping (`write_tasks`) is excluded:
-					// models legitimately repeat it while advancing and closing tasks.
-					// Other tools remain guarded, including skill loading.
-					const repeated = evaluateRepeatedToolCalls(
-						result.toolCalls,
-						repeatedToolState,
-					);
-					repeatedToolState = repeated.state;
-					if (repeated.stop) {
-						appendError(
-							`Repeated tool call detected (${repeated.state.count}× identical calls), stopping the loop.`,
-						);
-						break;
-					}
-
-					// Tool turn: execute every call, render each row, feed the
-					// results back so the model can reply.
-					const toolMessages: ChatMessageLike[] = [];
-					// Settled Thought block for a reasoning+tools turn (parity:
-					// /mock:thoughtrun keeps `⚙ Thought (Ns)` above the tally).
-					if (result.reasoning.trim()) {
-						appendAssistantMessage('', {
-							reasoning: result.reasoning.trim(),
-							durationSec: thoughtDuration(),
-						});
-					}
-					// Pre-tool BRIEF (parity: claude code / openclaude render the
-					// model's "I'll check X" narration BEFORE the tool box). It is
-					// attached to the FIRST tool message of the batch and renders
-					// once as part of the tool entry — never repeated per tool.
-					const preToolText = splitPreToolText(
-						scrubberRef.rehydrate(result.text),
-					);
-					const briefText = result.text.trim()
-						? oneSentencePreToolBrief(preToolText.brief)
-						: '';
-					const priorRoundBriefed = toolBriefActive;
-					if (briefText) toolBriefActive = true;
-					// Text became pre-tool brief. Remove live-reply copy immediately;
-					// otherwise same narration paints above tool and again below it
-					// until next streaming throttle tick.
-					setStreaming('');
-					// Keep prose after the compact pre-tool sentence as a normal
-					// assistant message. Previously every result.text attached to a
-					// tool call was collapsed into one brief, silently dropping
-					// substantive sentences between tool rounds.
-					if (preToolText.remainder) {
-						appendAssistantMessage(preToolText.remainder, {
-							reasoning: result.reasoning.trim() || undefined,
-							durationSec: thoughtDuration(),
-						});
-					}
-					const toolResults: Array<{
-						tool_call_id: string;
-						content: string;
-						displayArgs?: Record<string, unknown>;
-					}> = [];
-					// B8: single-tool profiles truncate to one call per turn.
-					const selectedCalls = isSingleToolProfile(
-						toolProfile(),
-						activeEndpoint().model,
-					)
-						? result.toolCalls.slice(0, 1)
-						: result.toolCalls;
-					// Normalize BEFORE rendering and provider-history persistence. Doing
-					// this only inside executeTool still shows redundant `cd <cwd> &&`
-					// in the visible call and teaches the model to repeat it.
-					const calls: MockToolCall[] = selectedCalls.map(call => {
-						if (resolveToolName(call.name) !== 'execute_bash') return call;
-						const command = call.arguments.command;
-						if (typeof command !== 'string') return call;
-						const normalized = normalizeBashCommand(command, workspaceCwd());
-						if (normalized === command) return call;
-						const args = {...call.arguments, command: normalized};
-						return {
-							...call,
-							arguments: args,
-							rawArguments: JSON.stringify(args),
-						};
-					});
-					let declined = false;
-					// B17: read-only batches run in PARALLEL (results keep order);
-					// mutation tools always run sequentially.
-					const allReadOnly = calls.every(call => {
-						const availability = toolAvailability(
-							call.name,
-							toolProfile(),
-							mode(),
-							activeEndpoint().model,
-						);
-						return (
-							availability.available &&
-							isReadOnlyTool(call.name) &&
-							isParallelSafeTool(call.name) &&
-							!evaluateToolConstraint(call.name, steeringRef, {
-								intent: classifyIntent(value),
-								model: activeEndpoint().model,
-								budgetTurns: round,
-								totalBudget: TOOL_LOOP_BUDGET,
-								backgroundTasksRunning: activeBgCount() > 0,
-							})
-						);
-					});
-					// B9/C6: pre-append every running row for the read-only
-					// PARALLEL batch so the compact tally streams LIVE instead of
-					// appearing only after the whole batch settles.
-					const batchStartedAt = Date.now();
-					if (allReadOnly) {
-						for (const [callIndex, call] of calls.entries()) {
-							const detail = toolDisplayDetail(call);
-							appendMessage({
-								role: 'tool',
-								content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
-								running: true,
-								toolId: call.id,
-								// First message carries the brief TEXT; every
-								// message marks the batch so later boxes share
-								// the single glyph and indent to the brief column.
-								brief: toolCallBrief(briefText, callIndex, priorRoundBriefed),
-								tool: {
-									name: call.name,
-									detail,
-									output: '',
-									args: call.arguments,
-								},
-							});
-						}
-					}
-					const parallelResults = allReadOnly
-						? await Promise.all(
-								calls.map(call =>
-									executeTool(call, {
-										sessionId: sessionId(),
-										hookContextId,
-										hookSessionId: turnHookSessionId,
-										workGraphId,
-										onProgress: content =>
-											setLiveOutputs(prev => ({
-												...prev,
-												[call.id]: content,
-											})),
-										signal: controller.signal,
-										cwd: workspaceCwd(),
-										workspaceRoot,
-										onCwdChange: updateWorkspaceCwd,
-										askUser,
-										onStateChange: agentProgressPersistence.flush,
-										onAgentProgress: agentProgressPersistence.schedule,
-										onDetachedWork: (kind, id) => {
-											if (kind === 'bash' && goalOwner)
-												backgroundGoalGraphs.set(id, workGraphId);
-											releaseForegroundForDetachedWork();
-										},
-										onDetachedComplete: queueDetachedCompletion,
-										backgroundOwner: autonomousTurn
-											? 'goal'
-											: loopTurn
-												? 'loop'
-												: 'user',
-									}),
-								),
-							)
-						: null;
-					// Cancellation can escape during the next call's hook or approval.
-					// Preserve settled effects before propagating it; pending calls never
-					// acquire declarations merely because the model proposed them.
-					const commitCompletedTools = (): MockToolCall[] => {
-						const completedIds = new Set(
-							toolMessages.flatMap(message =>
-								message.role === 'tool' && message.tool_call_id
-									? [message.tool_call_id]
-									: [],
-							),
-						);
-						const completedCalls = calls.filter(call =>
-							completedIds.has(call.id),
-						);
-						if (!completedCalls.length) return completedCalls;
-						const assistantToolMsg: ChatMessageLike = {
-							role: 'assistant',
-							content: result.text,
-							tool_calls: completedCalls.map(call => ({
-								id: call.id,
-								name: call.name,
-								arguments: call.rawArguments,
-							})),
-						};
-						history = completedCalls.length
-							? [...history, assistantToolMsg, ...toolMessages]
-							: history;
-						if (commitTurnContext(history) && generation === sessionGeneration)
-							persist();
-						return completedCalls;
-					};
-					const assertDispatchCurrent = (callId: string): void => {
-						if (
-							!controller.signal.aborted &&
-							generation === sessionGeneration &&
-							foregroundTurnOwner === turnId
-						)
-							return;
-						setMessages(previous =>
-							previous.filter(message => message.toolId !== callId),
-						);
-						commitCompletedTools();
-						throw new DOMException(
-							'Turn no longer owns tool dispatch',
-							'AbortError',
-						);
-					};
-					callLoop: for (const [index, call] of calls.entries()) {
-						assertDispatchCurrent(call.id);
-						// A dispatched tool owns its execution through settlement. New direction
-						// invalidates only undispatched calls; resample after paired results commit.
-						if (
-							!allReadOnly &&
-							canDeliverPendingPrompts() &&
-							steeringInbox().length > 0
-						)
-							break callLoop;
-						// Render the row BEFORE execution so bash output streams live
-						// into the transcript tail (parity: streaming tool rows).
-						const detail = toolDisplayDetail(call);
-						const callStartedAt = allReadOnly ? batchStartedAt : Date.now();
-						// B9/C6: the read-only PARALLEL batch pre-appends every
-						// running row BEFORE execution so the compact tally streams
-						// live (the rows above already exist for that path).
-						if (!allReadOnly) {
-							appendMessage({
-								role: 'tool',
-								content: `✦ ${displayToolName(call.name)}${detail ? `(${detail})` : ''}`,
-								running: true,
-								toolId: call.id,
-								brief: toolCallBrief(briefText, index, priorRoundBriefed),
-								tool: {
-									name: call.name,
-									detail,
-									output: '',
-									args: call.arguments,
-								},
-							});
-						}
-						if (declined) {
-							const declinedContent = 'Declined by user.';
-							toolResults.push({
-								tool_call_id: call.id,
-								content: declinedContent,
-							});
-							toolMessages.push({
-								role: 'tool',
-								content: declinedContent,
-								tool_call_id: call.id,
-							});
-							setMessages(prev =>
-								prev.map(message =>
-									message.toolId === call.id
-										? {
-												...message,
-												running: false,
-												tool: {...message.tool!, output: declinedContent},
-											}
-										: message,
-								),
-							);
-							continue;
-						}
-						// B15: steering tool-call constraints block before dispatch.
-						const toolConstraint = evaluateToolConstraint(
-							call.name,
-							steeringRef,
-							{
-								intent: classifyIntent(value),
-								model: activeEndpoint().model,
-								budgetTurns: round,
-								totalBudget: TOOL_LOOP_BUDGET,
-								backgroundTasksRunning: activeBgCount() > 0,
-							},
-						);
-						if (toolConstraint) {
-							const reason =
-								`Blocked by steering rule ${toolConstraint.rule.id}: ` +
-								`${toolConstraint.rule.message ?? 'constraint'}`;
-							appendInfo(
-								formatInnerDaemonRow(toolConstraint.rule.id, 'block', {
-									intent: toolConstraint.intent,
-									model: activeEndpoint().model,
-									budgetTurns: round,
-									totalBudget: TOOL_LOOP_BUDGET,
-									backgroundTasksRunning: activeBgCount() > 0,
-								}),
-							);
-							toolResults.push({tool_call_id: call.id, content: reason});
-							toolMessages.push({
-								role: 'tool',
-								content: reason,
-								tool_call_id: call.id,
-							});
-							setMessages(prev =>
-								prev.map(message =>
-									message.toolId === call.id
-										? {
-												...message,
-												running: false,
-												tool: {...message.tool!, output: reason},
-											}
-										: message,
-								),
-							);
-							continue;
-						}
-						// D7/D3: profile/plan availability.
-						const availability = toolAvailability(
-							call.name,
-							toolProfile(),
-							mode(),
-							activeEndpoint().model,
-						);
-						if (!availability.available) {
-							const reason = `Tool ${displayToolName(call.name)} ${availability.reason}.`;
-							toolResults.push({tool_call_id: call.id, content: reason});
-							toolMessages.push({
-								role: 'tool',
-								content: reason,
-								tool_call_id: call.id,
-							});
-							setMessages(prev =>
-								prev.map(message =>
-									message.toolId === call.id
-										? {
-												...message,
-												running: false,
-												tool: {...message.tool!, output: reason},
-											}
-										: message,
-								),
-							);
-							continue;
-						}
-						// B16: approval gating.
-						const preprocessedArgs = !isReadOnlyTool(call.name)
-							? await preprocessToolInput(
-									call,
-									hookContextId,
-									turnHookSessionId,
-								)
-							: undefined;
-						assertDispatchCurrent(call.id);
-						const approvalCall = preprocessedArgs
-							? {...call, arguments: preprocessedArgs}
-							: call;
-						if (
-							!allReadOnly &&
-							canDeliverPendingPrompts() &&
-							steeringInbox().length > 0
-						) {
-							setMessages(previous =>
-								previous.filter(message => message.toolId !== call.id),
-							);
-							break callLoop;
-						}
-						if (
-							requiresCallApproval(
-								approvalCall,
-								mode(),
-								activeEndpoint().alwaysAllow ?? [],
-								workspaceCwd(),
-								workspaceRoot,
-							)
-						) {
-							const approved = await approvalGate(
-								displayToolName(call.name),
-								detail,
-								() => assertDispatchCurrent(call.id),
-								controller.signal,
-							);
-							assertDispatchCurrent(call.id);
-							reportHerdrAgent('working', {
-								message: completionSummary || 'Working',
-								sessionId: sessionId(),
-							});
-							if (!approved) {
-								declined = true; // decline cancels the REST
-								const declinedContent = 'Declined by user.';
-								toolResults.push({
-									tool_call_id: call.id,
-									content: declinedContent,
-								});
-								toolMessages.push({
-									role: 'tool',
-									content: declinedContent,
-									tool_call_id: call.id,
-								});
-								setMessages(prev =>
-									prev.map(message =>
-										message.toolId === call.id
-											? {
-													...message,
-													running: false,
-													tool: {...message.tool!, output: declinedContent},
-												}
-											: message,
-									),
-								);
-								continue;
-							}
-						}
-						if (
-							!allReadOnly &&
-							canDeliverPendingPrompts() &&
-							steeringInbox().length > 0
-						) {
-							setMessages(previous =>
-								previous.filter(message => message.toolId !== call.id),
-							);
-							break callLoop;
-						}
-						assertDispatchCurrent(call.id);
-						const toolResult =
-							parallelResults?.[index] ??
-							(await executeTool(call, {
-								sessionId: sessionId(),
-								hookContextId,
-								hookSessionId: turnHookSessionId,
-								workGraphId,
-								onProgress: content =>
-									setLiveOutputs(prev => ({...prev, [call.id]: content})),
-								signal: controller.signal,
-								cwd: workspaceCwd(),
-								workspaceRoot,
-								askUser,
-								onStateChange: agentProgressPersistence.flush,
-								onAgentProgress: agentProgressPersistence.schedule,
-								onDetachedWork: (kind, id) => {
-									if (kind === 'bash' && goalOwner)
-										backgroundGoalGraphs.set(id, workGraphId);
-									releaseForegroundForDetachedWork();
-								},
-								onDetachedComplete: queueDetachedCompletion,
-								backgroundOwner: autonomousTurn
-									? 'goal'
-									: loopTurn
-										? 'loop'
-										: 'user',
-								...(preprocessedArgs ? {preprocessedArgs} : {}),
-								onCwdChange: next => {
-									updateWorkspaceCwd(next);
-									persist();
-								},
-							}));
-						if (call.arguments._malformed) {
-							// B7: malformed arguments → corrective nudge so the model
-							// retries with valid JSON (self-correction loop).
-							appendInfo(
-								`Auto-recovered malformed tool call: ${call.name}, retrying with valid arguments.`,
-							);
-							toolMessages.push({
-								role: 'user',
-								content:
-									`Your tool call to ${call.name} had invalid JSON arguments ` +
-									`(${call.rawArguments}). Please retry with valid JSON.`,
-							});
-						}
-						toolResults.push(toolResult);
-						if (
-							['write_tasks', 'task_update', 'task_create'].includes(
-								resolveToolName(call.name),
-							) &&
-							!toolResult.content.startsWith('Error:')
-						) {
-							taskToolRanAfterCloseoutDraft = true;
-							checklistTouchedThisTurn = true;
-						}
-						toolMessages.push({
-							role: 'tool',
-							content: toolResult.content,
-							tool_call_id: toolResult.tool_call_id,
-						});
-						// Fast tools settle before the next paint: an MCP stdio
-						// round trip can be ~1ms while the renderer frames at
-						// ~16ms, so without a floor the row appears already
-						// green with output and the grey running glyph is never
-						// seen. Hold the RUNNING state until the floor elapses
-						// (parity: the startup loader's MIN_LOAD_MS floor).
-						const executedAt = Date.now();
-						const runningRemaining = toolRunningRemainingMs(
-							callStartedAt,
-							executedAt,
-						);
-						if (runningRemaining > 0) {
-							await new Promise(resolve =>
-								setTimeout(resolve, runningRemaining),
-							);
-						}
-						setMessages(prev =>
-							prev.map(message =>
-								message.toolId === call.id
-									? {
-											...message,
-											running: false,
-											tool: {
-												...message.tool!,
-												output: toolResult.content,
-												args: toolResult.displayArgs ?? message.tool!.args,
-											},
-											toolStats: {
-												durationSec: Math.max(
-													0,
-													(executedAt - callStartedAt) / 1000,
-												),
-												toolCalls: calls.length,
-											},
-										}
-									: message,
-							),
-						);
-						setLiveOutputs(prev => {
-							const next = {...prev};
-							delete next[call.id];
-							return next;
-						});
-						if (detachedWorkStarted) {
-							// Completion notification resumes work with exact output. End this
-							// turn now instead of polling or holding foreground ownership.
-							break callLoop;
-						}
-					}
-
-					// Detached work ends the current turn immediately. A model batch can
-					// contain more calls after that detached call, but those calls were
-					// never executed and therefore have no tool result. Persisting the
-					// original full declaration creates an invalid provider history:
-					// `tool_calls` contains orphaned calls, which breaks resume with
-					// "No tool output found". Keep only declarations with results.
-					const completedCalls = commitCompletedTools();
-					refreshContextPercent();
-					if (shouldReleaseDetachedAgentBatch(completedCalls, toolResults)) {
-						releaseForegroundForDetachedWork();
-					}
-					if (detachedWorkStarted) {
-						// Finally clears busy while detached process keeps running.
-						break turnLoop;
-					}
-					// Codex true mid-turn continuation: compact after tool output,
-					// replace local history, then sample again in this SAME loop.
-					if (shouldAutoCompactHistory(history)) {
-						history = await compactTurnContext(history);
-					}
-					// B4: cap the provider context to the newest N messages.
-					history = capMessages(history, maxMessages());
-					// B21: auto-diagnostics after a tool turn, run the LSP
-					// diagnostics tool and inject the summary before recursion.
-					// ONLY when there are FINDINGS: a clean "no issues" pass must
-					// not spam the chat with a useless row or waste provider
-					// tokens (parity: the original only surfaces findings).
-					try {
-						const diagnostics = await executeTool(
-							{
-								id: 'call_diag',
-								name: 'lsp_get_diagnostics',
-								arguments: {},
-								rawArguments: '{}',
-							},
-							{},
-						);
-						const issues = /(\d+)\s+(?:issue|error|problem)s?/i.exec(
-							diagnostics.content,
-						);
-						const count = issues ? Number(issues[1]) : 0;
-						setDiagnosticsCount(count);
-						if (count > 0) {
-							appendInfo(firstLine(diagnostics.content, 120));
-							history = [
-								...history,
-								{
-									role: 'user',
-									content: `<diagnostics-summary>\n${diagnostics.content}\n</diagnostics-summary>`,
-								},
-							];
-						}
-					} catch {
-						// diagnostics are best-effort; never block the loop
-					}
-					setStreaming('');
-					setReasoning('');
-					thinkingStartedAt = 0;
-					recordTurnUsage(result.usage);
+					if (!(await executeToolTurn(result, round))) break turnLoop;
 				}
 				// Session-management parity: the persisted context MUST mirror
 				// the final provider history (including every tool round). The
@@ -5013,6 +5347,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				appendError(error instanceof Error ? error.message : String(error));
 			} finally {
 				clearInterval(turnTimer);
+				if (nativeSteeringDelivery === nativeDelivery)
+					nativeSteeringDelivery = undefined;
 				if (watchdogTimer) clearTimeout(watchdogTimer);
 				if (
 					generation !== sessionGeneration ||
@@ -5485,6 +5821,18 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	};
 
 	const retryLast = () => {
+		if (recoverNativeDirection(true)) return;
+		if (
+			steeringInbox().some(
+				item => item.nativeOwnership && item.nativeOwnership !== 'failed',
+			)
+		) {
+			steeringPaused = true;
+			showToast(
+				'Native input ownership is uncertain. Retry is disabled until that retained direction is reconciled.',
+			);
+			return;
+		}
 		if (busy()) {
 			appendInfo('Cannot retry while a turn is running.');
 			return;
@@ -5506,6 +5854,13 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			}
 			steeringEpoch++;
 			steeringPaused = false;
+			setSteeringInbox(previous =>
+				previous.map(item =>
+					item.nativeOwnership === 'failed'
+						? {...item, nativeOwnership: undefined}
+						: item,
+				),
+			);
 			if (!steeringInbox().some(item => item.id === snapshot.steeringId)) {
 				setSteeringInbox(previous => [
 					{

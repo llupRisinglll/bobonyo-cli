@@ -190,8 +190,12 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		expect(provider).toBeGreaterThan(drain);
 		const toolLoop = app.slice(
 			app.indexOf('callLoop:'),
-			app.indexOf('history = [...history, assistantToolMsg, ...toolMessages]'),
+			app.indexOf(
+				'const completedCalls = commitCompletedTools()',
+				app.indexOf('callLoop:'),
+			),
 		);
+		expect(toolLoop).toContain('executeTool(call,');
 		expect(toolLoop).not.toContain('deliverPendingPrompts');
 		const delivery = app.slice(
 			app.indexOf('const deliverPendingPrompts'),

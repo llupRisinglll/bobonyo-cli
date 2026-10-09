@@ -7,6 +7,12 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {
+	ResponsesWebSocketError,
+	streamResponsesWebSocket,
+	supportsResponsesSteering,
+	type ResponsesWebSocketOptions,
+} from './responses-websocket';
+import {
 	activeEndpoint,
 	cavemanMode,
 	sessionId,
@@ -570,6 +576,8 @@ export interface TurnResult {
 }
 
 export interface StreamHandlers {
+	/** Explicit native steering opt-in; unsupported requests retain SSE. */
+	responsesWebSocket?: ResponsesWebSocketOptions;
 	onText: (delta: string) => void;
 	onReasoning: (delta: string) => void;
 	/** Provider entered a reasoning block before first readable summary delta. */
@@ -808,6 +816,7 @@ export async function streamChat(
 			}
 			return result;
 		} catch (error) {
+			if (error instanceof ResponsesWebSocketError) throw error;
 			if (error instanceof Error && error.name === 'AbortError') throw error;
 			if (error instanceof NetworkInterruptedError && error.partial)
 				throw error;
@@ -1698,6 +1707,31 @@ async function responsesStreamOnce(
 	const url = endpoint.codexAccount
 		? `${base}/responses`
 		: `${base}/v1/responses`;
+	const websocket = handlers.responsesWebSocket;
+	if (
+		websocket?.enabled &&
+		supportsResponsesSteering({...endpoint, model: String(body.model)}) &&
+		!body.conversation &&
+		!body.context_management &&
+		!body.agents &&
+		!body.background &&
+		(!(body.tools as unknown[] | undefined)?.length ||
+			websocket.onRequiredInput)
+	) {
+		return streamResponsesWebSocket(
+			'wss://api.openai.com/v1/responses',
+			bearer ? {authorization: `Bearer ${bearer}`} : {},
+			body,
+			handlers,
+			websocket,
+			signal,
+			{
+				maxOutputChars: streamGuard?.maxOutputChars ?? MAX_STREAM_OUTPUT_CHARS,
+				maxDurationMs: streamGuard?.maxDurationMs ?? MAX_STREAM_DURATION_MS,
+				stallTimeoutMs: streamGuard?.stallTimeoutMs ?? 60_000,
+			},
+		);
+	}
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: {

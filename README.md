@@ -311,6 +311,29 @@ the fallback model does that part, and the chat tells you who did what:
 ✦ WebSearch fallback: deepseek-v4-flash searched → mimo-v2.5-pro responds
 ```
 
+### Live direction while working
+
+Send another message while BoboNyo is working to steer the current task.
+For ordinary providers, directions enter the next safe model request after
+dispatched tools finish; they do not interrupt an in-flight model response.
+
+Experimental mid-response steering is opt-in:
+
+```bash
+BOBONYO_NATIVE_STEERING=1 bobonyo
+```
+
+This uses Responses WebSockets only for GPT-6 models on the official OpenAI
+Responses API with API-key authentication. Other models, compatible endpoints,
+and ChatGPT/Codex account connections retain safe-boundary delivery. Transport
+tests use simulated sockets; authenticated live-provider validation is still
+outstanding. Provider-managed approval continuations are not integrated.
+
+Acceptance is not proof that the model acted on a direction. BoboNyo tracks
+delivery ownership and retains uncertain directions after disconnects rather
+than automatically replaying them. Already dispatched tools are allowed to
+settle before a new turn can start.
+
 ## Privacy
 
 Config and sessions stay in `~/.config/bobonyo` and

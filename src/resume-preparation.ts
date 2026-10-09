@@ -26,7 +26,9 @@ export function prepareResume(session: SessionData, maxMessages: number) {
 			: healResumedContext(
 					session.context,
 					session.messages.filter(
-						message => message.steeringStatus !== 'accepted',
+						message =>
+							message.steeringStatus !== 'accepted' &&
+							message.steeringStatus !== 'discarded',
 					),
 					maxMessages,
 				),

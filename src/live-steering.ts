@@ -1,5 +1,7 @@
 /** Accepted user input is durable independently of autonomous scheduling. */
 export interface SteeringMessage {
+	/** Connection-local ownership must be reconciled before any replay. */
+	nativeOwnership?: 'sent' | 'accepted' | 'uncertain' | 'failed';
 	id: string;
 	value: string;
 	attachments?: Record<string, string>;
