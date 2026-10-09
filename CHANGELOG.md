@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.7.0 (2026-10-09)
+
+### Minor
+- Add opt-in real-time GPT-6 steering with durable delivery tracking and safe tool completion recovery.
 ## v0.6.0 (2026-10-09)
 
 ### Minor
