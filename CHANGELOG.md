@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.6.0 (2026-10-09)
+
+### Minor
+- Harden live steering against stale tool dispatch, track input consumption across retries and resume, and safely deliver legacy worker results without borrowing foreground context.
 ## v0.5.0 (2026-10-08)
 
 ### Minor
