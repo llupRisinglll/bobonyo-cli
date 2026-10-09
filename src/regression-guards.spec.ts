@@ -228,7 +228,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 			'Continue launching every agent requested in this batch',
 		);
 		const historyAppend = app.indexOf(
-			'history = [...history, assistantToolMsg, ...toolMessages]',
+			'? [...history, assistantToolMsg, ...toolMessages]',
 		);
 		const detachedRelease = app.indexOf(
 			'shouldReleaseDetachedAgentBatch(completedCalls, toolResults)',
@@ -1262,7 +1262,7 @@ describe('regression guards (foolproof live rows + hover)', () => {
 		const app = read('./app.tsx');
 		const toolTurn = app.slice(
 			app.indexOf('const briefText = result.text.trim()'),
-			app.indexOf('const assistantToolMsg: ChatMessageLike'),
+			app.indexOf('const completedCalls = commitCompletedTools()'),
 		);
 		expect(toolTurn).toMatch(/result\.text\.trim\(\)/);
 		expect(toolTurn).toContain(
@@ -1317,9 +1317,17 @@ describe('regression guards (foolproof live rows + hover)', () => {
 	});
 	test('detached partial batches never persist orphan tool calls', () => {
 		const app = read('./app.tsx');
-		expect(app).toMatch(/const completedCallCount = toolMessages\.filter\(/);
+		expect(app).toContain('const completedIds = new Set(');
 		expect(app).toMatch(
-			/const completedCalls = calls\.slice\(0, completedCallCount\)/,
+			/calls\.filter\(\s*call =>\s*completedIds\.has\(call\.id\),?\s*\)/,
+		);
+		const cancellation = app.slice(
+			app.indexOf('const assertDispatchCurrent'),
+			app.indexOf('callLoop:'),
+		);
+		expect(cancellation.indexOf('commitCompletedTools()')).toBeGreaterThan(-1);
+		expect(cancellation.indexOf('throw new DOMException')).toBeGreaterThan(
+			cancellation.indexOf('commitCompletedTools()'),
 		);
 		expect(app).toMatch(/tool_calls: completedCalls\.map/);
 	});

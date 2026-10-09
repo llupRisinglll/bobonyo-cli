@@ -3,7 +3,11 @@ import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {ChatMessageLike} from './client';
-import {GraphContextStore} from './graph-context';
+import {
+	assertGraphToolExecution,
+	graphToolCatalog,
+	GraphContextStore,
+} from './graph-context';
 import type {SessionTask} from './state';
 import {
 	forkSession,
@@ -20,6 +24,73 @@ const history = (content: string): ChatMessageLike[] => [
 const checklist = (title: string): SessionTask[] => [
 	{id: 'task', title, status: 'in_progress', dependsOn: ['prerequisite']},
 ];
+test('evidence-only recovery exposes no tools and rejects hallucinated calls before execution or checklist mutation', () => {
+	const store = new GraphContextStore();
+	store.begin(
+		'foreground',
+		history('private foreground'),
+		false,
+		checklist('foreground'),
+	);
+	const lease = store.begin(
+		'missing',
+		history('private foreground'),
+		true,
+		checklist('foreground'),
+	);
+	const before = store.snapshot();
+	let executed = 0;
+	const dispatch = (calls: unknown[], text = false) => {
+		assertGraphToolExecution(lease, calls, text);
+		executed++;
+		lease.checklist.push(...checklist('hallucinated checklist'));
+		store.commitChecklist(lease, lease.checklist);
+	};
+	expect(
+		graphToolCatalog(lease, ['execute_bash', 'write_tasks', 'mcp_tool']),
+	).toEqual([]);
+	for (const name of [
+		'execute_bash',
+		'write_tasks',
+		'task_update',
+		'task_create',
+		'multi_tool_use.parallel',
+		'mcp_tool',
+	]) {
+		expect(() => dispatch([{name, arguments: {}}])).toThrow(
+			'no tools were executed',
+		);
+	}
+	expect(() => dispatch([], true)).toThrow('no tools were executed');
+	expect(executed).toBe(0);
+	expect(lease.history).toEqual([]);
+	expect(lease.checklist).toEqual([]);
+	expect(store.commitChecklist(lease, checklist('forbidden mutation'))).toBe(
+		false,
+	);
+	expect(store.snapshot()).toEqual(before);
+	expect(() => assertGraphToolExecution(lease, [])).not.toThrow();
+	const normal = store.begin('foreground', [], true);
+	expect(graphToolCatalog(normal, ['write_tasks'])).toEqual(['write_tasks']);
+	expect(() =>
+		assertGraphToolExecution(normal, [{name: 'write_tasks'}], true),
+	).not.toThrow();
+	const app = readFileSync(new URL('./app.tsx', import.meta.url), 'utf8');
+	const boundary = app.indexOf(
+		'result.toolCalls,',
+		app.indexOf(
+			'assertGraphToolExecution',
+			app.indexOf('result = await streamChat'),
+		),
+	);
+	expect(boundary).toBeGreaterThan(0);
+	expect(boundary).toBeLessThan(
+		app.indexOf('const parsed = parseToolCalls(result.text)', boundary),
+	);
+	expect(boundary).toBeLessThan(app.indexOf('executeTool(call,', boundary));
+	expect(app).toMatch(/graphToolCatalog\(\s*contextLease,/);
+	expect(app).toContain('disableTools: contextLease.evidenceOnly === true');
+});
 test('revision ownership lookup never clones stored histories', () => {
 	const store = new GraphContextStore();
 	const lease = store.begin('owner', history('large history'));
@@ -241,9 +312,13 @@ describe('graph-owned provider context', () => {
 		expect(store.begin('A', [], true).history).toEqual(history('A'));
 	});
 
-	test('legacy completion without graph snapshot falls back to supplied context', () => {
+	test('legacy completion creates an evidence-only owner without borrowing supplied context', () => {
 		const store = new GraphContextStore();
-		expect(store.begin('A', history('B'), true).history).toEqual(history('B'));
+		expect(store.begin('A', history('B'), true).history).toEqual([]);
+		expect(store.snapshot().latestGraphId).toBeUndefined();
+		expect(store.completionScopeGuidance('A')).toContain(
+			'original provider context is unavailable',
+		);
 		expect(() => store.begin(undefined, history('B'), true)).toThrow(
 			'no work graph owner',
 		);
@@ -251,6 +326,51 @@ describe('graph-owned provider context', () => {
 		expect(
 			store.begin('new-user-work', history('legacy conversation')).history,
 		).toEqual(history('legacy conversation'));
+	});
+
+	test('missing older owner recovers after continue without adopting or selecting foreground context', () => {
+		const store = new GraphContextStore();
+		store.begin(
+			'continue',
+			history('unrelated foreground secret'),
+			false,
+			checklist('foreground'),
+		);
+		const before = store.snapshot().graphs.continue;
+		const owner = store.begin(
+			'missing-legacy-owner',
+			history('unrelated foreground secret'),
+			true,
+			checklist('foreground'),
+		);
+		expect(owner.history).toEqual([]);
+		expect(owner.checklist).toEqual([]);
+		expect(store.commit(owner, history('own completion evidence'))).toBe(false);
+		expect(store.snapshot().latestGraphId).toBe('continue');
+		expect(store.snapshot().graphs.continue).toEqual(before);
+		const resumed = new GraphContextStore(store.snapshot());
+		expect(
+			resumed.begin(
+				'missing-legacy-owner',
+				history('unrelated foreground secret'),
+				true,
+			).history,
+		).toEqual(history('own completion evidence'));
+		expect(resumed.completionScopeGuidance('missing-legacy-owner')).toContain(
+			'Do not execute tools',
+		);
+		expect(resumed.completionScopeGuidance('continue')).toBe('');
+		expect(resumed.latestChecklist()).toEqual(checklist('foreground'));
+	});
+
+	test('an explicit foreground turn replaces evidence-only mode while retaining its own evidence', () => {
+		const store = new GraphContextStore();
+		const completion = store.begin('legacy', history('foreign'), true);
+		store.commit(completion, history('own evidence'));
+		const resumed = store.begin('legacy', history('foreign'));
+		expect(resumed.evidenceOnly).toBeUndefined();
+		expect(resumed.history).toEqual(history('own evidence'));
+		expect(store.completionScopeGuidance('legacy')).toBe('');
 	});
 
 	test('session roundtrip and fork preserve independent owners; legacy remains unowned', () => {
@@ -308,7 +428,7 @@ describe('graph-owned provider context', () => {
 					legacy.context,
 					true,
 				).history,
-			).toEqual(legacy.context);
+			).toEqual([]);
 		} finally {
 			if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
 			else process.env.BOBONYO_DATA_DIR = previous;

@@ -17,7 +17,7 @@ describe('goal accounting ownership wiring', () => {
 	test('terminal status and elapsed time require matching revision', () => {
 		expect(
 			app.match(
-				/if \(currentGoal && goalMatchesOwner\(currentGoal, goalOwner\)\)/g,
+				/if\s*\(\s*(?:!contextLease\.evidenceOnly\s*&&\s*)?currentGoal\s*&&\s*goalMatchesOwner\(currentGoal, goalOwner\)\s*\)/g,
 			),
 		).toHaveLength(2);
 		expect(app).toContain('refreshGoalProgress(goalOwner, visibleReply)');

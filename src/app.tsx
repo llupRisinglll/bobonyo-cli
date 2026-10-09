@@ -11,7 +11,12 @@ import {
 	restoredGptFast,
 	supportsGptFast,
 } from './gpt-controls';
-import {GraphContextStore, type GraphContextLease} from './graph-context';
+import {
+	assertGraphToolExecution,
+	graphToolCatalog,
+	GraphContextStore,
+	type GraphContextLease,
+} from './graph-context';
 import {useKeyboard, useRenderer, useTerminalDimensions} from '@opentui/solid';
 import {createTextAttributes} from '@opentui/core';
 import {
@@ -1442,7 +1447,16 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				setUsageHistory(restoredUsage);
 				setLastUsage(restoredUsage.at(-1));
 				currentSession = {...resumed};
-				setSteeringInbox(resumed.steeringInbox ?? []);
+				setSteeringInbox(
+					(resumed.steeringInbox ?? []).map(item => ({
+						...item,
+						owner: {
+							sessionId: resumed.id,
+							generation: sessionGeneration,
+							turnId: 0,
+						},
+					})),
+				);
 				setCurrentGoal(resumed.goal);
 				loopJobsRef = [...(resumed.loopJobs ?? [])];
 				const restoredTaskMessage = prepared.taskMessage;
@@ -2492,24 +2506,34 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	const approvalGate = async (
 		name: string,
 		detail: string,
+		assertCurrent?: () => void,
+		signal?: AbortSignal,
 	): Promise<boolean> => {
 		const hook = await runHooks({
 			event: 'PermissionRequest',
 			toolName: name,
 			toolInput: {detail},
 		});
+		assertCurrent?.();
 		if (hook.denied) return false;
 		return new Promise(resolve => {
+			const settle = (approved: boolean) => {
+				signal?.removeEventListener('abort', cancel);
+				if (pendingApproval()?.resolve === settle) setPendingApproval(null);
+				resolve(approved);
+			};
+			const cancel = () => settle(false);
+			signal?.addEventListener('abort', cancel, {once: true});
 			reportHerdrAgent('blocked', {
 				message: `${name}: approval required`,
 				sessionId: sessionId(),
 			});
 			// B16: non-interactive stdin (piped/CI) auto-DECLINES mutations.
 			if (process.env.NANOCODER_NONINTERACTIVE) {
-				resolve(false);
+				settle(false);
 				return;
 			}
-			setPendingApproval({name, detail, resolve});
+			setPendingApproval({name, detail, resolve: settle});
 		});
 	};
 
@@ -3284,7 +3308,16 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		}
 		setSteeringInbox(previous => [
 			...previous,
-			{id, value, attachments: snapshot},
+			{
+				id,
+				value,
+				attachments: snapshot,
+				owner: {
+					sessionId: sessionId(),
+					generation: sessionGeneration,
+					turnId: foregroundTurnOwner,
+				},
+			},
 		]);
 		appendMessage({
 			role: 'user',
@@ -3562,6 +3595,16 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			goalOwner?.graphId ??
 			`session:${sessionId()}:work:${crypto.randomUUID()}`;
 		foregroundTurnOwner = turnId;
+		// Explicit adoption transfers retained/late-final input, never another
+		// session's mailbox, into this foreground turn.
+		if (!(turnOverride?.task ?? taskTurnRef))
+			setSteeringInbox(previous =>
+				previous.map(item =>
+					!item.owner || item.owner.sessionId === sessionId()
+						? {...item, owner: {sessionId: sessionId(), generation, turnId}}
+						: item,
+				),
+			);
 		const autonomousTurn = turnOverride?.autonomous ?? autonomousTurnRef;
 		const turnGoal = autonomousTurn
 			? goalMatchesOwner(currentGoal, goalOwner)
@@ -3696,6 +3739,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			// keeps the clean user text.
 			const datedUserMsg = {
 				...userMsg,
+				...(acceptedSteeringId ? {steeringId: acceptedSteeringId} : {}),
 				content: `${userMsg.content}${currentDateFragment()}`,
 			};
 			if (!taskTurn) setInput('');
@@ -3748,6 +3792,9 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			let history: ChatMessageLike[] = reuseContext
 				? [...initialContext]
 				: [...initialContext, datedUserMsg];
+			// Context insertion is not consumption: only the next provider request
+			// can sample it. Keep this distinction visible in durable transcript state.
+			let samplingDirections = new Set<string>();
 			const appendSubscriptions = (value: string): void => {
 				// F4: subscribe blocks auto-trigger, a custom command whose
 				// `subscribe:` keywords match the prompt injects its body.
@@ -3828,7 +3875,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					aborted:
 						controller.signal.aborted ||
 						steeringPaused ||
-						generation !== sessionGeneration,
+						generation !== sessionGeneration ||
+						foregroundTurnOwner !== turnId,
 				});
 			const deliverPendingPrompts = async (): Promise<void> => {
 				const deliveryEpoch = steeringEpoch;
@@ -3836,6 +3884,13 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					steeringInbox(),
 					async item => {
 						if (!canDeliverPendingPrompts()) return false;
+						if (
+							item.owner &&
+							(item.owner.sessionId !== sessionId() ||
+								item.owner.generation !== generation ||
+								item.owner.turnId !== turnId)
+						)
+							return false;
 						const prompt = await prepareUserPrompt(
 							item.value,
 							item.attachments,
@@ -3857,6 +3912,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 							...history,
 							{
 								role: 'user',
+								steeringId: item.id,
 								content:
 									scrubberRef.scrub(prompt) +
 									imageSourceContext(item.value, item.attachments ?? {}) +
@@ -3930,7 +3986,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 							},
 						];
 					}
-					// The previous complete tool batch is in history; never drain inside callLoop.
+					// Only sample with complete tool-result pairs, never halfway through a batch.
 					if (canDeliverPendingPrompts()) await deliverPendingPrompts();
 					controller.signal.throwIfAborted();
 					// Settled `⚙ Thought (Ns)` reports the THINKING phase length
@@ -3947,6 +4003,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						thinkingStartedAt = Date.now();
 					};
 					try {
+						samplingDirections = new Set(
+							history.flatMap(message =>
+								message.steeringId ? [message.steeringId] : [],
+							),
+						);
 						result = await streamChat(
 							history,
 							{
@@ -3960,11 +4021,16 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 									setReasoning(prev => prev + delta);
 								},
 								onReasoningStart: beginThinkingPhase,
-								onWebSearch: action =>
-									appendMessage(webSearchActivityMessage(action)),
+								onWebSearch: action => {
+									assertGraphToolExecution(contextLease, [action]);
+									appendMessage(webSearchActivityMessage(action));
+								},
 							},
 							controller.signal,
-							toolCatalogForModel(activeEndpoint().model),
+							graphToolCatalog(
+								contextLease,
+								toolCatalogForModel(activeEndpoint().model),
+							),
 							streamGuardRef,
 							toolProfile(),
 							// The primary provider failed and a FALLBACK answered —
@@ -3981,7 +4047,23 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 									setCompletionTone('default');
 								}, 8000);
 							},
+							undefined,
+							{disableTools: contextLease.evidenceOnly === true},
 						);
+						if (
+							generation !== sessionGeneration ||
+							foregroundTurnOwner !== turnId
+						)
+							return;
+						setMessages(previous =>
+							previous.map(message =>
+								message.steeringId && samplingDirections.has(message.steeringId)
+									? {...message, steeringStatus: 'consumed'}
+									: message,
+							),
+						);
+						samplingDirections.clear();
+						persist();
 					} catch (error) {
 						if (isCompactOverflowError(error) && reactiveCompactRetries < 2) {
 							reactiveCompactRetries += 1;
@@ -4007,6 +4089,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						}
 						throw error;
 					}
+					assertGraphToolExecution(
+						contextLease,
+						result.toolCalls,
+						looksLikeToolCallText(result.text),
+					);
 					// The round's stream ended — if the model only reasoned and
 					// called tools, the tool phase is WORKING, not thinking.
 					setThinkingActive(false);
@@ -4139,7 +4226,11 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 							completionSummary =
 								result.text.replace(/\s+/g, ' ').trim().slice(0, 180) ||
 								completionSummary;
-							if (currentGoal && goalMatchesOwner(currentGoal, goalOwner)) {
+							if (
+								!contextLease.evidenceOnly &&
+								currentGoal &&
+								goalMatchesOwner(currentGoal, goalOwner)
+							) {
 								const status = goalStatusFromResponse(
 									result.text,
 									currentGoal.status,
@@ -4192,7 +4283,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 									completionPopupController.arm();
 								}
 							}
-							capturePRs(result.text);
+							if (!contextLease.evidenceOnly) capturePRs(result.text);
 							// Keep the LOCAL history (what the provider saw) in
 							// sync, the post-loop owner-scoped commit below is
 							// the source of truth for this graph's saved context,
@@ -4396,7 +4487,63 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 								),
 							)
 						: null;
+					// Cancellation can escape during the next call's hook or approval.
+					// Preserve settled effects before propagating it; pending calls never
+					// acquire declarations merely because the model proposed them.
+					const commitCompletedTools = (): MockToolCall[] => {
+						const completedIds = new Set(
+							toolMessages.flatMap(message =>
+								message.role === 'tool' && message.tool_call_id
+									? [message.tool_call_id]
+									: [],
+							),
+						);
+						const completedCalls = calls.filter(call =>
+							completedIds.has(call.id),
+						);
+						if (!completedCalls.length) return completedCalls;
+						const assistantToolMsg: ChatMessageLike = {
+							role: 'assistant',
+							content: result.text,
+							tool_calls: completedCalls.map(call => ({
+								id: call.id,
+								name: call.name,
+								arguments: call.rawArguments,
+							})),
+						};
+						history = completedCalls.length
+							? [...history, assistantToolMsg, ...toolMessages]
+							: history;
+						if (commitTurnContext(history) && generation === sessionGeneration)
+							persist();
+						return completedCalls;
+					};
+					const assertDispatchCurrent = (callId: string): void => {
+						if (
+							!controller.signal.aborted &&
+							generation === sessionGeneration &&
+							foregroundTurnOwner === turnId
+						)
+							return;
+						setMessages(previous =>
+							previous.filter(message => message.toolId !== callId),
+						);
+						commitCompletedTools();
+						throw new DOMException(
+							'Turn no longer owns tool dispatch',
+							'AbortError',
+						);
+					};
 					callLoop: for (const [index, call] of calls.entries()) {
+						assertDispatchCurrent(call.id);
+						// A dispatched tool owns its execution through settlement. New direction
+						// invalidates only undispatched calls; resample after paired results commit.
+						if (
+							!allReadOnly &&
+							canDeliverPendingPrompts() &&
+							steeringInbox().length > 0
+						)
+							break callLoop;
 						// Render the row BEFORE execution so bash output streams live
 						// into the transcript tail (parity: streaming tool rows).
 						const detail = toolDisplayDetail(call);
@@ -4523,9 +4670,20 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 									turnHookSessionId,
 								)
 							: undefined;
+						assertDispatchCurrent(call.id);
 						const approvalCall = preprocessedArgs
 							? {...call, arguments: preprocessedArgs}
 							: call;
+						if (
+							!allReadOnly &&
+							canDeliverPendingPrompts() &&
+							steeringInbox().length > 0
+						) {
+							setMessages(previous =>
+								previous.filter(message => message.toolId !== call.id),
+							);
+							break callLoop;
+						}
 						if (
 							requiresCallApproval(
 								approvalCall,
@@ -4538,7 +4696,10 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 							const approved = await approvalGate(
 								displayToolName(call.name),
 								detail,
+								() => assertDispatchCurrent(call.id),
+								controller.signal,
 							);
+							assertDispatchCurrent(call.id);
 							reportHerdrAgent('working', {
 								message: completionSummary || 'Working',
 								sessionId: sessionId(),
@@ -4569,6 +4730,17 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 								continue;
 							}
 						}
+						if (
+							!allReadOnly &&
+							canDeliverPendingPrompts() &&
+							steeringInbox().length > 0
+						) {
+							setMessages(previous =>
+								previous.filter(message => message.toolId !== call.id),
+							);
+							break callLoop;
+						}
+						assertDispatchCurrent(call.id);
 						const toolResult =
 							parallelResults?.[index] ??
 							(await executeTool(call, {
@@ -4685,22 +4857,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					// original full declaration creates an invalid provider history:
 					// `tool_calls` contains orphaned calls, which breaks resume with
 					// "No tool output found". Keep only declarations with results.
-					const completedCallCount = toolMessages.filter(
-						message => message.role === 'tool',
-					).length;
-					const completedCalls = calls.slice(0, completedCallCount);
-					const assistantToolMsg: ChatMessageLike = {
-						role: 'assistant',
-						content: result.text,
-						tool_calls: completedCalls.map((call: MockToolCall) => ({
-							id: call.id,
-							name: call.name,
-							arguments: call.rawArguments,
-						})),
-					};
-					history = [...history, assistantToolMsg, ...toolMessages];
-					commitTurnContext(history);
-					persist();
+					const completedCalls = commitCompletedTools();
 					refreshContextPercent();
 					if (shouldReleaseDetachedAgentBatch(completedCalls, toolResults)) {
 						releaseForegroundForDetachedWork();
@@ -4783,6 +4940,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 					}
 				}
 			} catch (error) {
+				if (generation !== sessionGeneration || foregroundTurnOwner !== turnId)
+					return;
 				if (error instanceof Error && error.name === 'AbortError') {
 					completionInterrupted = true;
 					// ESC interrupt: commit the partial stream AND the turn's
@@ -4853,9 +5012,14 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				commitTurnContext(interruptedContext(history, partial));
 				appendError(error instanceof Error ? error.message : String(error));
 			} finally {
-				queryActiveRef = false;
 				clearInterval(turnTimer);
 				if (watchdogTimer) clearTimeout(watchdogTimer);
+				if (
+					generation !== sessionGeneration ||
+					(foregroundTurnOwner !== turnId && !detachedWorkStarted)
+				)
+					return;
+				queryActiveRef = false;
 				// SETTLE ANY STILL-RUNNING TOOL ROWS. A turn can end with a tool
 				// message still `running:true` — Esc interrupt / watchdog /
 				// provider error mid-tool (runBash keeps streaming output into

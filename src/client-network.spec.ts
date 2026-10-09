@@ -1,5 +1,11 @@
 import {afterEach, beforeEach, expect, test} from 'bun:test';
-import {streamChat, setFallbackEndpoints} from './client';
+import {
+	streamChat,
+	setFallbackEndpoints,
+	enforceDisabledTools,
+	responsesToolBlocks,
+} from './client';
+import {assertGraphToolExecution} from './graph-context';
 import {activeEndpoint, setActiveEndpoint, retryingAttempt} from './state';
 
 const socketError = () =>
@@ -38,6 +44,159 @@ const handlers = () => {
 		onReasoning: () => {},
 	};
 };
+test.each(['openai', 'responses', 'anthropic'])(
+	'tool-free recovery disables all tools on %s wire despite provider overrides',
+	async sdkProvider => {
+		setActiveEndpoint({
+			...activeEndpoint(),
+			sdkProvider,
+			providerOptions: {
+				tools: [{type: 'web_search'}],
+				tool_choice: 'required',
+				functions: [{name: 'write_tasks'}],
+				function_call: {name: 'write_tasks'},
+				parallel_tool_calls: true,
+			},
+		});
+		let body: Record<string, unknown> = {};
+		globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+			body = JSON.parse(String(init?.body));
+			return new Response(null, {status: 200});
+		}) as typeof fetch;
+		await streamChat(
+			[{role: 'user', content: 'own completion evidence'}],
+			handlers(),
+			undefined,
+			[{name: 'write_tasks'}],
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{disableTools: true},
+		);
+		expect(body.tools).toEqual([]);
+		expect(body.tool_choice).toEqual(
+			sdkProvider === 'anthropic' ? {type: 'none'} : 'none',
+		);
+		expect(body.functions).toBeUndefined();
+		expect(body.function_call).toBeUndefined();
+		expect(body.parallel_tool_calls).toBeUndefined();
+	},
+);
+test('tool-free recovery removes implicitly enabled Codex native search', () => {
+	const body: Record<string, unknown> = {tools: responsesToolBlocks([], true)};
+	expect(body.tools).toEqual([{type: 'web_search'}]);
+	enforceDisabledTools(body, {disableTools: true});
+	expect(body.tools).toEqual([]);
+	expect(body.tool_choice).toBe('none');
+});
+test('tool-free boundary survives provider fallback', async () => {
+	setFallbackEndpoints([
+		{
+			id: 'fallback',
+			baseUrl: 'http://127.0.0.1:2',
+			apiKey: 'test',
+			model: 'test',
+			sdkProvider: 'responses',
+			providerOptions: {tools: [{type: 'web_search'}]},
+		},
+	]);
+	const bodies: Record<string, unknown>[] = [];
+	globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+		bodies.push(JSON.parse(String(init?.body)));
+		return bodies.length === 1
+			? new Response('failed', {status: 400})
+			: new Response(null, {status: 200});
+	}) as unknown as typeof fetch;
+	await streamChat(
+		[{role: 'user', content: 'own evidence'}],
+		handlers(),
+		undefined,
+		[{name: 'write_tasks'}],
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{disableTools: true},
+	);
+	expect(bodies).toHaveLength(2);
+	for (const body of bodies) {
+		expect(body.tools).toEqual([]);
+		expect(body.tool_choice).toBe('none');
+	}
+});
+test('unsolicited native search events are rejected by the recovery handler', async () => {
+	setActiveEndpoint({...activeEndpoint(), sdkProvider: 'responses'});
+	const event = {
+		type: 'response.output_item.done',
+		item: {type: 'web_search_call', action: {query: 'unauthorized'}},
+	};
+	globalThis.fetch = (async () =>
+		new Response(
+			`data: ${JSON.stringify(event)}\n\n`,
+		)) as unknown as typeof fetch;
+	let presented = false;
+	await expect(
+		streamChat(
+			[{role: 'user', content: 'own evidence'}],
+			{
+				...handlers(),
+				onWebSearch: action => {
+					assertGraphToolExecution({evidenceOnly: true}, [action]);
+					presented = true;
+				},
+			},
+			undefined,
+			[],
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{disableTools: true},
+		),
+	).rejects.toThrow('no tools were executed');
+	expect(presented).toBe(false);
+});
+test('a provider ignoring the empty catalog cannot execute its hallucinated checklist call', async () => {
+	const event = {
+		choices: [
+			{
+				delta: {
+					tool_calls: [
+						{
+							index: 0,
+							id: 'bad',
+							function: {name: 'write_tasks', arguments: '{}'},
+						},
+					],
+				},
+				finish_reason: 'tool_calls',
+			},
+		],
+	};
+	globalThis.fetch = (async () =>
+		new Response(
+			`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`,
+		)) as unknown as typeof fetch;
+	const result = await streamChat(
+		[{role: 'user', content: 'own evidence'}],
+		handlers(),
+		undefined,
+		[],
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{disableTools: true},
+	);
+	expect(result.toolCalls).toHaveLength(1);
+	let executed = false;
+	expect(() => {
+		assertGraphToolExecution({evidenceOnly: true}, result.toolCalls);
+		executed = true;
+	}).toThrow('no tools were executed');
+	expect(executed).toBe(false);
+});
 
 test.each(['code', 'message-only'] as const)(
 	'socket close (%s) before output retries the same request and delivers output once',

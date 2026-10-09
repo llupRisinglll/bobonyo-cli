@@ -8,7 +8,7 @@ import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 export interface ChatMessage {
 	/** Durable acceptance identity; context means inserted into model history, not a provider receipt. */
 	steeringId?: string;
-	steeringStatus?: 'accepted' | 'context';
+	steeringStatus?: 'accepted' | 'context' | 'consumed';
 	role: 'user' | 'assistant' | 'tool';
 	content: string;
 	/** User-submitted built-in command: visible/persisted, never provider context. */

@@ -271,6 +271,20 @@ export function currentDateFragment(date = new Date()): string {
  */
 export interface SystemPromptOptions {
 	disableCaveman?: boolean;
+	/** Hard per-request boundary, including native tools and provider overrides. */
+	disableTools?: boolean;
+}
+
+export function enforceDisabledTools(
+	body: Record<string, unknown>,
+	options?: SystemPromptOptions,
+): void {
+	if (!options?.disableTools) return;
+	body.tools = [];
+	delete body.functions;
+	delete body.function_call;
+	delete body.parallel_tool_calls;
+	body.tool_choice = 'none';
 }
 
 export function buildSystemPrompt(
@@ -338,6 +352,8 @@ function isStreamStallMessage(message: string): boolean {
 export interface ChatMessageLike {
 	role: string;
 	content: string;
+	/** Local sampling identity; serializers intentionally omit this wire metadata. */
+	steeringId?: string;
 	/** Local image paths serialized as native provider image blocks. */
 	images?: string[];
 	tool_call_id?: string;
@@ -693,6 +709,7 @@ export function buildOpenAIRequestBody(
 	if (endpoint.providerOptions) {
 		Object.assign(body, endpoint.providerOptions);
 	}
+	enforceDisabledTools(body, options);
 	validateGptEffort(endpoint);
 	const tier = fastServiceTier(endpoint);
 	if (tier) body.service_tier = tier;
@@ -756,6 +773,7 @@ export async function streamChat(
 	options?: SystemPromptOptions,
 ): Promise<TurnResult> {
 	const active = activeEndpoint();
+	if (options?.disableTools) tools = [];
 	const isolated =
 		typeof subagentOverride === 'string'
 			? subagentOverride !== active.model
@@ -1350,7 +1368,11 @@ async function anthropicStreamOnce(
 			...(endpoint.effort
 				? {thinking: {type: 'enabled', budget_tokens: 4096}}
 				: {}),
-			...(toolBlocks.length > 0 ? {tools: toolBlocks} : {}),
+			...(options?.disableTools
+				? {tools: [], tool_choice: {type: 'none'}}
+				: toolBlocks.length > 0
+					? {tools: toolBlocks}
+					: {}),
 			messages: anthropicMessages,
 		}),
 		signal,
@@ -1657,6 +1679,7 @@ async function responsesStreamOnce(
 	if (endpoint.providerOptions) {
 		Object.assign(body, endpoint.providerOptions);
 	}
+	enforceDisabledTools(body, options);
 	const base = endpoint.baseUrl.replace(/\/+$/, '');
 	validateGptEffort(endpoint);
 	if (body.reasoning && typeof body.reasoning === 'object') {

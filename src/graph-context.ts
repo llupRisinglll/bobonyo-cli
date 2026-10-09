@@ -5,7 +5,13 @@ export interface GraphContextSnapshot {
 	latestGraphId?: string;
 	graphs: Record<
 		string,
-		{revision: number; history: ChatMessageLike[]; checklist?: SessionTask[]}
+		{
+			revision: number;
+			history: ChatMessageLike[];
+			checklist?: SessionTask[];
+			/** Missing legacy owners can report evidence, not resume execution. */
+			evidenceOnly?: boolean;
+		}
 	>;
 }
 
@@ -15,6 +21,27 @@ export interface GraphContextLease {
 	history: ChatMessageLike[];
 	checklist: SessionTask[];
 	publishLatest: boolean;
+	evidenceOnly?: boolean;
+}
+
+/** Fail closed before parsing, hooks, parallel execution, or checklist tools. */
+export function assertGraphToolExecution(
+	lease: Pick<GraphContextLease, 'evidenceOnly'>,
+	toolCalls: readonly unknown[],
+	toolShapedText = false,
+): void {
+	if (lease.evidenceOnly && (toolCalls.length > 0 || toolShapedText)) {
+		throw new Error(
+			'Evidence-only completion attempted tool use; no tools were executed. Original provider context is unavailable.',
+		);
+	}
+}
+
+export function graphToolCatalog<T>(
+	lease: Pick<GraphContextLease, 'evidenceOnly'>,
+	catalog: T[],
+): T[] {
+	return lease.evidenceOnly ? [] : catalog;
 }
 
 /** Provider histories are owned by explicit work graphs, not transcript order. */
@@ -30,13 +57,24 @@ export class GraphContextStore {
 	}
 	/** Inform old integrations of newer ownership without importing another task. */
 	completionScopeGuidance(graphId: string | undefined): string {
+		const recovery =
+			graphId &&
+			Object.hasOwn(this.state.graphs, graphId) &&
+			this.state.graphs[graphId]?.evidenceOnly
+				? '\n\n<completion_recovery>\nThe original provider context is unavailable. ' +
+					'This is an isolated evidence-only delivery for the named work graph, not a resumed assignment. ' +
+					'Summarize only the supplied completion evidence and disclose that the original context could not be recovered. ' +
+					'Do not execute tools, infer missing requirements, restart work, or claim the original assignment is complete. ' +
+					'Leave foreground requests and checklists untouched.\n</completion_recovery>'
+				: '';
 		if (
 			!graphId ||
 			!this.state.latestGraphId ||
 			graphId === this.state.latestGraphId
 		)
-			return '';
+			return recovery;
 		return (
+			recovery +
 			'\n\n<completion_scope>\nA newer user request owns the foreground. ' +
 			'This result belongs to an older work graph. Integrate only its evidence; ' +
 			'you must not cancel, narrow, or declare the newer request complete. ' +
@@ -76,7 +114,8 @@ export class GraphContextStore {
 	/** Checklist writes obey the same revision ownership as provider history. */
 	commitChecklist(lease: GraphContextLease, checklist: SessionTask[]): boolean {
 		const current = this.state.graphs[lease.graphId];
-		if (!current || current.revision !== lease.revision) return false;
+		if (!current || current.evidenceOnly || current.revision !== lease.revision)
+			return false;
 		current.checklist = structuredClone(checklist);
 		return true;
 	}
@@ -102,14 +141,13 @@ export class GraphContextStore {
 			? this.state.graphs[graphId]
 			: undefined;
 		const missingCompletionOwner = completion && !previous;
-		if (missingCompletionOwner && Object.keys(this.state.graphs).length > 0) {
-			throw new Error(
-				`Provider context unavailable for work graph ${graphId}; completion was not dispatched. Legacy sessions require an explicit new user turn.`,
-			);
-		}
+		const evidenceOnly =
+			completion && (missingCompletionOwner || previous?.evidenceOnly === true);
 		if (latestChecklist !== undefined)
 			this.captureLatestChecklist(latestChecklist);
-		const history = structuredClone(previous?.history ?? latest);
+		const history = structuredClone(
+			previous?.history ?? (completion ? [] : latest),
+		);
 		// Preserve genuinely unfinished work across follow-up turns, not a finished
 		// checklist from a previous request. Its historical graph retains the snapshot.
 		// Legacy background owners must never adopt another graph's checklist.
@@ -127,14 +165,21 @@ export class GraphContextStore {
 				revision,
 				history: structuredClone(history),
 				checklist: structuredClone(checklist),
+				...(evidenceOnly ? {evidenceOnly: true} : {}),
 			},
 			writable: true,
 			enumerable: true,
 			configurable: true,
 		});
-		if (!completion || missingCompletionOwner)
-			this.state.latestGraphId = graphId;
-		return {graphId, revision, history, checklist, publishLatest: !completion};
+		if (!completion) this.state.latestGraphId = graphId;
+		return {
+			graphId,
+			revision,
+			history,
+			checklist,
+			publishLatest: !completion,
+			...(evidenceOnly ? {evidenceOnly: true} : {}),
+		};
 	}
 
 	/** Reject stale revisions; background integrations never replace latest context. */

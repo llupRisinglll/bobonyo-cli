@@ -25,6 +25,7 @@ import {
 	context,
 	setPendingQueue,
 	setActiveAgentRuns,
+	pendingApproval,
 } from './state';
 
 const selected = process.env.BOBONYO_STEERING_TEST;
@@ -37,6 +38,8 @@ for (const scenario of [
 	'preparation switch',
 	'attachment',
 	'tool batch',
+	'tool steering boundary',
+	'model tool boundary',
 	'resume',
 	'finalization',
 	'hook rejection',
@@ -47,6 +50,13 @@ for (const scenario of [
 	'preparation retry',
 	'failed retry',
 	'tool retry',
+	'mutation escape',
+	'mutation switch',
+	'permission switch',
+	'failed continuation',
+	'failed resume continuation',
+	'completion mailbox ownership',
+	'completed mutation interrupted batch',
 ]) {
 	if (!selected) {
 		test(`isolated live steering: ${scenario}`, async () => {
@@ -72,6 +82,11 @@ for (const scenario of [
 		process.env.BOBONYO_DATA_DIR = directory;
 		process.env.NANOCODER_DATA_DIR = directory;
 		delete process.env.NANOCODER_RESUME;
+		const mutationPath = join(
+			process.cwd(),
+			'scratch',
+			`steering-mutation-${crypto.randomUUID()}.txt`,
+		);
 		let releaseHook!: () => void;
 		const heldHook = new Promise<void>(resolve => {
 			releaseHook = resolve;
@@ -79,6 +94,7 @@ for (const scenario of [
 		let hookEntered = false;
 		let hookCalls = 0;
 		let initialPromptHooks = 0;
+		let mutationHooks = 0;
 		const hookServer = Bun.serve({
 			port: 0,
 			async fetch(request) {
@@ -87,6 +103,26 @@ for (const scenario of [
 					hook_event_name: string;
 				};
 				hookCalls++;
+				if (
+					scenario === 'completed mutation interrupted batch' &&
+					payload.hook_event_name === 'PreToolUse'
+				) {
+					mutationHooks++;
+					if (mutationHooks === 2) {
+						hookEntered = true;
+						await heldHook;
+					}
+				}
+				if (
+					((scenario.startsWith('mutation') &&
+						payload.hook_event_name === 'PreToolUse') ||
+						(scenario === 'permission switch' &&
+							payload.hook_event_name === 'PermissionRequest')) &&
+					!hookEntered
+				) {
+					hookEntered = true;
+					await heldHook;
+				}
 				if (
 					payload.hook_event_name === 'UserPromptSubmit' &&
 					payload.prompt === 'initial request'
@@ -109,7 +145,9 @@ for (const scenario of [
 				}
 				if (
 					payload.hook_event_name === 'PreToolUse' &&
-					(scenario === 'tool batch' || scenario === 'tool retry') &&
+					(scenario === 'tool batch' ||
+						scenario === 'tool retry' ||
+						scenario === 'tool steering boundary') &&
 					!hookEntered
 				) {
 					hookEntered = true;
@@ -146,6 +184,9 @@ for (const scenario of [
 						{hooks: [{type: 'http', url: hookServer.url.toString()}]},
 					],
 					Stop: [{hooks: [{type: 'http', url: hookServer.url.toString()}]}],
+					PermissionRequest: [
+						{hooks: [{type: 'http', url: hookServer.url.toString()}]},
+					],
 				},
 			}),
 		);
@@ -161,7 +202,12 @@ for (const scenario of [
 				requests.push(await request.json());
 				if (requests.length === 1 && !scenario.startsWith('preparation'))
 					await held;
-				if (requests.length === 1 && scenario === 'failed retry') {
+				if (
+					requests.length === 1 &&
+					(scenario === 'failed retry' ||
+						scenario === 'failed continuation' ||
+						scenario === 'failed resume continuation')
+				) {
 					return new Response('controlled provider failure', {status: 403});
 				}
 				if (requests.length === 2 && scenario === 'tool retry') {
@@ -169,7 +215,58 @@ for (const scenario of [
 				}
 				if (
 					requests.length === 1 &&
-					(scenario === 'tool batch' || scenario === 'tool retry')
+					scenario === 'completed mutation interrupted batch'
+				) {
+					const tool_calls = [0, 1].map(index => ({
+						index,
+						id: `mutation_${index}`,
+						type: 'function',
+						function: {
+							name: 'write_file',
+							arguments: JSON.stringify({
+								path: mutationPath,
+								content: `mutation-${index}`,
+							}),
+						},
+					}));
+					return new Response(
+						'data: ' +
+							JSON.stringify({choices: [{delta: {tool_calls}}]}) +
+							'\n\ndata: [DONE]\n\n',
+						{headers: {'Content-Type': 'text/event-stream'}},
+					);
+				}
+				if (
+					requests.length === 1 &&
+					(scenario.startsWith('mutation') || scenario === 'permission switch')
+				) {
+					const tool_calls = [
+						{
+							index: 0,
+							id: 'held_mutation',
+							type: 'function',
+							function: {
+								name: 'write_file',
+								arguments: JSON.stringify({
+									path: mutationPath,
+									content: 'stale mutation',
+								}),
+							},
+						},
+					];
+					return new Response(
+						'data: ' +
+							JSON.stringify({choices: [{delta: {tool_calls}}]}) +
+							'\n\ndata: [DONE]\n\n',
+						{headers: {'Content-Type': 'text/event-stream'}},
+					);
+				}
+				if (
+					requests.length === 1 &&
+					(scenario === 'tool batch' ||
+						scenario === 'tool retry' ||
+						scenario === 'tool steering boundary' ||
+						scenario === 'model tool boundary')
 				) {
 					const tool_calls = [
 						{
@@ -212,6 +309,7 @@ for (const scenario of [
 		setStartupLoading([]);
 		setPendingTrust(null);
 		setMode('auto-accept');
+		if (scenario === 'permission switch') setMode('normal');
 		const ui = await testRender(() => <App />, {
 			width: 100,
 			height: 35,
@@ -240,6 +338,7 @@ for (const scenario of [
 						.includes('Loading skills'),
 			);
 			await send('initial request');
+			if (scenario === 'permission switch') setMode('normal');
 			if (scenario.startsWith('preparation')) {
 				await waitFor(() => hookEntered);
 				expect(requests).toHaveLength(0);
@@ -316,6 +415,153 @@ for (const scenario of [
 			}
 			await waitFor(() => requests.length === 1);
 			const owner = sessionId();
+			if (scenario === 'completed mutation interrupted batch') {
+				release();
+				await waitFor(() => hookEntered);
+				expect(readFileSync(mutationPath, 'utf8')).toBe('mutation-0');
+				ui.mockInput.pressEscape();
+				await ui.flush();
+				releaseHook();
+				await waitFor(() => !busy());
+				const saved = JSON.parse(
+					readFileSync(join(directory, 'sessions', `${owner}.json`), 'utf8'),
+				);
+				const declaration = saved.context.find(
+					(message: {tool_calls?: unknown[]}) => message.tool_calls?.length,
+				);
+				expect(
+					declaration?.tool_calls.map((call: {id: string}) => call.id),
+				).toEqual(['mutation_0']);
+				expect(
+					saved.context.filter(
+						(message: {tool_call_id?: string}) =>
+							message.tool_call_id === 'mutation_0',
+					),
+				).toHaveLength(1);
+				expect(JSON.stringify(saved.context)).not.toContain('mutation_1');
+				await send('/retry');
+				await waitFor(() => requests.length === 2 && !busy());
+				expect(
+					requests[1]!.messages.filter(message => message.role === 'tool'),
+				).toHaveLength(1);
+				expect(mutationHooks).toBe(2);
+				expect(readFileSync(mutationPath, 'utf8')).toBe('mutation-0');
+				return;
+			}
+			if (scenario === 'completion mailbox ownership') {
+				await send('retained foreground direction');
+				const admissionOwner = structuredClone(steeringInbox()[0]!.owner);
+				ui.mockInput.pressEscape();
+				await ui.flush();
+				setPendingQueue([
+					{
+						value: 'old graph completion evidence',
+						source: 'task',
+						owner: 'user',
+						graphId: 'missing-old-graph',
+					},
+				]);
+				release();
+				await waitFor(() => requests.length === 2 && !busy());
+				expect(steeringInbox()[0]!.owner).toEqual(admissionOwner);
+				expect(
+					messages().find(message => message.content === 'initial request')
+						?.steeringStatus,
+				).toBe('context');
+				expect(
+					messages().find(
+						message => message.content === 'retained foreground direction',
+					)?.steeringStatus,
+				).toBe('accepted');
+				await send('continue foreground');
+				await waitFor(() => requests.length === 3 && !busy());
+				expect(
+					messages().find(message => message.content === 'initial request')
+						?.steeringStatus,
+				).toBe('consumed');
+				expect(
+					messages().find(
+						message => message.content === 'retained foreground direction',
+					)?.steeringStatus,
+				).toBe('consumed');
+				return;
+			}
+			if (scenario.startsWith('mutation') || scenario === 'permission switch') {
+				release();
+				await waitFor(() => hookEntered);
+				ui.mockInput.pressEscape();
+				await ui.flush();
+				if (scenario.endsWith('switch')) {
+					await send('/clear');
+					await waitFor(() => sessionId() !== owner);
+				}
+				releaseHook();
+				await Bun.sleep(300);
+				await ui.flush();
+				expect(existsSync(mutationPath)).toBe(false);
+				expect(pendingApproval()).toBeNull();
+				expect(
+					messages().filter(message => message.toolId === 'held_mutation'),
+				).toHaveLength(0);
+				return;
+			}
+			if (
+				scenario === 'failed continuation' ||
+				scenario === 'failed resume continuation'
+			) {
+				release();
+				await waitFor(() => !busy());
+				expect(
+					messages().find(message => message.content === 'initial request')
+						?.steeringStatus,
+				).toBe('context');
+				if (scenario === 'failed resume continuation') {
+					await send('/clear');
+					await send(`/resume ${owner}`);
+					await waitFor(() => sessionId() === owner);
+				}
+				await send('ordinary continuation');
+				await waitFor(() => requests.length === 2 && !busy());
+				expect(
+					messages().find(message => message.content === 'initial request')
+						?.steeringStatus,
+				).toBe('consumed');
+				const saved = JSON.parse(
+					readFileSync(join(directory, 'sessions', `${owner}.json`), 'utf8'),
+				);
+				expect(
+					saved.messages.find(
+						(message: {content: string}) =>
+							message.content === 'initial request',
+					).steeringStatus,
+				).toBe('consumed');
+				return;
+			}
+			if (scenario === 'model tool boundary') {
+				await send('replace the planned tool operation');
+				expect(
+					messages().find(
+						message => message.content === 'replace the planned tool operation',
+					)?.steeringStatus,
+				).toBe('accepted');
+				release();
+				await waitFor(() => requests.length === 2 && !busy());
+				expect(
+					requests[1]!.messages.filter(message => message.role === 'tool'),
+				).toHaveLength(0);
+				expect(JSON.stringify(requests[1])).not.toContain('first-tool');
+				expect(
+					messages().filter(message =>
+						message.toolId?.startsWith('steering_tool_'),
+					),
+				).toHaveLength(0);
+				expect(
+					messages().find(
+						message => message.content === 'replace the planned tool operation',
+					)?.steeringStatus,
+				).toBe('consumed');
+				return;
+			}
 			if (scenario === 'failed retry') {
 				await send('later accepted direction');
 				release();
@@ -438,7 +684,11 @@ for (const scenario of [
 				).toHaveLength(1);
 				return;
 			}
-			if (scenario === 'tool batch' || scenario === 'tool retry') {
+			if (
+				scenario === 'tool batch' ||
+				scenario === 'tool retry' ||
+				scenario === 'tool steering boundary'
+			) {
 				release();
 				await waitFor(() => hookEntered);
 				await send('during tool batch');
@@ -463,7 +713,20 @@ for (const scenario of [
 					).toHaveLength(1);
 				}
 				const next = requests.at(-1)!.messages;
-				expect(next.filter(message => message.role === 'tool')).toHaveLength(2);
+				expect(JSON.stringify(next)).toContain('first-tool');
+				expect(JSON.stringify(next)).not.toContain('second-tool');
+				expect(next.filter(message => message.role === 'tool')).toHaveLength(1);
+				expect(
+					next.filter(message => message.content.includes('during tool batch')),
+				).toHaveLength(1);
+				expect(
+					messages().filter(message => message.toolId === 'steering_tool_2'),
+				).toHaveLength(0);
+				expect(
+					messages().find(message => message.content === 'during tool batch')
+						?.steeringStatus,
+				).toBe('consumed');
+				expect(next.filter(message => message.role === 'tool')).toHaveLength(1);
 				expect(
 					next.findIndex(message =>
 						message.content.includes('during tool batch'),
@@ -474,11 +737,6 @@ for (const scenario of [
 				expect(
 					messages().filter(message => message.toolId === 'steering_tool_1'),
 				).toHaveLength(1);
-				expect(
-					messages().filter(message => message.toolId === 'steering_tool_2'),
-				).toHaveLength(1);
-				expect(JSON.stringify(next)).toContain('first-tool');
-				expect(JSON.stringify(next)).toContain('second-tool');
 				return;
 			}
 			if (scenario === 'finalization') {
@@ -501,7 +759,7 @@ for (const scenario of [
 				return;
 			}
 			await send('same direction');
-			await send('/queue same direction');
+			await send('same direction');
 			expect(
 				messages().filter(
 					message =>
@@ -601,6 +859,7 @@ for (const scenario of [
 			server.stop(true);
 			hookServer.stop(true);
 			rmSync(directory, {recursive: true, force: true});
+			rmSync(mutationPath, {force: true});
 		}
 	}, 10000);
 }

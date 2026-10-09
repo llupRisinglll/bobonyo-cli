@@ -3,6 +3,8 @@ export interface SteeringMessage {
 	id: string;
 	value: string;
 	attachments?: Record<string, string>;
+	/** Admission identity. Resume transfers retained input to the new generation. */
+	owner?: {sessionId: string; generation: number; turnId: number};
 	/** Retry the existing provider history, never replay its completed tool calls. */
 	reuseContext?: boolean;
 }
