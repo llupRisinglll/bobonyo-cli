@@ -29,6 +29,11 @@ import type {
 } from './state';
 import type {LoopJob, SessionGoal} from './goal-loop';
 import {copySessionMemory} from './memory';
+import {
+	deleteTranscriptArchive,
+	forkTranscriptArchive,
+	transcriptArchiveInfo,
+} from './transcript-archive';
 import type {GraphContextSnapshot} from './graph-context';
 import {firstMessagePreview, lastMessagePreview} from './session-previews';
 import {
@@ -158,19 +163,21 @@ export function forkSession(data: SessionData): SessionData {
 			: undefined,
 		tasks: structuredClone(data.tasks ?? []),
 	};
+	forkTranscriptArchive(data.id, forked.id);
 	saveSession(forked);
 	copySessionMemory(data.id, forked.id);
 	return forked;
 }
 export function saveSession(data: SessionData): void {
 	mkdirSync(sessionsDir(), {recursive: true});
-	// EMPTY conversations are never persisted, delete any stale empty file
-	// so they can't appear in the resume/save list.
+	// A fully compacted display can be empty while exact history remains on disk.
+	// Delete only genuinely empty conversations, not archive-only sessions.
 	if (
 		(!data.messages || data.messages.length === 0) &&
 		!data.goal &&
 		(data.loopJobs?.length ?? 0) === 0 &&
-		(data.tasks?.length ?? 0) === 0
+		(data.tasks?.length ?? 0) === 0 &&
+		transcriptArchiveInfo(data.id).count === 0
 	) {
 		try {
 			rmSync(sessionPath(data.id), {force: true});
@@ -203,13 +210,14 @@ export function listSessions(): SessionMeta[] {
 						title?: string;
 						messageCount?: number;
 					};
-					// Skip EMPTY sessions (both formats).
+					// Skip genuinely empty sessions, retaining compacted archive-only ones.
 					const messageCount = data.messages?.length ?? data.messageCount ?? 0;
 					if (
 						messageCount === 0 &&
 						!data.goal &&
 						(data.loopJobs?.length ?? 0) === 0 &&
-						(data.tasks?.length ?? 0) === 0
+						(data.tasks?.length ?? 0) === 0 &&
+						transcriptArchiveInfo(data.id).count === 0
 					)
 						return null;
 					const createdAt = toEpoch(data.createdAt);
@@ -417,6 +425,7 @@ function contextCoversTranscriptTail(
 }
 
 export function deleteSession(id: string): void {
+	deleteTranscriptArchive(id);
 	rmSync(sessionPath(id), {force: true});
 }
 

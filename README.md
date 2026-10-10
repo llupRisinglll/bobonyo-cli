@@ -301,6 +301,23 @@ prefix stable, the same way codex does:
   If the summary request overflows the model's window, the oldest messages
   are trimmed and it retries, keeping the recent context intact.
 
+### Backreading after compaction
+
+Compaction reduces model context, not your saved conversation. Older transcript
+rows are archived before leaving the active window. Scroll upward, press PageUp,
+or press Home at the top to load earlier pages; End returns to the latest messages.
+Backreading holds at most 300 rows / 512 KiB and never reintroduces old messages
+into model context. Oversized rows remain intact on disk with a bounded notice.
+
+Session exports include archived history and the active tail. Forks receive an
+independent archive; deleting a session deletes its archive. Storage failures
+retain original rows and show an error instead of silently discarding them.
+
+Older pre-feature compaction snapshots are recovered with a 1 MiB input limit.
+Larger snapshots remain untouched at the path shown in the history notice; they
+are not automatically imported or included in the new transcript export. Rows
+discarded before any snapshot was saved cannot be recovered.
+
 ### Vision and web-search fallbacks
 
 In **Settings, Capabilities** you can pick a separate model for images and

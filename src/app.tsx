@@ -191,6 +191,11 @@ import {
 } from './session';
 import {History} from './components/history';
 import {
+	appendTranscriptRows,
+	transcriptArchiveInfo,
+} from './transcript-archive';
+import {exportTranscript} from './transcript-export';
+import {
 	computeInputBoxHeight,
 	bashModeIndicatorRows,
 	completionMessageRows,
@@ -425,6 +430,10 @@ import {
 	setLiveOutputs,
 	setMaxMessages,
 	setMessages,
+	configureTranscriptArchive,
+	retainArchivedDisplayWindow,
+	setHistorySessionEpoch,
+	setTranscriptArchiveError,
 	steeringInbox,
 	setSteeringInbox,
 	setMode,
@@ -666,6 +675,7 @@ export interface CompactionPartition {
  * persisted.
  */
 export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
+	configureTranscriptArchive(appendTranscriptRows);
 	const renderer = useRenderer();
 	// Resume may switch process.cwd() to the saved session directory. Keep
 	// launch CWD so `/clear` returns to the directory outside the TUI.
@@ -1195,7 +1205,12 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 	});
 
 	const persist = () => {
-		if (!currentSession || !hasPersistableConversation(messages())) return;
+		if (!currentSession) return;
+		if (
+			!hasPersistableConversation(messages()) &&
+			!transcriptArchiveInfo(currentSession.id).hasHistory
+		)
+			return;
 		const owner = checklistOwner();
 		if (owner?.store === graphContexts) {
 			graphContexts.commitChecklist(owner.lease, tasks());
@@ -1206,7 +1221,8 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 			...currentSession,
 			cwd: workspaceCwd(),
 			updatedAt: currentSession.lastMessageAt ?? Date.now(),
-			firstMessage: firstMessagePreview(messages()),
+			firstMessage:
+				firstMessagePreview(messages()) || currentSession.firstMessage,
 			messages: messages().filter(
 				message =>
 					message.kind !== 'info' && !isTaskNotification(message.content),
@@ -1435,6 +1451,7 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 				}
 				updateWorkspaceCwd(process.cwd());
 				setMessages(prepared.display);
+				setTranscriptArchiveError(prepared.archiveError ?? '');
 				graphContexts = new GraphContextStore(resumed.graphContexts);
 				setContext(prepared.context);
 				// Arrow-up history parity: rebuild the prompt history from the
@@ -5734,8 +5751,13 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 						postCompactLimit,
 					);
 					if (!backgroundContext) {
+						setHistorySessionEpoch(epoch => epoch + 1);
+						const outgoing = messages();
 						setMessages(
-							compactedDisplayMessages(messages(), installedPreservedTurns),
+							retainArchivedDisplayWindow(
+								outgoing,
+								compactedDisplayMessages(outgoing, installedPreservedTurns),
+							),
 						);
 						setRetrySnapshot(null);
 						resetFileUndoStack();
@@ -6265,11 +6287,16 @@ export function App(props: {resumeLoader?: typeof prepareSessionAsync} = {}) {
 		);
 	const exportSession = () => {
 		const file = join(process.cwd(), `session-export-${sessionId()}.json`);
-		writeFileSync(
-			file,
-			`${JSON.stringify({id: sessionId(), messages: messages()}, null, 2)}\n`,
-		);
-		appendInfo(`Session exported to ${file}`);
+		try {
+			const result = exportTranscript(sessionId(), messages(), file);
+			appendInfo(
+				`Session exported to ${result.path} (${result.count} transcript rows)`,
+			);
+		} catch (error) {
+			appendError(
+				`Session export failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 	};
 	const exportAgentTrajectory = () => {
 		const file = writeAgentTrajectory(process.cwd(), sessionId(), messages());

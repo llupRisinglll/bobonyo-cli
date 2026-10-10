@@ -6,6 +6,8 @@ import type {SteeringMessage} from './live-steering';
 import type {Mode, ResumeCwdMode, ThinkingMode, ToolProfile} from './settings';
 
 export interface ChatMessage {
+	/** Stable display-only identity, persisted without entering provider context. */
+	transcriptId?: string;
 	/** Durable acceptance identity; context means inserted into model history, not a provider receipt. */
 	steeringId?: string;
 	steeringStatus?: 'accepted' | 'context' | 'consumed' | 'discarded';
@@ -68,7 +70,54 @@ export interface ChatMessage {
 // Messages only ever APPEND (rows mount once with their final content). The
 // live stream lives in its own signal, component-body signal reads are the
 // only updates the OpenTUI 0.4.5 solid reconciler re-renders.
-export const [messages, setMessages] = createSignal<ChatMessage[]>([]);
+const [messagesSignal, setMessagesSignal] = createSignal<ChatMessage[]>([]);
+export const messages = messagesSignal;
+export const [historySessionEpoch, setHistorySessionEpoch] = createSignal(0);
+export const [transcriptArchiveError, setTranscriptArchiveError] =
+	createSignal('');
+export function identifyTranscriptRows(rows: ChatMessage[]): ChatMessage[] {
+	for (const row of rows) row.transcriptId ??= crypto.randomUUID();
+	return rows;
+}
+export function setMessages(
+	value: ChatMessage[] | ((previous: ChatMessage[]) => ChatMessage[]),
+): ChatMessage[] {
+	return setMessagesSignal(previous =>
+		identifyTranscriptRows(
+			typeof value === 'function' ? value(previous) : value,
+		),
+	);
+}
+let archiveTranscriptRows:
+	((id: string, rows: ChatMessage[]) => void) | undefined;
+export function configureTranscriptArchive(
+	writer: (id: string, rows: ChatMessage[]) => void,
+): void {
+	archiveTranscriptRows = writer;
+}
+/** Write first, then evict. Storage failure leaves every original row usable. */
+export function retainArchivedDisplayWindow(
+	rows: ChatMessage[],
+	kept: ChatMessage[],
+): ChatMessage[] {
+	identifyTranscriptRows(rows);
+	if (rows.every(row => kept.includes(row))) return kept;
+	const outgoing = rows.filter(row => !kept.includes(row));
+	// Immutable archive pages must never freeze a tool before its final output.
+	if (outgoing.some(row => row.running)) return rows;
+	try {
+		if (!archiveTranscriptRows)
+			throw new Error('Transcript archive is not initialized');
+		archiveTranscriptRows(sessionId(), outgoing);
+		setTranscriptArchiveError('');
+		return kept;
+	} catch (error) {
+		setTranscriptArchiveError(
+			`Transcript archive failed; earlier rows retained: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		return rows;
+	}
+}
 /**
  * The conversation context sent to the provider. Stays in sync with
  * `messages` except for nudges/retry messages, which the provider must see
@@ -507,6 +556,7 @@ export const [compacting, setCompacting] = createSignal(false);
 /** Replacement contexts cannot inherit an abandoned compaction indicator. */
 export function resetSessionCompaction(): void {
 	setCompacting(false);
+	setHistorySessionEpoch(value => value + 1);
 }
 /**
  * Transient top-of-screen TOAST (parity: the reference "copied to clipboard"
@@ -573,16 +623,19 @@ export const [retrySnapshot, setRetrySnapshot] = createSignal<{
 } | null>(null);
 
 export function appendMessage(message: ChatMessage): void {
-	setMessages(prev => capDisplayMessages([...prev, message]));
+	setMessages(prev => {
+		const all = identifyTranscriptRows([...prev, message]);
+		return retainArchivedDisplayWindow(all, capDisplayMessages(all));
+	});
 }
 /**
  * Hard cap on the DISPLAY transcript (the "lazy buffer"): the UI only ever
- * holds/renders a bounded window of messages, so a very long conversation
- * cannot make the app heavy. Older messages beyond the cap are trimmed and
- * replaced by a dim marker (compaction is the mechanism that preserves the
- * gist as a summary). Pure, unit-tested.
+ * renders a bounded window of messages. Callers archive outgoing rows before
+ * eviction; archive failures retain the originals, while History still renders
+ * only a bounded window. Provider context is independent.
  */
 export const DISPLAY_MESSAGE_CAP = 300;
+export const DISPLAY_MESSAGE_BYTES = 512 * 1024;
 /**
  * Trim the transcript to the bounded display window. Never splits a tool
  * result from its leading assistant call: a leading `tool` row is skipped
@@ -590,19 +643,19 @@ export const DISPLAY_MESSAGE_CAP = 300;
  * cap. Pure, unit-tested.
  */
 export function capDisplayMessages(messages: ChatMessage[]): ChatMessage[] {
-	if (messages.length <= DISPLAY_MESSAGE_CAP) return messages;
-	const sliced = messages.slice(-DISPLAY_MESSAGE_CAP);
+	let bytes = 0;
+	let index = messages.length;
+	while (index > 0 && messages.length - index < DISPLAY_MESSAGE_CAP) {
+		const size = Buffer.byteLength(JSON.stringify(messages[index - 1]));
+		if (bytes + size > DISPLAY_MESSAGE_BYTES) break;
+		bytes += size;
+		index--;
+	}
+	if (index === 0) return messages;
+	const sliced = messages.slice(index);
 	let start = 0;
 	while (start < sliced.length && sliced[start]?.role === 'tool') start++;
-	const dropped = messages.length - sliced.length + start;
-	return [
-		{
-			role: 'assistant',
-			kind: 'info',
-			content: `… ${dropped} earlier message${dropped === 1 ? '' : 's'} trimmed (run /compact to summarize)`,
-		},
-		...sliced.slice(start),
-	];
+	return sliced.slice(start);
 }
 
 export function appendAssistantMessage(
@@ -667,6 +720,7 @@ export function toggleToolBlock(key: string): void {
 }
 
 export function clearMessages(): void {
+	setTranscriptArchiveError('');
 	resetSessionCompaction();
 	setMessages([]);
 	setContext([]);

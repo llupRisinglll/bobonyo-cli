@@ -163,6 +163,7 @@ describe('runCommand routing', () => {
 			expect(runCommand('/goal:this focus on test coverage', ctx)).toBe(true);
 			expect(calls).toEqual([]);
 			expect(messages().at(-1)).toEqual({
+				transcriptId: expect.any(String),
 				role: 'assistant',
 				kind: 'info',
 				content: '/goal:this is unavailable in this context.',

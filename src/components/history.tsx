@@ -50,8 +50,22 @@ import {
 	anyModalOpen,
 	compacting,
 	compactingLabel,
+	sessionId,
+	historySessionEpoch,
+	transcriptArchiveError,
 	type ChatMessage,
 } from '../state';
+import {
+	createHistoryArchiveController,
+	boundHistoryWindow,
+} from '../history-archive-controller';
+import {
+	importLegacyCompactionTranscript,
+	readTranscriptPageById,
+	seekTranscriptCursor,
+} from '../transcript-archive';
+import {bobonyoDataDir} from '../bobonyo-paths';
+import {join} from 'node:path';
 import {markdownSyntaxStyleFor} from '../syntax';
 import {activityGroupForTool, formatActivityMessages} from '../activity-groups';
 import {
@@ -237,6 +251,8 @@ export function attachmentMarkerFromLanguage(language: string): string {
 }
 
 export interface HistoryProps {
+	/** Injectable storage boundary; real renderer specs exercise the same controller. */
+	archive?: Parameters<typeof createHistoryArchiveController>[0];
 	height?: number;
 	width?: number;
 	/** Optional transcript sources for embedded child conversations. */
@@ -260,8 +276,60 @@ export interface HistoryProps {
 
 export function History(props: HistoryProps) {
 	const renderer = useRenderer();
-	const messages = props.messages ?? globalMessages;
-	const running = props.running ?? globalRunning;
+	const activeMessages = props.messages ?? globalMessages;
+	let recoveredSession: string | undefined;
+	const [legacyNotice, setLegacyNotice] = createSignal('');
+	const archive =
+		!props.embedded || props.archive
+			? createHistoryArchiveController(
+					props.archive ?? {
+						owner: () => `${sessionId()}:${historySessionEpoch()}`,
+						session: sessionId,
+						active: activeMessages,
+						read: async (id, request) => {
+							if (recoveredSession !== id) {
+								const result = importLegacyCompactionTranscript(
+									id,
+									1024 * 1024,
+									activeMessages(),
+								);
+								recoveredSession = id;
+								if (result.status === 'too-large') {
+									const path = join(
+										bobonyoDataDir(),
+										'compaction-transcripts',
+										`${id.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`,
+									);
+									setLegacyNotice(
+										'Legacy transcript exceeds the 1 MiB recovery limit. ' +
+											`Original retained at ${path}. This file was not parsed or imported.`,
+									);
+								}
+							}
+							const beforeId =
+								request.beforeId &&
+								seekTranscriptCursor(id, request.beforeId) !== undefined
+									? request.beforeId
+									: undefined;
+							const page = readTranscriptPageById(id, {...request, beforeId});
+							return {
+								rows: page.messages,
+								hasOlder: page.hasOlder,
+								hasNewer: page.hasNewer,
+							};
+						},
+					},
+				)
+			: undefined;
+	const activeWindow = createMemo(() =>
+		props.embedded
+			? activeMessages()
+			: boundHistoryWindow(activeMessages(), 'newer'),
+	);
+	const messages = () => archive?.rows() ?? activeWindow();
+	const archived = () =>
+		archive?.rows() !== null && archive?.rows() !== undefined;
+	const running = () => !archived() && (props.running ?? globalRunning)();
 	const streaming = props.streaming ?? globalStreaming;
 	const reasoning = props.reasoning ?? globalReasoning;
 	const liveOutputs = props.liveOutputs ?? globalLiveOutputs;
@@ -329,6 +397,13 @@ export function History(props: HistoryProps) {
 	const [hoveredBlock, setHoveredBlock] = createSignal<string | null>(null);
 	let hoveredBlockRef: string | null = null;
 	let scrollRef: ScrollBoxRenderable | null = null;
+	createEffect(() => {
+		if (!archive) return;
+		void (props.archive?.owner() ?? `${sessionId()}:${historySessionEpoch()}`);
+		archive.reset();
+		setLegacyNotice('');
+		if (scrollRef) scrollRef.stickyScroll = true;
+	});
 	let lineMap: Array<string | undefined> = [];
 	let renderText: string[] = [];
 	let blockRanges: Array<{key: string; start: number; end: number}> = [];
@@ -580,7 +655,22 @@ export function History(props: HistoryProps) {
 			return false;
 		}
 		if (event.name === 'pageup') {
-			scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
+			if (scrollRef && scrollRef.scrollTop <= 0 && archive)
+				void loadArchive('older');
+			else scrollRef?.scrollBy({x: 0, y: -1}, 'viewport');
+			event.preventDefault();
+			return true;
+		}
+		if (event.name === 'home' && archive) {
+			if (scrollRef?.scrollTop === 0) void loadArchive('older');
+			else scrollRef?.scrollTo(0);
+			event.preventDefault();
+			return true;
+		}
+		if (event.name === 'end' && archive) {
+			archive.reset();
+			setTimeout(() => scrollRef?.scrollTo(scrollRef.scrollHeight), 0);
+			event.preventDefault();
 			return true;
 		}
 		if (props.embedded && (event.name === 'up' || event.name === 'down')) {
@@ -589,7 +679,9 @@ export function History(props: HistoryProps) {
 			return true;
 		}
 		if (event.name === 'pagedown') {
-			scrollRef?.scrollBy({x: 0, y: 1}, 'viewport');
+			if (atBottom() && archived()) void loadArchive('newer');
+			else scrollRef?.scrollBy({x: 0, y: 1}, 'viewport');
+			event.preventDefault();
 			return true;
 		}
 		return false;
@@ -609,6 +701,52 @@ export function History(props: HistoryProps) {
 		 *  recomputes — see the memo below). */
 		block?: SettledBlock;
 	}> = [];
+	const atBottom = () =>
+		Boolean(
+			scrollRef &&
+			scrollRef.scrollTop + scrollRef.viewport.height >=
+				scrollRef.scrollHeight - 1,
+		);
+	const loadArchive = async (direction: 'older' | 'newer') => {
+		if (!archive || (!props.embedded && anyModalOpen())) return;
+		const owner =
+			props.archive?.owner() ?? `${sessionId()}:${historySessionEpoch()}`;
+		const anchor = blockRefs.find(
+			entry =>
+				entry.ref &&
+				entry.ref.screenY + (entry.ref.height ?? 1) >
+					(scrollRef?.viewport.screenY ?? 0),
+		);
+		const anchorKey = anchor?.key;
+		const anchorY = anchor?.ref?.screenY;
+		const previousTop = scrollRef?.scrollTop ?? 0;
+		if (scrollRef) scrollRef.stickyScroll = false;
+		if (!(await archive.load(direction))) return;
+		setTimeout(() => {
+			if (
+				owner !==
+					(props.archive?.owner() ??
+						`${sessionId()}:${historySessionEpoch()}`) ||
+				!scrollRef
+			)
+				return;
+			const next = blockRefs.find(entry => entry.key === anchorKey)?.ref;
+			if (next && anchorY !== undefined)
+				scrollRef.scrollTo(previousTop + next.screenY - anchorY);
+			else
+				scrollRef.scrollTo(direction === 'older' ? 0 : scrollRef.scrollHeight);
+		}, 20);
+	};
+	const handleMouseScroll = (event: MouseEvent) => {
+		if (!props.embedded && anyModalOpen()) {
+			event.preventDefault();
+			return;
+		}
+		if (event.scroll?.direction === 'up' && scrollRef?.scrollTop === 0)
+			void loadArchive('older');
+		if (event.scroll?.direction === 'down' && archived() && atBottom())
+			void loadArchive('newer');
+	};
 	/** Global rendered-row offset of the SETTLED content (live rows follow). */
 	let baseRowCount = 0;
 	/** The live streaming markdown node's ref (last block while running). */
@@ -707,14 +845,17 @@ export function History(props: HistoryProps) {
 				// hundreds of hidden workflow lines into chat.
 				if (message.command) {
 					const visible = commandVisibleText(message.command, message.content);
-					pushBlock(fence('usermsg', 'done', `❯ ${visible}`));
+					pushBlock(
+						fence('usermsg', 'done', `❯ ${visible}`),
+						`command-${message.transcriptId ?? i}`,
+					);
 					continue;
 				}
 				// User messages render as a surface-filled `❯ content` block
 				// (parity: nanocoder's arrow-style UserMessage background),
 				// capped at USER_PREVIEW_LINES with a clickable
 				// `+N more lines` footer that opens the full text.
-				const userKey = `user-${i}`;
+				const userKey = `user-${message.transcriptId ?? i}`;
 				compactDetails.set(userKey, message.content);
 				const userBlock = renderUserBlock(message, userKey);
 				pushBlock(userBlock.text, userBlock.blockKey);
@@ -782,16 +923,25 @@ export function History(props: HistoryProps) {
 					pushBlock(row.text, row.blockKey, 'md', row.brief);
 				}
 			} else if (message.error) {
-				pushBlock(fence('errorrow', 'done', `⚠ ${message.error}`));
+				pushBlock(
+					fence('errorrow', 'done', `⚠ ${message.error}`),
+					`error-${message.transcriptId ?? i}`,
+				);
 			} else if (message.kind === 'info') {
-				pushBlock(renderInfoRow(message.content, `info-${i}`), `info-${i}`);
+				pushBlock(
+					renderInfoRow(message.content, `info-${message.transcriptId ?? i}`),
+					`info-${message.transcriptId ?? i}`,
+				);
 			} else if (message.kind === 'warning') {
 				// Warning rows (e.g. the vision-fallback indicator) render in
 				// the theme WARNING (yellow) color.
-				pushBlock(fence('warningrow', 'done', message.content));
+				pushBlock(
+					fence('warningrow', 'done', message.content),
+					`warning-${message.transcriptId ?? i}`,
+				);
 			} else {
 				if (message.reasoning && thinkingMode() === 'show') {
-					const thoughtKey = `thought-${i}`;
+					const thoughtKey = `thought-${message.transcriptId ?? i}`;
 					// Full reasoning text for the DETAILS modal (collapsed
 					// previews cap at PREVIEW_LINES=3; click opens the modal).
 					compactDetails.set(thoughtKey, message.reasoning.trim());
@@ -813,7 +963,7 @@ export function History(props: HistoryProps) {
 						// The `✦` glyph renders OUTSIDE the reply container
 						// (aligned with tool glyphs); the content is plain.
 						stripProviderCitationMarkers(message.content),
-						undefined,
+						`reply-${message.transcriptId ?? i}`,
 						'reply',
 					);
 				}
@@ -1413,6 +1563,26 @@ export function History(props: HistoryProps) {
 	});
 	const transcriptContent = () => (
 		<>
+			<Show
+				when={
+					archive?.loading() ||
+					archive?.error() ||
+					legacyNotice() ||
+					(!props.embedded && transcriptArchiveError())
+				}
+			>
+				<text fg={colors().secondary}>
+					{archive?.error() ||
+						legacyNotice() ||
+						(!props.embedded && transcriptArchiveError()) ||
+						'Loading earlier transcript…'}
+				</text>
+			</Show>
+			<Show when={archived()}>
+				<text fg={colors().secondary}>
+					Earlier transcript · End returns to latest
+				</text>
+			</Show>
 			{/* SETTLED blocks: the `each` reference stays IDENTICAL while
 			    streaming (OpenTUI's For re-renders every child when the each
 			    array reference changes, which was the flash cause), so the
@@ -1662,7 +1832,7 @@ export function History(props: HistoryProps) {
 				}}
 				minHeight={0}
 				paddingRight={2}
-				stickyScroll
+				stickyScroll={!archived()}
 				stickyStart="bottom"
 				scrollAcceleration={resolveScrollAcceleration()}
 				{...({
@@ -1670,6 +1840,7 @@ export function History(props: HistoryProps) {
 					onMouseUp: handleMouseUp,
 					onMouseMove: handleMouseMove,
 					onMouseOut: handleMouseOut,
+					onMouseScroll: handleMouseScroll,
 				} as any)}
 			>
 				{transcriptContent()}
@@ -1693,7 +1864,7 @@ export function History(props: HistoryProps) {
 			// RIGHT gap so the scrollbar never overlaps text (the LEFT gap is
 			// per-REPLY, rendered as a padded container below).
 			paddingRight={2}
-			stickyScroll
+			stickyScroll={!archived()}
 			stickyStart="bottom"
 			// Mouse-wheel speed parity with opencode: 3× by default
 			// (settings → scrollSpeed), so wheel scrolling feels as fast and
@@ -1710,6 +1881,7 @@ export function History(props: HistoryProps) {
 				onMouseUp: handleMouseUp,
 				onMouseMove: handleMouseMove,
 				onMouseOut: handleMouseOut,
+				onMouseScroll: handleMouseScroll,
 			} as any)}
 		>
 			{transcriptContent()}

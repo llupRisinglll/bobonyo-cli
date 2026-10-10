@@ -2405,8 +2405,27 @@ describe('regression guards (shared parent/subagent transcript renderer)', () =>
 		const history = read('./components/history.tsx');
 		expect(history).toMatch(/messages\?: \(\) => ChatMessage\[\]/);
 		expect(history).toMatch(
-			/const messages = props\.messages \?\? globalMessages/,
+			/const activeMessages = props\.messages \?\? globalMessages/,
+		);
+		expect(history).toMatch(
+			/const messages = \(\) => archive\?\.rows\(\) \?\? activeWindow\(\)/,
 		);
 		expect(history).toMatch(/<TranscriptReply/);
+	});
+});
+describe('regression guards (bounded transcript backreading)', () => {
+	test('foreground compaction archives before trimming display and never injects archive into context', () => {
+		const app = read('./app.tsx');
+		expect(app).toContain('configureTranscriptArchive(appendTranscriptRows)');
+		expect(app).toMatch(
+			/if \(!backgroundContext\) \{\s*setHistorySessionEpoch\(epoch => epoch \+ 1\)/,
+		);
+		expect(app).toMatch(
+			/retainArchivedDisplayWindow\([\s\S]*?outgoing,[\s\S]*?compactedDisplayMessages\(outgoing, installedPreservedTurns\)/,
+		);
+		const history = read('./components/history.tsx');
+		expect(history).toContain('stickyScroll={!archived()}');
+		expect(history).toContain('onMouseScroll: handleMouseScroll');
+		expect(history).not.toMatch(/setContext\(|setMessages\(/);
 	});
 });

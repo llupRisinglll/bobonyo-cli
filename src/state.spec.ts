@@ -140,7 +140,7 @@ describe('capDisplayMessages (lazy display buffer)', () => {
 		const small = [msg('user', 'a'), msg('assistant', 'b')];
 		expect(capDisplayMessages(small)).toBe(small);
 	});
-	test('over the cap: keeps the newest window + a trim marker at the head', () => {
+	test('over the cap: keeps exactly the newest bounded window without destructive marker', () => {
 		const many = Array.from({length: DISPLAY_MESSAGE_CAP + 20}, (_, i) =>
 			msg(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
 		);
@@ -150,9 +150,8 @@ describe('capDisplayMessages (lazy display buffer)', () => {
 			kind?: string;
 		}>;
 		// Marker row at the head, then the bounded window.
-		expect(capped[0]!.kind).toBe('info');
-		expect(capped[0]!.content).toContain('earlier messages trimmed');
-		expect(capped.length).toBe(DISPLAY_MESSAGE_CAP + 1);
+		expect(capped[0]!.content).toBe('m20');
+		expect(capped.length).toBe(DISPLAY_MESSAGE_CAP);
 		// The newest message survives; the oldest non-marker content is the
 		// newest window's head.
 		expect(capped[capped.length - 1]!.content).toBe(
@@ -172,8 +171,8 @@ describe('capDisplayMessages (lazy display buffer)', () => {
 		}>;
 		// The leading tool row is skipped so it never renders orphaned, and
 		// the marker reports the extra dropped count.
-		expect(capped[1]!.role).not.toBe('tool');
-		expect(capped[0]!.content).toContain('4 earlier messages trimmed');
+		expect(capped[0]!.role).not.toBe('tool');
+		expect(capped[0]!.content).toBe('m4');
 	});
 });
 

@@ -11,6 +11,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {
 	convertNanocoderSession,
+	deleteSession,
 	forkSession,
 	healResumedContext,
 	listSessions,
@@ -24,6 +25,89 @@ import {
 } from './session';
 import type {ChatMessage} from './state';
 import type {ChatMessageLike} from './client';
+import {
+	archiveTranscript,
+	readTranscriptPage,
+	transcriptArchiveInfo,
+} from './transcript-archive';
+
+test('session fork preserves archived display independently and deletion removes its archive', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'session-archive-lifecycle-'));
+	const previous = process.env.BOBONYO_DATA_DIR;
+	process.env.BOBONYO_DATA_DIR = dir;
+	try {
+		const data = {
+			id: 'archived-session',
+			name: 'Archived',
+			createdAt: 1,
+			updatedAt: 1,
+			firstMessage: 'active',
+			messages: [{role: 'user' as const, content: 'active'}],
+			context: [{role: 'user' as const, content: 'provider tail'}],
+		};
+		saveSession(data);
+		archiveTranscript(data.id, [
+			{role: 'user', content: 'old display', transcriptId: 'old'},
+		]);
+		const forked = forkSession(data);
+		expect(readTranscriptPage(forked.id).messages[0]?.content).toBe(
+			'old display',
+		);
+		expect(forked.context).toEqual(data.context);
+		deleteSession(data.id);
+		expect(loadSession(data.id)).toBeNull();
+		expect(transcriptArchiveInfo(data.id).count).toBe(0);
+		expect(transcriptArchiveInfo(forked.id).count).toBe(1);
+	} finally {
+		if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
+		else process.env.BOBONYO_DATA_DIR = previous;
+		rmSync(dir, {recursive: true, force: true});
+	}
+});
+
+test('archive-only sessions remain saved, resumable, forkable and independently deletable', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'session-archive-only-'));
+	const previous = process.env.BOBONYO_DATA_DIR;
+	const previousLegacy = process.env.NANOCODER_DATA_DIR;
+	process.env.BOBONYO_DATA_DIR = dir;
+	process.env.NANOCODER_DATA_DIR = dir;
+	try {
+		const data = {
+			id: 'archive-only',
+			name: 'Compacted',
+			createdAt: 1,
+			updatedAt: 2,
+			firstMessage: 'original prompt',
+			messages: [] as ChatMessage[],
+			context: [],
+		};
+		archiveTranscript(data.id, [
+			{role: 'user', content: 'original prompt', transcriptId: 'old'},
+		]);
+		saveSession(data);
+		expect(loadSession(data.id)).toEqual(data);
+		expect(listSessions().map(value => value.id)).toContain(data.id);
+		expect(resolveSession(data.id)?.messages).toEqual([]);
+		const forked = forkSession(loadSession(data.id)!);
+		expect(loadSession(forked.id)?.messages).toEqual([]);
+		expect(listSessions().map(value => value.id)).toContain(forked.id);
+		expect(readTranscriptPage(forked.id).messages[0]?.content).toBe(
+			'original prompt',
+		);
+		deleteSession(data.id);
+		expect(loadSession(data.id)).toBeNull();
+		expect(transcriptArchiveInfo(data.id).count).toBe(0);
+		expect(listSessions().map(value => value.id)).toEqual([forked.id]);
+		saveSession({...data, id: 'truly-empty'});
+		expect(loadSession('truly-empty')).toBeNull();
+	} finally {
+		if (previous === undefined) delete process.env.BOBONYO_DATA_DIR;
+		else process.env.BOBONYO_DATA_DIR = previous;
+		if (previousLegacy === undefined) delete process.env.NANOCODER_DATA_DIR;
+		else process.env.NANOCODER_DATA_DIR = previousLegacy;
+		rmSync(dir, {recursive: true, force: true});
+	}
+});
 
 describe('saveCompactionTranscript', () => {
 	test('writes exact display and provider history outside compacted session', () => {
