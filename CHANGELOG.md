@@ -4,6 +4,10 @@ All notable changes to bobonyo. Entries are generated from `.changeset/`
 files by `scripts/release.mjs` when the release workflow consumes them on
 `main`; each `vX.Y.Z` section is also the GitHub Release body.
 
+## v0.8.0 (2026-10-10)
+
+### Minor
+- Keep compacted conversations on disk and load bounded history pages when scrolling back, with complete transcript export.
 ## v0.7.0 (2026-10-09)
 
 ### Minor
